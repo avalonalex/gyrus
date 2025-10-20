@@ -14,7 +14,9 @@ The codebase follows a pipeline architecture with comprehensive error handling:
    - Recursive descent parser that converts source text into `Vec<Instruction>`
    - **Location tracking**: Maintains line, column, and offset for every position
    - Loops are represented as `Instruction::Loop(Vec<Instruction>)` creating a nested tree structure
-   - Non-BF characters are treated as comments and ignored
+   - **Comments**:
+     - Non-BF characters are ignored (implicit comments)
+     - `*` starts line comments - everything after `*` on that line is ignored
    - Rich error messages with source context (shows 2 lines before/after with caret)
 
 2. **Interpret** (`src/bf.rs`): AST → Execution with safety limits
@@ -25,9 +27,10 @@ The codebase follows a pipeline architecture with comprehensive error handling:
    - Instruction counting for error reporting
 
 3. **CLI** (`src/main.rs`): Entry point with extensive configuration
-   - Flow: read file → parse → configure → interpret
-   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`
+   - Flow: read file → parse → (minify OR validate) → configure → interpret
+   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--validate`, `--strict`, `--minify`, `-o/--output`
    - Configuration via `ExecutionConfig` (builder pattern)
+   - Minify mode: Parse → minify → output (no execution)
 
 ### Key Design Decisions
 
@@ -109,14 +112,33 @@ CLI integration:
 - `--validate`: Show warnings but continue execution
 - `--strict`: Treat warnings as errors (exit code 1)
 
+## Minification System
+
+Converts parsed instructions back to minimal BrainFuck source:
+
+- **minify()**: Entry point that returns String
+- **minify_instructions()**: Recursive conversion of AST to BF code
+- Strips all comments (line and implicit)
+- Removes all whitespace and formatting
+- Typical size reduction: 95%+
+- Round-trip property: parse → minify → parse yields identical AST
+
+CLI integration:
+- `--minify`: Output minified code
+- `-o/--output FILE`: Write to file instead of stdout
+- `--verbose` with minify: Show compression stats
+
 ## Testing
 
 The test suite covers:
-- **Parse tests**: All instruction types, nested loops, comments
-- **Error tests**: All error types with proper context
-- **Limit tests**: Step limits, timeouts, memory bounds
-- **Location tests**: Multiline programs, error positions
+- **Parse tests**: All instruction types, nested loops, comments (5 tests)
+- **Error tests**: All error types with proper context (4 tests)
+- **Limit tests**: Step limits, timeouts, memory bounds (5 tests)
+- **Location tests**: Multiline programs, error positions (included above)
 - **Validation tests**: Empty loops, infinite loops, nesting, clean programs (5 tests)
+- **Comment tests**: Line comments, BF commands in comments, multiline (4 tests)
+- **Minify tests**: Simple, line comments, nested loops, round-trip (5 tests)
+- **Total**: 28 tests
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()`

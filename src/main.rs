@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 mod bf;
 
-use bf::{BfError, ExecutionConfig, interpret_with_config, parse, validate};
+use bf::{BfError, ExecutionConfig, interpret_with_config, minify, parse, validate};
 
 #[derive(Parser)]
 #[command(name = "ferrous-cortex")]
@@ -37,6 +37,14 @@ struct Cli {
     /// Treat warnings as errors (implies --validate)
     #[arg(long)]
     strict: bool,
+
+    /// Minify the program (strip all comments and output only BF commands)
+    #[arg(long)]
+    minify: bool,
+
+    /// Output file for minified code (stdout if not specified)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
 }
 
 fn main() -> Result<(), BfError> {
@@ -48,6 +56,30 @@ fn main() -> Result<(), BfError> {
 
     // Parse the program
     let instructions = parse(&source)?;
+
+    // Minify if requested (and exit without executing)
+    if cli.minify {
+        let minified = minify(&instructions);
+
+        if let Some(output_path) = &cli.output {
+            // Write to file
+            fs::write(output_path, &minified)
+                .map_err(|e| BfError::FileError(format!("Failed to write output: {}", e)))?;
+            if cli.verbose {
+                eprintln!(
+                    "Minified {} bytes to {} bytes (saved to {})",
+                    source.len(),
+                    minified.len(),
+                    output_path.display()
+                );
+            }
+        } else {
+            // Write to stdout
+            println!("{}", minified);
+        }
+
+        return Ok(());
+    }
 
     // Validate if requested
     let should_validate = cli.validate || cli.strict;
