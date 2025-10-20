@@ -22,7 +22,11 @@ The codebase follows a pipeline architecture with comprehensive error handling:
    - **Multiple error reporting**: Shows all bracket errors in a single pass
 
 2. **Interpret** (`src/bf.rs`): AST → Execution with safety limits
-   - Tree-walking interpreter with configurable memory (default 30,000 bytes)
+   - Tree-walking interpreter with configurable memory
+   - **Multiple memory models**:
+     - Fixed: Traditional fixed-size array (default 30,000 bytes)
+     - Wrapping: Circular buffer that wraps at boundaries
+     - Unbounded: Dynamic growth from initial size up to max limit
    - **Execution limits**: Step counting and timeout support
    - Recursive execution for nested loops via `execute_block()`
    - Direct I/O to stdin/stdout
@@ -30,7 +34,7 @@ The codebase follows a pipeline architecture with comprehensive error handling:
 
 3. **CLI** (`src/main.rs`): Entry point with extensive configuration
    - Flow: read file → parse → (minify OR validate) → configure → interpret
-   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--validate`, `--strict`, `--minify`, `-o/--output`
+   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
 
@@ -39,7 +43,11 @@ The codebase follows a pipeline architecture with comprehensive error handling:
 - **Error handling**: Uses `thiserror` for custom error types (`BfError`)
   - All errors include context (location, source snippet, details)
   - Structured error types (not strings) for better error handling
-- **Memory model**: Configurable size with bounds checking on every pointer operation
+- **Memory models**: Three configurable models via `MemoryModel` enum
+  - Fixed: Traditional bounds-checked array
+  - Wrapping: Circular buffer (modulo arithmetic on pointer)
+  - Unbounded: Vec that grows on-demand up to max limit
+  - Pointer movement handled by `increment_pointer()` and `decrement_pointer()` helpers
 - **Loop representation**: Nested `Vec<Instruction>` rather than jump tables
 - **Parsing approach**: Single-pass recursive descent with full location tracking
 - **Safety**: Multiple layers of protection (step limits, timeouts, bounds checks)
@@ -149,7 +157,8 @@ The test suite covers:
 - **Comment tests**: Line comments, BF commands in comments, multiline (4 tests)
 - **Minify tests**: Simple, line comments, nested loops, round-trip (5 tests)
 - **Bracket matching tests**: Multiple errors, single errors, location tracking (9 tests)
-- **Total**: 37 tests
+- **Memory model tests**: Fixed, wrapping, unbounded behaviors (7 tests)
+- **Total**: 44 tests
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()`
@@ -171,21 +180,24 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 
 ## Implementation Status
 
-**Completed (Phase 1, 2.1, 2.2, 3.1, 4.1 from PRD)**:
+**Completed (Phase 1, 2.1, 2.2, 3.1, 3.2, 4.1 from PRD)**:
 - ✅ Source location tracking (Phase 1)
 - ✅ Rich error messages with context (Phase 1)
 - ✅ Execution limits (step count, timeout) (Phase 3.1)
 - ✅ Configurable memory size (Phase 3.1)
 - ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (37 tests)
+- ✅ Comprehensive test suite (44 tests)
 - ✅ Validation pass with warnings (Phase 2.1)
 - ✅ Strict mode for CI/CD (Phase 2.1)
 - ✅ Line comments using `*` (Community feature)
 - ✅ Code minification (Phase 4.1)
 - ✅ Better bracket matching - multiple errors (Phase 2.2)
+- ✅ Multiple memory models (Phase 3.2)
+  - Fixed, Wrapping, and Unbounded models
+  - CLI flags for model selection
+  - Comprehensive testing
 
 **Remaining (from PRD)**:
-- ⏳ Multiple memory models (Phase 3.2)
 - ⏳ Advanced I/O error handling (Phase 3.3)
 - ⏳ Visual TUI debugger
 - ⏳ JIT/AOT compiler backend

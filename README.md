@@ -13,6 +13,10 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 - Support for all 8 BrainFuck commands: `><+-.,[]`
 - **Line comments** using `*` - makes documentation safe and easy
 - Nested loop support
+- **Multiple memory models** for different use cases
+  - Fixed: Traditional fixed-size array with bounds checking
+  - Wrapping: Circular buffer that wraps at boundaries
+  - Unbounded: Dynamic growth up to configurable limit
 - **Configurable execution limits**
   - Maximum step count to prevent infinite loops
   - Execution timeout in milliseconds
@@ -101,7 +105,10 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | `-o, --output <FILE>` | Output file for minified code (stdout if not specified) | - |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
-| `--memory-size <BYTES>` | Memory size in bytes | 30000 |
+| `--memory-size <BYTES>` | Memory size in bytes (for fixed/wrapping models) | 30000 |
+| `--memory-model <MODEL>` | Memory model: fixed, wrapping, or unbounded | fixed |
+| `--unbounded-initial <BYTES>` | Initial size for unbounded memory model | 1000 |
+| `--unbounded-max <BYTES>` | Maximum size for unbounded memory model | 1000000 |
 
 ## BrainFuck Language Reference
 
@@ -215,6 +222,75 @@ ferrous-cortex suspicious_program.bf --max-steps 1000000
 # Or use a timeout
 ferrous-cortex suspicious_program.bf --timeout 5000
 ```
+
+## Memory Models
+
+FerrousCortex supports three different memory models to handle different BrainFuck variants and use cases:
+
+### Fixed Memory (Default)
+
+Traditional BrainFuck behavior with a fixed-size memory array.
+
+```bash
+ferrous-cortex program.bf --memory-model fixed --memory-size 30000
+```
+
+**Characteristics:**
+- Memory size is fixed at startup
+- Out-of-bounds access (< 0 or >= size) returns an error
+- Most compatible with standard BrainFuck programs
+- Best for production use and debugging
+
+### Wrapping Memory
+
+Memory pointer wraps around at boundaries (circular buffer).
+
+```bash
+ferrous-cortex program.bf --memory-model wrapping --memory-size 30000
+```
+
+**Characteristics:**
+- Pointer wraps: position 30000 → 0, position -1 → 29999
+- Never raises memory out-of-bounds errors
+- Some BrainFuck variants use this behavior
+- Useful for programs that rely on wrapping
+
+**Example:**
+```brainfuck
+* With wrapping memory size 10:
+>>>>>>>>>>  * Move right 10 times
++.          * Now at cell 0 (wrapped), increment and output
+```
+
+### Unbounded Memory
+
+Memory grows dynamically as needed, up to a maximum limit.
+
+```bash
+ferrous-cortex program.bf --memory-model unbounded \
+  --unbounded-initial 1000 \
+  --unbounded-max 1000000
+```
+
+**Characteristics:**
+- Starts with small initial allocation (default: 1000 bytes)
+- Automatically grows when accessing beyond current size
+- Maximum size limit prevents runaway memory usage
+- Efficient for programs with unpredictable memory needs
+
+**Example:**
+```bash
+# Start with 100 bytes, allow growth up to 10MB
+ferrous-cortex program.bf --memory-model unbounded \
+  --unbounded-initial 100 \
+  --unbounded-max 10000000
+```
+
+### Choosing a Memory Model
+
+- **Fixed**: Use for standard BrainFuck programs and when you want strict bounds checking
+- **Wrapping**: Use for programs designed for wrapping behavior or when porting from other interpreters
+- **Unbounded**: Use for programs with unknown memory requirements or when prototyping
 
 ## Program Validation
 
@@ -335,13 +411,13 @@ FerrousCortex/
 - [x] Line comments using `*` for safer documentation
 - [x] Code minification with comment stripping
 - [x] Better bracket matching (report multiple errors)
+- [x] Multiple memory models (fixed, wrapping, unbounded)
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
 - [ ] Step-by-step execution
 - [ ] Memory visualization
 - [ ] Performance optimizations (instruction fusion, loop detection)
-- [ ] Multiple memory models (bounded, unbounded, wrapping)
 - [ ] Advanced I/O error handling (EOF behavior)
 - [ ] JIT/AOT compiler backend
 - [ ] REPL mode
