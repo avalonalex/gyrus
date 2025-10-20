@@ -182,6 +182,31 @@ pub fn validate(instructions: &[Instruction]) -> Vec<BfWarning> {
     warnings
 }
 
+/// Convert instructions back to BrainFuck source code (minified - no comments)
+pub fn minify(instructions: &[Instruction]) -> String {
+    let mut output = String::new();
+    minify_instructions(instructions, &mut output);
+    output
+}
+
+fn minify_instructions(instructions: &[Instruction], output: &mut String) {
+    for instruction in instructions {
+        match instruction {
+            Instruction::IncrementPointer => output.push('>'),
+            Instruction::DecrementPointer => output.push('<'),
+            Instruction::IncrementValue => output.push('+'),
+            Instruction::DecrementValue => output.push('-'),
+            Instruction::Output => output.push('.'),
+            Instruction::Input => output.push(','),
+            Instruction::Loop(body) => {
+                output.push('[');
+                minify_instructions(body, output);
+                output.push(']');
+            }
+        }
+    }
+}
+
 fn validate_instructions(
     instructions: &[Instruction],
     warnings: &mut Vec<BfWarning>,
@@ -298,6 +323,16 @@ fn parse_block(
                         context: extract_source_context(source, *location),
                     });
                 }
+            }
+            '*' => {
+                // Line comment: skip everything until newline
+                location.offset += 1;
+                while location.offset < chars.len() && chars[location.offset] != '\n' {
+                    location.column += 1;
+                    location.offset += 1;
+                }
+                // Don't skip the newline itself - let it be processed normally
+                continue;
             }
             '\n' => {
                 location.line += 1;
@@ -710,5 +745,92 @@ mod tests {
         let instructions = parse(source).unwrap();
         let warnings = validate(&instructions);
         assert!(warnings.len() >= 2);
+    }
+
+    #[test]
+    fn test_line_comments() {
+        let source = "+++  * This is a comment\n>++  * Another comment";
+        let instructions = parse(source).unwrap();
+        // Commands: + + + > + + (6 total)
+        assert_eq!(instructions.len(), 6);
+        assert!(matches!(instructions[0], Instruction::IncrementValue));
+        assert!(matches!(instructions[1], Instruction::IncrementValue));
+        assert!(matches!(instructions[2], Instruction::IncrementValue));
+        assert!(matches!(instructions[3], Instruction::IncrementPointer));
+        assert!(matches!(instructions[4], Instruction::IncrementValue));
+        assert!(matches!(instructions[5], Instruction::IncrementValue));
+    }
+
+    #[test]
+    fn test_line_comments_with_bf_commands() {
+        // BF commands after * should be ignored
+        let source = "+++ * >++<-- These commands are ignored\n>.";
+        let instructions = parse(source).unwrap();
+        // Commands: + + + > . (5 total - commands after * are ignored)
+        assert_eq!(instructions.len(), 5);
+        assert!(matches!(instructions[0], Instruction::IncrementValue));
+        assert!(matches!(instructions[3], Instruction::IncrementPointer));
+        assert!(matches!(instructions[4], Instruction::Output));
+    }
+
+    #[test]
+    fn test_line_comments_multiline() {
+        let source = "* Comment line 1\n* Comment line 2\n+++\n* Another comment\n>.";
+        let instructions = parse(source).unwrap();
+        assert_eq!(instructions.len(), 5); // +++, >, .
+    }
+
+    #[test]
+    fn test_line_comments_in_loops() {
+        let source = "[  * Loop start\n++  * Increment\n]  * Loop end";
+        let instructions = parse(source).unwrap();
+        assert_eq!(instructions.len(), 1);
+        if let Instruction::Loop(body) = &instructions[0] {
+            assert_eq!(body.len(), 2); // Only ++
+        } else {
+            panic!("Expected loop");
+        }
+    }
+
+    #[test]
+    fn test_minify_simple() {
+        let source = "+++  Comments here\n>++ More comments\n.";
+        let instructions = parse(source).unwrap();
+        let minified = minify(&instructions);
+        assert_eq!(minified, "+++>++.");
+    }
+
+    #[test]
+    fn test_minify_with_line_comments() {
+        let source = "* Line comment\n+++  * Inline comment\n[>++<-]  * Loop comment";
+        let instructions = parse(source).unwrap();
+        let minified = minify(&instructions);
+        assert_eq!(minified, "+++[>++<-]");
+    }
+
+    #[test]
+    fn test_minify_nested_loops() {
+        let source = "[[+]]";
+        let instructions = parse(source).unwrap();
+        let minified = minify(&instructions);
+        assert_eq!(minified, "[[+]]");
+    }
+
+    #[test]
+    fn test_minify_all_commands() {
+        let source = "* Test all commands\n><+-.,[]";
+        let instructions = parse(source).unwrap();
+        let minified = minify(&instructions);
+        assert_eq!(minified, "><+-.,[]");
+    }
+
+    #[test]
+    fn test_minify_round_trip() {
+        // Parse, minify, parse again should give same result
+        let source = "+++[>++<-]>.";
+        let instructions1 = parse(source).unwrap();
+        let minified = minify(&instructions1);
+        let instructions2 = parse(&minified).unwrap();
+        assert_eq!(instructions1, instructions2);
     }
 }
