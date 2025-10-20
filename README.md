@@ -28,8 +28,9 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 - **Code minification** - strip comments for compact programs
   - 95%+ size reduction typical
   - Preserves functionality
-- **Execution statistics** tracking
-  - Step count, loop iterations, memory usage
+- **Verbose mode** with execution diagnostics
+  - Configuration details (memory model, limits, timeout)
+  - Execution statistics (step count, loop iterations, memory usage)
   - I/O statistics (bytes read/written)
   - Useful for performance analysis and debugging
 - **Configurable EOF handling** for input operations
@@ -37,7 +38,6 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
   - SetNegOne: Set cell to 255 (-1) on EOF
   - NoChange: Leave cell unchanged on EOF
   - Error: Fail on EOF with error message
-- **Verbose mode** for execution diagnostics
 - Production-grade reliability with comprehensive error checking
 - Command-line interface with extensive options
 
@@ -107,8 +107,7 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-v, --verbose` | Show detailed execution information | false |
-| `--stats` | Show execution statistics after program finishes | false |
+| `-v, --verbose` | Show detailed execution information and statistics | false |
 | `--validate` | Validate program and show warnings | false |
 | `--strict` | Treat warnings as errors (implies --validate) | false |
 | `--minify` | Strip all comments and output only BF commands | false |
@@ -376,11 +375,13 @@ Error: End of input reached
 
 ## Execution Statistics
 
-FerrousCortex can track and display detailed execution statistics using the `--stats` flag:
+FerrousCortex can track and display detailed execution statistics using the `--verbose` flag:
 
 ```bash
-ferrous-cortex program.bf --stats
+ferrous-cortex program.bf --verbose
 ```
+
+Verbose mode shows both the configuration and execution statistics.
 
 **Statistics Collected:**
 - **Total steps executed**: Number of instructions executed
@@ -393,7 +394,12 @@ ferrous-cortex program.bf --stats
 
 **Example Output:**
 ```bash
-$ ferrous-cortex examples/hello_world.bf --stats
+$ ferrous-cortex examples/hello_world.bf --verbose
+Configuration:
+  Memory model: Fixed(30000 bytes)
+  Max steps: unlimited
+  Timeout: unlimitedms
+
 Hello World!
 
 === Execution Statistics ===
