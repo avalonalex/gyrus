@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 mod bf;
 
-use bf::{BfError, ExecutionConfig, MemoryModel, interpret_with_config, minify, parse, validate};
+use bf::{
+    BfError, EofBehavior, ExecutionConfig, MemoryModel, interpret_with_config, minify, parse,
+    validate,
+};
 
 #[derive(Parser)]
 #[command(name = "ferrous-cortex")]
@@ -45,6 +48,10 @@ struct Cli {
     /// Show execution statistics after program finishes
     #[arg(long)]
     stats: bool,
+
+    /// EOF behavior: zero, neg-one, no-change, or error
+    #[arg(long, default_value = "zero")]
+    eof_behavior: String,
 
     /// Validate program and show warnings
     #[arg(long)]
@@ -148,7 +155,24 @@ fn run() -> Result<(), BfError> {
         }
     };
 
-    let mut config = ExecutionConfig::default().with_memory_model(memory_model);
+    // Parse EOF behavior
+    let eof_behavior = match cli.eof_behavior.to_lowercase().as_str() {
+        "zero" => EofBehavior::SetZero,
+        "neg-one" | "negone" | "-1" | "255" => EofBehavior::SetNegOne,
+        "no-change" | "nochange" | "unchanged" => EofBehavior::NoChange,
+        "error" => EofBehavior::Error,
+        other => {
+            eprintln!(
+                "Error: Invalid EOF behavior '{}'. Valid options: zero, neg-one, no-change, error",
+                other
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let mut config = ExecutionConfig::default()
+        .with_memory_model(memory_model)
+        .with_eof_behavior(eof_behavior);
 
     if cli.max_steps > 0 {
         config = config.with_max_steps(cli.max_steps);
