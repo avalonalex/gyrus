@@ -116,6 +116,10 @@ FerrousCortex/
 - [ ] Better error messages with source context
 - [ ] REPL mode
 
+## References
+
+- [The BrainFuck Programming Language](https://www.muppetlabs.com/~breadbox/bf/) - Comprehensive guide and reference by Brian Raiter
+
 ## License
 
 [Add your license here]
