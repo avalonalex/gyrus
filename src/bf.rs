@@ -73,6 +73,9 @@ pub enum BfError {
         context: String,
     },
 
+    #[error("Found {count} bracket matching errors (see details above)")]
+    MultipleBracketErrors { count: usize },
+
     #[error(
         "Memory pointer out of bounds at instruction {instruction_index}\nAttempted to access cell {attempted}, valid range: 0-{max}"
     )]
@@ -167,8 +170,92 @@ pub enum Instruction {
     Loop(Vec<Instruction>), // [ ... ]
 }
 
+/// Validate bracket matching before parsing
+/// Returns all bracket errors found in the source
+fn validate_brackets(source: &str) -> Vec<BfError> {
+    let mut errors = Vec::new();
+    let mut stack: Vec<SourceLocation> = Vec::new();
+    let mut location = SourceLocation::start();
+    let chars: Vec<char> = source.chars().collect();
+
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+
+        match ch {
+            '*' => {
+                // Skip line comments
+                i += 1;
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            '\n' => {
+                location.line += 1;
+                location.column = 1;
+                location.offset += 1;
+                i += 1;
+                continue;
+            }
+            '[' => {
+                stack.push(location);
+            }
+            ']' => {
+                if stack.is_empty() {
+                    // Unmatched closing bracket
+                    errors.push(BfError::UnmatchedCloseBracket {
+                        location,
+                        context: extract_source_context(source, location),
+                    });
+                } else {
+                    stack.pop();
+                }
+            }
+            _ => {
+                // Ignore other characters
+            }
+        }
+
+        // Advance location
+        if ch != '\n' {
+            location.column += 1;
+        }
+        location.offset += 1;
+        i += 1;
+    }
+
+    // Any remaining open brackets are unmatched
+    for open_location in stack {
+        errors.push(BfError::UnmatchedOpenBracket {
+            location: open_location,
+            context: extract_source_context(source, open_location),
+        });
+    }
+
+    errors
+}
+
 /// Parse BrainFuck source code into a list of instructions
 pub fn parse(source: &str) -> Result<Vec<Instruction>, BfError> {
+    // First validate brackets and report all errors at once
+    let bracket_errors = validate_brackets(source);
+    if !bracket_errors.is_empty() {
+        if bracket_errors.len() == 1 {
+            // Single error - return it directly
+            return Err(bracket_errors.into_iter().next().unwrap());
+        } else {
+            // Multiple errors - report all details to stderr, then return summary error
+            let count = bracket_errors.len();
+            eprintln!("Found {} bracket matching error(s):\n", count);
+            for (i, error) in bracket_errors.iter().enumerate() {
+                eprintln!("Error {}:", i + 1);
+                eprintln!("{}\n", error);
+            }
+            return Err(BfError::MultipleBracketErrors { count });
+        }
+    }
+
     let mut location = SourceLocation::start();
     parse_block(source, &mut location, None).map(|instructions| instructions)
 }
@@ -832,5 +919,112 @@ mod tests {
         let minified = minify(&instructions1);
         let instructions2 = parse(&minified).unwrap();
         assert_eq!(instructions1, instructions2);
+    }
+
+    // Bracket matching tests
+    #[test]
+    fn test_bracket_matching_valid() {
+        // Valid programs should parse without errors
+        let source = "[>+<-]";
+        assert!(parse(source).is_ok());
+
+        let source = "[[[]]]";
+        assert!(parse(source).is_ok());
+
+        let source = "[>+[>+[>+<]<]<]";
+        assert!(parse(source).is_ok());
+    }
+
+    #[test]
+    fn test_bracket_matching_single_unmatched_open() {
+        let source = "[>++";
+        let result = parse(source);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::UnmatchedOpenBracket { .. })));
+    }
+
+    #[test]
+    fn test_bracket_matching_single_unmatched_close() {
+        let source = "++]";
+        let result = parse(source);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::UnmatchedCloseBracket { .. })));
+    }
+
+    #[test]
+    fn test_bracket_matching_multiple_unmatched_open() {
+        // Test with multiple unclosed opening brackets
+        let source = "[>++\n[<--\n[+++";
+        let result = parse(source);
+        assert!(result.is_err());
+        // Should return MultipleBracketErrors when there are multiple errors
+        assert!(matches!(
+            result,
+            Err(BfError::MultipleBracketErrors { count: 3 })
+        ));
+    }
+
+    #[test]
+    fn test_bracket_matching_multiple_unmatched_close() {
+        // Test with multiple unmatched closing brackets
+        let source = "+++]\n++]\n+]";
+        let result = parse(source);
+        assert!(result.is_err());
+        // Should return MultipleBracketErrors when there are multiple errors
+        assert!(matches!(
+            result,
+            Err(BfError::MultipleBracketErrors { count: 3 })
+        ));
+    }
+
+    #[test]
+    fn test_bracket_matching_mixed_errors() {
+        // Test with both unclosed opens and unmatched closes
+        // Three opens, then three closes plus two extra
+        let source = "+++[\n>++[\n<-[\n+++]\n]\n]\n]\n]";
+        let result = parse(source);
+        assert!(result.is_err());
+        // Should return MultipleBracketErrors when there are multiple errors
+        assert!(matches!(
+            result,
+            Err(BfError::MultipleBracketErrors { count: 2 })
+        ));
+    }
+
+    #[test]
+    fn test_bracket_matching_with_line_comments() {
+        // Valid brackets with line comments
+        let source = "* Opening bracket\n[>++<-] * Closing bracket\n";
+        assert!(parse(source).is_ok());
+
+        // Unmatched bracket with line comments
+        let source = "* Comment\n[>++ * [ this bracket is in comment\n";
+        let result = parse(source);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::UnmatchedOpenBracket { .. })));
+    }
+
+    #[test]
+    fn test_bracket_matching_location_tracking() {
+        // Test that error locations are accurate
+        let source = "+++\n[>++\n<--";
+        let result = parse(source);
+        assert!(result.is_err());
+        match result {
+            Err(BfError::UnmatchedOpenBracket { location, .. }) => {
+                assert_eq!(location.line, 2); // Bracket is on line 2
+                assert_eq!(location.column, 1); // First character of line 2
+            }
+            _ => panic!("Expected UnmatchedOpenBracket with location"),
+        }
+    }
+
+    #[test]
+    fn test_bracket_matching_nested_errors() {
+        // Nested structure with missing closing bracket
+        let source = "[[+]";
+        let result = parse(source);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::UnmatchedOpenBracket { .. })));
     }
 }

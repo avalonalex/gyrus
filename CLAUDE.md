@@ -13,11 +13,13 @@ The codebase follows a pipeline architecture with comprehensive error handling:
 1. **Parse** (`src/bf.rs`): BrainFuck source → AST (Abstract Syntax Tree)
    - Recursive descent parser that converts source text into `Vec<Instruction>`
    - **Location tracking**: Maintains line, column, and offset for every position
+   - **Bracket validation**: Pre-parse phase validates ALL bracket matching errors at once
    - Loops are represented as `Instruction::Loop(Vec<Instruction>)` creating a nested tree structure
    - **Comments**:
      - Non-BF characters are ignored (implicit comments)
      - `*` starts line comments - everything after `*` on that line is ignored
    - Rich error messages with source context (shows 2 lines before/after with caret)
+   - **Multiple error reporting**: Shows all bracket errors in a single pass
 
 2. **Interpret** (`src/bf.rs`): AST → Execution with safety limits
    - Tree-walking interpreter with configurable memory (default 30,000 bytes)
@@ -79,12 +81,20 @@ The error system is comprehensive and production-ready:
 
 - **SourceLocation**: Tracks line, column, offset for every parse position
 - **extract_source_context()**: Generates visual error messages with surrounding code
+- **validate_brackets()**: Pre-parse validation that finds ALL bracket errors in one pass
 - **BfError variants**: Structured errors with relevant context
   - Parse errors: Include location and source context
   - Runtime errors: Include instruction index and attempted values
   - Limit errors: Include the limit that was exceeded
 
-Example error flow:
+Example bracket validation flow:
+1. `parse()` calls `validate_brackets()` before parsing
+2. `validate_brackets()` scans entire source with a stack
+3. Collects ALL unmatched `[` and `]` errors
+4. If multiple errors found, reports all to stderr then returns first
+5. This saves time by showing all bracket issues at once
+
+Example single error flow:
 1. Parser detects unmatched `[` at position
 2. Creates `SourceLocation` with line/column
 3. Calls `extract_source_context()` to get surrounding lines
@@ -138,7 +148,8 @@ The test suite covers:
 - **Validation tests**: Empty loops, infinite loops, nesting, clean programs (5 tests)
 - **Comment tests**: Line comments, BF commands in comments, multiline (4 tests)
 - **Minify tests**: Simple, line comments, nested loops, round-trip (5 tests)
-- **Total**: 28 tests
+- **Bracket matching tests**: Multiple errors, single errors, location tracking (9 tests)
+- **Total**: 37 tests
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()`
@@ -146,6 +157,7 @@ To add new tests:
 3. Test validation with `validate(&instructions)`
 4. Use `matches!` macro for error/warning pattern matching
 5. Check error details (location, context, values)
+6. For bracket errors, test both single and multiple error scenarios
 
 ## Future Architecture Notes
 
@@ -159,17 +171,21 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 
 ## Implementation Status
 
-**Completed (Phase 1, 2.1, 3.1, 4.1 from PRD)**:
-- ✅ Source location tracking
-- ✅ Rich error messages with context
-- ✅ Execution limits (step count, timeout)
-- ✅ Configurable memory size
-- ✅ Verbose mode
-- ✅ Comprehensive test suite (19 tests)
-- ✅ Validation pass with warnings
-- ✅ Strict mode for CI/CD
+**Completed (Phase 1, 2.1, 2.2, 3.1, 4.1 from PRD)**:
+- ✅ Source location tracking (Phase 1)
+- ✅ Rich error messages with context (Phase 1)
+- ✅ Execution limits (step count, timeout) (Phase 3.1)
+- ✅ Configurable memory size (Phase 3.1)
+- ✅ Verbose mode (Phase 1)
+- ✅ Comprehensive test suite (37 tests)
+- ✅ Validation pass with warnings (Phase 2.1)
+- ✅ Strict mode for CI/CD (Phase 2.1)
+- ✅ Line comments using `*` (Community feature)
+- ✅ Code minification (Phase 4.1)
+- ✅ Better bracket matching - multiple errors (Phase 2.2)
 
 **Remaining (from PRD)**:
-- ⏳ Better bracket matching (Phase 2.2)
 - ⏳ Multiple memory models (Phase 3.2)
 - ⏳ Advanced I/O error handling (Phase 3.3)
+- ⏳ Visual TUI debugger
+- ⏳ JIT/AOT compiler backend

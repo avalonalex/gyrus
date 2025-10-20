@@ -47,7 +47,14 @@ struct Cli {
     output: Option<PathBuf>,
 }
 
-fn main() -> Result<(), BfError> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
     // Read the source file
@@ -55,7 +62,14 @@ fn main() -> Result<(), BfError> {
         .map_err(|e| BfError::FileError(format!("Failed to read file: {}", e)))?;
 
     // Parse the program
-    let instructions = parse(&source)?;
+    let instructions = match parse(&source) {
+        Ok(instr) => instr,
+        Err(BfError::MultipleBracketErrors { .. }) => {
+            // Errors already reported to stderr, just exit with error code
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e),
+    };
 
     // Minify if requested (and exit without executing)
     if cli.minify {
