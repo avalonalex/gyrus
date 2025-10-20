@@ -32,6 +32,11 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
   - Step count, loop iterations, memory usage
   - I/O statistics (bytes read/written)
   - Useful for performance analysis and debugging
+- **Configurable EOF handling** for input operations
+  - SetZero: Set cell to 0 on EOF (default)
+  - SetNegOne: Set cell to 255 (-1) on EOF
+  - NoChange: Leave cell unchanged on EOF
+  - Error: Fail on EOF with error message
 - **Verbose mode** for execution diagnostics
 - Production-grade reliability with comprehensive error checking
 - Command-line interface with extensive options
@@ -114,6 +119,7 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | `--memory-model <MODEL>` | Memory model: fixed, wrapping, or unbounded | fixed |
 | `--unbounded-initial <BYTES>` | Initial size for unbounded memory model | 1000 |
 | `--unbounded-max <BYTES>` | Maximum size for unbounded memory model | 1000000 |
+| `--eof-behavior <BEHAVIOR>` | EOF behavior: zero, neg-one, no-change, or error | zero |
 
 ## BrainFuck Language Reference
 
@@ -297,6 +303,77 @@ ferrous-cortex program.bf --memory-model unbounded \
 - **Wrapping**: Use for programs designed for wrapping behavior or when porting from other interpreters
 - **Unbounded**: Use for programs with unknown memory requirements or when prototyping
 
+## EOF Handling
+
+FerrousCortex provides configurable end-of-file (EOF) handling for the input command (`,`). Different BrainFuck implementations handle EOF differently, so you can choose the behavior that matches your needs.
+
+### EOF Behaviors
+
+Configure EOF handling with the `--eof-behavior` flag:
+
+#### SetZero (Default)
+
+Sets the current cell to 0 when EOF is reached.
+
+```bash
+ferrous-cortex program.bf --eof-behavior zero
+```
+
+This is the most common behavior and matches many BrainFuck implementations. It's useful for programs that need to detect end of input by checking for a zero value.
+
+**Example:**
+```brainfuck
+,           * Read input (becomes 0 on EOF)
+[           * Loop while not zero (skip if EOF)
+  .         * Process the character
+  ,         * Read next character
+]
+```
+
+#### SetNegOne
+
+Sets the current cell to 255 (-1 as unsigned byte) when EOF is reached.
+
+```bash
+ferrous-cortex program.bf --eof-behavior neg-one
+# Alternatives: negone, -1, 255
+```
+
+Some BrainFuck programs use 255 (which represents -1 in two's complement) as an EOF marker.
+
+#### NoChange
+
+Leaves the cell value unchanged when EOF is reached.
+
+```bash
+ferrous-cortex program.bf --eof-behavior no-change
+# Alternatives: nochange, unchanged
+```
+
+This behavior is useful when you want to preserve the previous cell value or have pre-initialized sentinel values.
+
+#### Error
+
+Returns an error and stops execution when EOF is reached.
+
+```bash
+ferrous-cortex program.bf --eof-behavior error
+```
+
+This is the strictest mode - use it when your program requires valid input and EOF should be treated as an exceptional condition.
+
+**Example error:**
+```
+Error: End of input reached
+```
+
+### Choosing an EOF Behavior
+
+- **SetZero**: Best for most programs, standard behavior
+- **SetNegOne**: Use when porting code that expects -1 for EOF
+- **NoChange**: Use when you want to preserve cell values across EOF
+- **Error**: Use when EOF should terminate execution (strict mode)
+
 ## Execution Statistics
 
 FerrousCortex can track and display detailed execution statistics using the `--stats` flag:
@@ -456,13 +533,13 @@ FerrousCortex/
 - [x] Better bracket matching (report multiple errors)
 - [x] Multiple memory models (fixed, wrapping, unbounded)
 - [x] Execution statistics tracking
+- [x] Advanced I/O error handling (EOF behavior)
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
 - [ ] Step-by-step execution
 - [ ] Memory visualization
 - [ ] Performance optimizations (instruction fusion, loop detection)
-- [ ] Advanced I/O error handling (EOF behavior)
 - [ ] JIT/AOT compiler backend
 - [ ] REPL mode
 

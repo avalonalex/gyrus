@@ -495,6 +495,28 @@ impl ExecutionStats {
     }
 }
 
+/// Behavior when input (,) encounters EOF
+#[derive(Debug, Clone, PartialEq)]
+pub enum EofBehavior {
+    /// Set cell to 0 on EOF (most common, used by many interpreters)
+    SetZero,
+
+    /// Set cell to 255 (-1 as unsigned byte) on EOF
+    SetNegOne,
+
+    /// Leave cell unchanged on EOF
+    NoChange,
+
+    /// Return error on EOF (strictest, prevents silent bugs)
+    Error,
+}
+
+impl Default for EofBehavior {
+    fn default() -> Self {
+        EofBehavior::SetZero // Most common behavior
+    }
+}
+
 /// Memory model for interpreter execution
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryModel {
@@ -532,6 +554,7 @@ pub struct ExecutionConfig {
     pub max_steps: Option<u64>,
     pub timeout_ms: Option<u64>,
     pub allow_negative_pointer: bool,
+    pub eof_behavior: EofBehavior,
 }
 
 impl Default for ExecutionConfig {
@@ -541,6 +564,7 @@ impl Default for ExecutionConfig {
             max_steps: None,
             timeout_ms: None,
             allow_negative_pointer: false,
+            eof_behavior: EofBehavior::default(),
         }
     }
 }
@@ -589,6 +613,12 @@ impl ExecutionConfig {
 
     pub fn with_timeout_ms(mut self, timeout: u64) -> Self {
         self.timeout_ms = Some(timeout);
+        self
+    }
+
+    /// Set EOF behavior for input operations
+    pub fn with_eof_behavior(mut self, behavior: EofBehavior) -> Self {
+        self.eof_behavior = behavior;
         self
     }
 
@@ -778,13 +808,36 @@ fn execute_block(
             }
             Instruction::Input => {
                 let mut buf = [0u8; 1];
-                io::stdin()
-                    .read_exact(&mut buf)
-                    .map_err(|e| BfError::IoError {
-                        message: e.to_string(),
-                    })?;
-                memory[*pointer] = buf[0];
-                stats.bytes_read += 1;
+                match io::stdin().read_exact(&mut buf) {
+                    Ok(_) => {
+                        memory[*pointer] = buf[0];
+                        stats.bytes_read += 1;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                        // Handle EOF based on configuration
+                        match config.eof_behavior {
+                            EofBehavior::SetZero => {
+                                memory[*pointer] = 0;
+                            }
+                            EofBehavior::SetNegOne => {
+                                memory[*pointer] = 255; // -1 as u8
+                            }
+                            EofBehavior::NoChange => {
+                                // Do nothing, leave cell as-is
+                            }
+                            EofBehavior::Error => {
+                                return Err(BfError::IoError {
+                                    message: "End of input reached".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(BfError::IoError {
+                            message: e.to_string(),
+                        });
+                    }
+                }
             }
             Instruction::Loop(body) => {
                 while memory[*pointer] != 0 {
@@ -1369,5 +1422,32 @@ mod tests {
 
         // Outer loop runs 3 times, inner loop runs 2 times per outer iteration = 6
         assert_eq!(stats.loop_iterations, 3 + 6); // 3 outer + 6 inner
+    }
+
+    // EOF behavior tests
+    // Note: These tests verify the configuration, not actual EOF handling
+    // (actual EOF handling requires stdin which is difficult to test in unit tests)
+
+    #[test]
+    fn test_eof_behavior_config() {
+        // Test that EOF behavior can be configured
+        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::SetZero);
+        assert!(matches!(config.eof_behavior, EofBehavior::SetZero));
+
+        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::SetNegOne);
+        assert!(matches!(config.eof_behavior, EofBehavior::SetNegOne));
+
+        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::NoChange);
+        assert!(matches!(config.eof_behavior, EofBehavior::NoChange));
+
+        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::Error);
+        assert!(matches!(config.eof_behavior, EofBehavior::Error));
+    }
+
+    #[test]
+    fn test_eof_behavior_default() {
+        // Test that default EOF behavior is SetZero
+        let config = ExecutionConfig::default();
+        assert!(matches!(config.eof_behavior, EofBehavior::SetZero));
     }
 }
