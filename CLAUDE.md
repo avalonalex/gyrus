@@ -21,22 +21,28 @@ The codebase follows a pipeline architecture with comprehensive error handling:
    - Rich error messages with source context (shows 2 lines before/after with caret)
    - **Multiple error reporting**: Shows all bracket errors in a single pass
 
-2. **Interpret** (`src/bf.rs`): AST → Execution with safety limits
+2. **Interpret** (`src/bf.rs`): AST → Execution with safety limits and statistics
    - Tree-walking interpreter with configurable memory
    - **Multiple memory models**:
      - Fixed: Traditional fixed-size array (default 30,000 bytes)
      - Wrapping: Circular buffer that wraps at boundaries
      - Unbounded: Dynamic growth from initial size up to max limit
    - **Execution limits**: Step counting and timeout support
+   - **Statistics tracking** via `ExecutionStats`:
+     - Total steps, loop iterations, peak memory usage
+     - Memory allocation (useful for unbounded model)
+     - I/O statistics (bytes read/written)
+     - Modified cell count
    - Recursive execution for nested loops via `execute_block()`
    - Direct I/O to stdin/stdout
-   - Instruction counting for error reporting
+   - Returns `ExecutionStats` instead of `()`
 
 3. **CLI** (`src/main.rs`): Entry point with extensive configuration
-   - Flow: read file → parse → (minify OR validate) → configure → interpret
-   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`
+   - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
+   - Flags: `--verbose`, `--stats`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
+   - Stats mode: Displays execution statistics after program finishes
 
 ### Key Design Decisions
 
@@ -158,7 +164,8 @@ The test suite covers:
 - **Minify tests**: Simple, line comments, nested loops, round-trip (5 tests)
 - **Bracket matching tests**: Multiple errors, single errors, location tracking (9 tests)
 - **Memory model tests**: Fixed, wrapping, unbounded behaviors (7 tests)
-- **Total**: 44 tests
+- **Statistics tests**: Step counting, loop iterations, I/O tracking, memory tracking (6 tests)
+- **Total**: 50 tests
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()`
@@ -180,13 +187,13 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 
 ## Implementation Status
 
-**Completed (Phase 1, 2.1, 2.2, 3.1, 3.2, 4.1 from PRD)**:
+**Completed (Phase 1, 2.1, 2.2, 3.1, 3.2, 4.1 from PRD + Community features)**:
 - ✅ Source location tracking (Phase 1)
 - ✅ Rich error messages with context (Phase 1)
 - ✅ Execution limits (step count, timeout) (Phase 3.1)
 - ✅ Configurable memory size (Phase 3.1)
 - ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (44 tests)
+- ✅ Comprehensive test suite (50 tests)
 - ✅ Validation pass with warnings (Phase 2.1)
 - ✅ Strict mode for CI/CD (Phase 2.1)
 - ✅ Line comments using `*` (Community feature)
@@ -196,6 +203,10 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
   - Fixed, Wrapping, and Unbounded models
   - CLI flags for model selection
   - Comprehensive testing
+- ✅ Execution statistics tracking (Community feature)
+  - Steps, loop iterations, memory usage
+  - I/O tracking
+  - `--stats` CLI flag
 
 **Remaining (from PRD)**:
 - ⏳ Advanced I/O error handling (Phase 3.3)

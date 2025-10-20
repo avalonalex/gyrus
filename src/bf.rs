@@ -458,6 +458,43 @@ fn advance_location(location: &mut SourceLocation, ch: char) {
 
 const MEMORY_SIZE: usize = 30000;
 
+/// Statistics collected during program execution
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionStats {
+    /// Total number of instructions executed
+    pub total_steps: u64,
+
+    /// Number of loop iterations (times a loop body was entered)
+    pub loop_iterations: u64,
+
+    /// Peak memory cell index accessed (highest pointer position + 1)
+    pub peak_memory_used: usize,
+
+    /// Number of memory cells with non-zero values at end of execution
+    pub cells_modified: usize,
+
+    /// Total bytes read from input
+    pub bytes_read: u64,
+
+    /// Total bytes written to output
+    pub bytes_written: u64,
+
+    /// Actual memory allocated (useful for unbounded model)
+    pub memory_allocated: usize,
+}
+
+impl ExecutionStats {
+    /// Create new stats tracker
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count non-zero cells in memory
+    fn count_modified_cells(memory: &[u8]) -> usize {
+        memory.iter().filter(|&&byte| byte != 0).count()
+    }
+}
+
 /// Memory model for interpreter execution
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryModel {
@@ -567,21 +604,24 @@ impl ExecutionConfig {
 ///
 /// This is a convenience function that uses default settings.
 /// For custom configuration, use `interpret_with_config()`.
+/// Discards execution statistics.
 #[allow(dead_code)]
 pub fn interpret(instructions: &[Instruction]) -> Result<(), BfError> {
-    interpret_with_config(instructions, ExecutionConfig::default())
+    interpret_with_config(instructions, ExecutionConfig::default()).map(|_| ())
 }
 
 /// Interpret and execute BrainFuck instructions with custom configuration
+/// Returns execution statistics
 pub fn interpret_with_config(
     instructions: &[Instruction],
     config: ExecutionConfig,
-) -> Result<(), BfError> {
+) -> Result<ExecutionStats, BfError> {
     use std::time::Instant;
 
     let mut memory = vec![0u8; config.memory_model.initial_size()];
     let mut pointer = 0usize;
     let mut step_count = 0u64;
+    let mut stats = ExecutionStats::new();
     let start_time = config.timeout_ms.map(|_| Instant::now());
 
     execute_block(
@@ -591,7 +631,15 @@ pub fn interpret_with_config(
         &mut step_count,
         &config,
         &start_time,
-    )
+        &mut stats,
+    )?;
+
+    // Finalize stats
+    stats.total_steps = step_count;
+    stats.cells_modified = ExecutionStats::count_modified_cells(&memory);
+    stats.memory_allocated = memory.len();
+
+    Ok(stats)
 }
 
 /// Handle pointer increment based on memory model
@@ -677,6 +725,7 @@ fn execute_block(
     step_count: &mut u64,
     config: &ExecutionConfig,
     start_time: &Option<std::time::Instant>,
+    stats: &mut ExecutionStats,
 ) -> Result<(), BfError> {
     for instruction in instructions {
         // Check step limit
@@ -702,6 +751,10 @@ fn execute_block(
         match instruction {
             Instruction::IncrementPointer => {
                 increment_pointer(pointer, memory, config, *step_count)?;
+                // Track peak memory usage
+                if *pointer + 1 > stats.peak_memory_used {
+                    stats.peak_memory_used = *pointer + 1;
+                }
             }
             Instruction::DecrementPointer => {
                 decrement_pointer(pointer, config, *step_count)?;
@@ -721,6 +774,7 @@ fn execute_block(
                 io::stdout().flush().map_err(|e| BfError::IoError {
                     message: e.to_string(),
                 })?;
+                stats.bytes_written += 1;
             }
             Instruction::Input => {
                 let mut buf = [0u8; 1];
@@ -730,10 +784,12 @@ fn execute_block(
                         message: e.to_string(),
                     })?;
                 memory[*pointer] = buf[0];
+                stats.bytes_read += 1;
             }
             Instruction::Loop(body) => {
                 while memory[*pointer] != 0 {
-                    execute_block(body, memory, pointer, step_count, config, start_time)?;
+                    stats.loop_iterations += 1;
+                    execute_block(body, memory, pointer, step_count, config, start_time, stats)?;
                 }
             }
         }
@@ -1232,5 +1288,86 @@ mod tests {
 
         // Should end at cell 5 (25 % 10 = 5), then move to 6
         assert!(result.is_ok());
+    }
+
+    // Statistics tracking tests
+    #[test]
+    fn test_stats_basic_counting() {
+        // Test basic step counting
+        let source = "+++>>--"; // 7 instructions
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfig::default();
+        let stats = interpret_with_config(&instructions, config).unwrap();
+
+        assert_eq!(stats.total_steps, 7);
+        assert_eq!(stats.loop_iterations, 0);
+        assert_eq!(stats.peak_memory_used, 3); // Moved to cell 2, so peak is 3 (0-based + 1)
+    }
+
+    #[test]
+    fn test_stats_loop_iterations() {
+        // Test loop iteration counting
+        let source = "+++[>+<-]"; // Loop runs 3 times
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfig::default();
+        let stats = interpret_with_config(&instructions, config).unwrap();
+
+        assert_eq!(stats.loop_iterations, 3);
+        assert!(stats.total_steps > 3); // Should be more than just the setup
+    }
+
+    #[test]
+    fn test_stats_io_tracking() {
+        // Test I/O tracking
+        let source = "++++++++++.>++."; // Output 2 bytes
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfig::default();
+        let stats = interpret_with_config(&instructions, config).unwrap();
+
+        assert_eq!(stats.bytes_written, 2);
+        assert_eq!(stats.bytes_read, 0);
+    }
+
+    #[test]
+    fn test_stats_memory_tracking() {
+        // Test memory usage tracking
+        let source = "+++>++>+"; // Use 3 cells
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfig::default();
+        let stats = interpret_with_config(&instructions, config).unwrap();
+
+        assert_eq!(stats.cells_modified, 3); // 3 non-zero cells
+        assert_eq!(stats.peak_memory_used, 3); // Highest cell accessed + 1
+    }
+
+    #[test]
+    fn test_stats_unbounded_allocation() {
+        // Test memory allocation tracking for unbounded model
+        let source = format!("{}+", ">".repeat(50)); // Move to cell 50
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_unbounded_memory(10, 100);
+        let stats = interpret_with_config(&instructions, config).unwrap();
+
+        assert_eq!(stats.peak_memory_used, 51); // Cell 50 + 1
+        assert_eq!(stats.memory_allocated, 51); // Should have grown to 51 cells
+        assert_eq!(stats.cells_modified, 1); // Only 1 non-zero cell
+    }
+
+    #[test]
+    fn test_stats_nested_loops() {
+        // Test nested loop iteration counting
+        let source = "+++[>++[<.>-]<-]"; // Nested loops
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfig::default();
+        let stats = interpret_with_config(&instructions, config).unwrap();
+
+        // Outer loop runs 3 times, inner loop runs 2 times per outer iteration = 6
+        assert_eq!(stats.loop_iterations, 3 + 6); // 3 outer + 6 inner
     }
 }
