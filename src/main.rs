@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 mod bf;
 
-use bf::{BfError, ExecutionConfig, interpret_with_config, minify, parse, validate};
+use bf::{BfError, ExecutionConfig, MemoryModel, interpret_with_config, minify, parse, validate};
 
 #[derive(Parser)]
 #[command(name = "ferrous-cortex")]
@@ -22,9 +22,21 @@ struct Cli {
     #[arg(long, default_value = "0")]
     timeout: u64,
 
-    /// Memory size in bytes
+    /// Memory size in bytes (for fixed and wrapping models)
     #[arg(long, default_value = "30000")]
     memory_size: usize,
+
+    /// Memory model: fixed, wrapping, or unbounded
+    #[arg(long, default_value = "fixed")]
+    memory_model: String,
+
+    /// Initial memory size for unbounded model
+    #[arg(long, default_value = "1000")]
+    unbounded_initial: usize,
+
+    /// Maximum memory size for unbounded model
+    #[arg(long, default_value = "1000000")]
+    unbounded_max: usize,
 
     /// Show detailed execution information
     #[arg(short, long)]
@@ -116,7 +128,23 @@ fn run() -> Result<(), BfError> {
     }
 
     // Build execution config
-    let mut config = ExecutionConfig::default().with_memory_size(cli.memory_size);
+    let memory_model = match cli.memory_model.to_lowercase().as_str() {
+        "fixed" => MemoryModel::Fixed(cli.memory_size),
+        "wrapping" => MemoryModel::Wrapping(cli.memory_size),
+        "unbounded" => MemoryModel::Unbounded {
+            initial_size: cli.unbounded_initial,
+            max_size: cli.unbounded_max,
+        },
+        other => {
+            eprintln!(
+                "Error: Invalid memory model '{}'. Valid options: fixed, wrapping, unbounded",
+                other
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let mut config = ExecutionConfig::default().with_memory_model(memory_model);
 
     if cli.max_steps > 0 {
         config = config.with_max_steps(cli.max_steps);
@@ -128,7 +156,23 @@ fn run() -> Result<(), BfError> {
 
     if cli.verbose {
         eprintln!("Configuration:");
-        eprintln!("  Memory size: {} bytes", config.memory_size);
+        match &config.memory_model {
+            MemoryModel::Fixed(size) => {
+                eprintln!("  Memory model: Fixed({} bytes)", size);
+            }
+            MemoryModel::Wrapping(size) => {
+                eprintln!("  Memory model: Wrapping({} bytes)", size);
+            }
+            MemoryModel::Unbounded {
+                initial_size,
+                max_size,
+            } => {
+                eprintln!(
+                    "  Memory model: Unbounded(initial: {}, max: {})",
+                    initial_size, max_size
+                );
+            }
+        }
         eprintln!(
             "  Max steps: {}",
             config

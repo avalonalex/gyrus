@@ -458,10 +458,40 @@ fn advance_location(location: &mut SourceLocation, ch: char) {
 
 const MEMORY_SIZE: usize = 30000;
 
+/// Memory model for interpreter execution
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryModel {
+    /// Fixed-size memory array (current behavior)
+    /// Out-of-bounds access returns an error
+    Fixed(usize),
+
+    /// Wrapping memory: pointer wraps around at boundaries
+    /// e.g., at size 30000: pointer 30000 -> 0, pointer -1 -> 29999
+    Wrapping(usize),
+
+    /// Unbounded memory: grows as needed up to a maximum limit
+    /// Starts small and expands when accessed beyond current size
+    Unbounded {
+        initial_size: usize,
+        max_size: usize,
+    },
+}
+
+impl MemoryModel {
+    /// Get the initial memory size for this model
+    pub fn initial_size(&self) -> usize {
+        match self {
+            MemoryModel::Fixed(size) => *size,
+            MemoryModel::Wrapping(size) => *size,
+            MemoryModel::Unbounded { initial_size, .. } => *initial_size,
+        }
+    }
+}
+
 /// Configuration for BrainFuck interpreter execution
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
-    pub memory_size: usize,
+    pub memory_model: MemoryModel,
     pub max_steps: Option<u64>,
     pub timeout_ms: Option<u64>,
     pub allow_negative_pointer: bool,
@@ -470,7 +500,7 @@ pub struct ExecutionConfig {
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            memory_size: MEMORY_SIZE,
+            memory_model: MemoryModel::Fixed(MEMORY_SIZE),
             max_steps: None,
             timeout_ms: None,
             allow_negative_pointer: false,
@@ -485,8 +515,33 @@ impl ExecutionConfig {
         Self::default()
     }
 
+    /// Set the memory model
+    pub fn with_memory_model(mut self, model: MemoryModel) -> Self {
+        self.memory_model = model;
+        self
+    }
+
+    /// Set fixed memory size (convenience method)
+    #[allow(dead_code)]
     pub fn with_memory_size(mut self, size: usize) -> Self {
-        self.memory_size = size;
+        self.memory_model = MemoryModel::Fixed(size);
+        self
+    }
+
+    /// Set wrapping memory model
+    #[allow(dead_code)]
+    pub fn with_wrapping_memory(mut self, size: usize) -> Self {
+        self.memory_model = MemoryModel::Wrapping(size);
+        self
+    }
+
+    /// Set unbounded memory model
+    #[allow(dead_code)]
+    pub fn with_unbounded_memory(mut self, initial_size: usize, max_size: usize) -> Self {
+        self.memory_model = MemoryModel::Unbounded {
+            initial_size,
+            max_size,
+        };
         self
     }
 
@@ -524,7 +579,7 @@ pub fn interpret_with_config(
 ) -> Result<(), BfError> {
     use std::time::Instant;
 
-    let mut memory = vec![0u8; config.memory_size];
+    let mut memory = vec![0u8; config.memory_model.initial_size()];
     let mut pointer = 0usize;
     let mut step_count = 0u64;
     let start_time = config.timeout_ms.map(|_| Instant::now());
@@ -537,6 +592,82 @@ pub fn interpret_with_config(
         &config,
         &start_time,
     )
+}
+
+/// Handle pointer increment based on memory model
+fn increment_pointer(
+    pointer: &mut usize,
+    memory: &mut Vec<u8>,
+    config: &ExecutionConfig,
+    step_count: u64,
+) -> Result<(), BfError> {
+    *pointer += 1;
+
+    match &config.memory_model {
+        MemoryModel::Fixed(size) => {
+            if *pointer >= *size {
+                return Err(BfError::MemoryOutOfBounds {
+                    instruction_index: step_count as usize,
+                    attempted: *pointer as isize,
+                    max: size - 1,
+                });
+            }
+        }
+        MemoryModel::Wrapping(size) => {
+            if *pointer >= *size {
+                *pointer = 0; // Wrap around to beginning
+            }
+        }
+        MemoryModel::Unbounded {
+            initial_size: _,
+            max_size,
+        } => {
+            if *pointer >= *max_size {
+                return Err(BfError::MemoryOutOfBounds {
+                    instruction_index: step_count as usize,
+                    attempted: *pointer as isize,
+                    max: max_size - 1,
+                });
+            }
+            // Grow memory if needed
+            if *pointer >= memory.len() {
+                memory.resize(*pointer + 1, 0);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle pointer decrement based on memory model
+fn decrement_pointer(
+    pointer: &mut usize,
+    config: &ExecutionConfig,
+    step_count: u64,
+) -> Result<(), BfError> {
+    match &config.memory_model {
+        MemoryModel::Fixed(size) | MemoryModel::Unbounded { max_size: size, .. } => {
+            if *pointer == 0 && !config.allow_negative_pointer {
+                return Err(BfError::MemoryOutOfBounds {
+                    instruction_index: step_count as usize,
+                    attempted: -1,
+                    max: size - 1,
+                });
+            }
+            if *pointer > 0 {
+                *pointer -= 1;
+            }
+        }
+        MemoryModel::Wrapping(size) => {
+            if *pointer == 0 {
+                *pointer = size - 1; // Wrap around to end
+            } else {
+                *pointer -= 1;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn execute_block(
@@ -570,26 +701,10 @@ fn execute_block(
 
         match instruction {
             Instruction::IncrementPointer => {
-                *pointer += 1;
-                if *pointer >= config.memory_size {
-                    return Err(BfError::MemoryOutOfBounds {
-                        instruction_index: *step_count as usize,
-                        attempted: *pointer as isize,
-                        max: config.memory_size - 1,
-                    });
-                }
+                increment_pointer(pointer, memory, config, *step_count)?;
             }
             Instruction::DecrementPointer => {
-                if *pointer == 0 && !config.allow_negative_pointer {
-                    return Err(BfError::MemoryOutOfBounds {
-                        instruction_index: *step_count as usize,
-                        attempted: -1,
-                        max: config.memory_size - 1,
-                    });
-                }
-                if *pointer > 0 {
-                    *pointer -= 1;
-                }
+                decrement_pointer(pointer, config, *step_count)?;
             }
             Instruction::IncrementValue => {
                 memory[*pointer] = memory[*pointer].wrapping_add(1);
@@ -1026,5 +1141,96 @@ mod tests {
         let result = parse(source);
         assert!(result.is_err());
         assert!(matches!(result, Err(BfError::UnmatchedOpenBracket { .. })));
+    }
+
+    // Memory model tests
+    #[test]
+    fn test_memory_model_fixed() {
+        // Fixed memory model should error on out-of-bounds access
+        let source = ">".repeat(100); // Move right 100 times
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_memory_size(50); // Only 50 cells
+        let result = interpret_with_config(&instructions, config);
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
+    }
+
+    #[test]
+    fn test_memory_model_wrapping_forward() {
+        // Wrapping memory model should wrap from end to beginning
+        let source = format!("{}+.", ">".repeat(10)); // Move to cell 10, increment, output
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_wrapping_memory(10); // 10 cells (0-9)
+
+        // Should wrap to cell 0 and output value
+        let result = interpret_with_config(&instructions, config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_memory_model_wrapping_backward() {
+        // Wrapping memory model should wrap from beginning to end
+        let source = "<+."; // Move left from 0, increment, output
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_wrapping_memory(10); // 10 cells
+
+        // Should wrap to cell 9
+        let result = interpret_with_config(&instructions, config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_memory_model_unbounded_growth() {
+        // Unbounded memory should grow as needed
+        let source = format!("{}+.", ">".repeat(100)); // Move right 100 times
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_unbounded_memory(10, 200); // Start small, allow growth
+
+        let result = interpret_with_config(&instructions, config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_memory_model_unbounded_max_limit() {
+        // Unbounded memory should still error at max limit
+        let source = format!("{}+.", ">".repeat(150)); // Move right 150 times
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_unbounded_memory(10, 100); // Max 100 cells
+
+        let result = interpret_with_config(&instructions, config);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
+    }
+
+    #[test]
+    fn test_memory_model_fixed_left_boundary() {
+        // Fixed model should error when going below 0
+        let source = "<"; // Move left from 0
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_memory_size(100);
+        let result = interpret_with_config(&instructions, config);
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
+    }
+
+    #[test]
+    fn test_memory_model_wrapping_multiple_wraps() {
+        // Test multiple wraps in wrapping mode
+        let source = format!("{}>+.", ">".repeat(25)); // Move right 25 times (2.5 wraps with size 10)
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfig::default().with_wrapping_memory(10);
+        let result = interpret_with_config(&instructions, config);
+
+        // Should end at cell 5 (25 % 10 = 5), then move to 6
+        assert!(result.is_ok());
     }
 }
