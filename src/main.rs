@@ -41,13 +41,9 @@ struct Cli {
     #[arg(long, default_value = "1000000")]
     unbounded_max: usize,
 
-    /// Show detailed execution information
+    /// Show detailed execution information and statistics
     #[arg(short, long)]
     verbose: bool,
-
-    /// Show execution statistics after program finishes
-    #[arg(long)]
-    stats: bool,
 
     /// EOF behavior: zero, neg-one, no-change, or error
     #[arg(long, default_value = "zero")]
@@ -219,8 +215,8 @@ fn run() -> Result<(), BfError> {
     // Execute the program
     let stats = interpret_with_config(&instructions, config)?;
 
-    // Display statistics if requested
-    if cli.stats {
+    // Display statistics in verbose mode
+    if cli.verbose {
         eprintln!("\n=== Execution Statistics ===");
         eprintln!("Total steps executed: {}", stats.total_steps);
         eprintln!("Loop iterations: {}", stats.loop_iterations);
