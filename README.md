@@ -15,6 +15,10 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
   - Maximum step count to prevent infinite loops
   - Execution timeout in milliseconds
   - Customizable memory size
+- **Program validation** with static analysis
+  - Detects empty loops, infinite loops, extreme nesting
+  - Identifies suspicious patterns
+  - Strict mode for CI/CD integration
 - **Verbose mode** for execution diagnostics
 - Production-grade reliability with comprehensive error checking
 - Command-line interface with extensive options
@@ -86,6 +90,8 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-v, --verbose` | Show detailed execution information | false |
+| `--validate` | Validate program and show warnings | false |
+| `--strict` | Treat warnings as errors (implies --validate) | false |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
 | `--memory-size <BYTES>` | Memory size in bytes | 30000 |
@@ -148,6 +154,35 @@ ferrous-cortex suspicious_program.bf --max-steps 1000000
 ferrous-cortex suspicious_program.bf --timeout 5000
 ```
 
+## Program Validation
+
+FerrousCortex can validate your BrainFuck programs and warn about potential issues:
+
+```bash
+# Validate program for warnings
+ferrous-cortex program.bf --validate
+```
+
+### Warning Types
+
+The validator checks for:
+
+- **Empty loops**: `[]` - Does nothing and can be removed
+- **Infinite loops**: `[+]` or `[++]` - Cell never reaches zero by incrementing
+- **Extreme nesting**: Loops nested more than 10 levels deep (performance impact)
+- **Inefficient patterns**: Multiple operations that could be optimized
+
+### Strict Mode
+
+Use `--strict` to treat warnings as errors (useful for CI/CD):
+
+```bash
+# Exit with error if warnings are found
+ferrous-cortex program.bf --strict
+```
+
+This is useful for maintaining code quality in automated pipelines.
+
 ## Development
 
 ### Running Tests
@@ -191,12 +226,14 @@ FerrousCortex/
 - [x] Configurable memory size
 - [x] Verbose mode for diagnostics
 - [x] Comprehensive error handling
+- [x] Validation pass with warnings
+- [x] Strict mode for CI/CD
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
 - [ ] Step-by-step execution
 - [ ] Memory visualization
-- [ ] Validation pass with warnings
+- [ ] Better bracket matching (report multiple errors)
 - [ ] Performance optimizations (instruction fusion, loop detection)
 - [ ] Multiple memory models (bounded, unbounded, wrapping)
 - [ ] Advanced I/O error handling (EOF behavior)
