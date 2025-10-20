@@ -42,6 +42,10 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Show execution statistics after program finishes
+    #[arg(long)]
+    stats: bool,
+
     /// Validate program and show warnings
     #[arg(long)]
     validate: bool,
@@ -189,7 +193,19 @@ fn run() -> Result<(), BfError> {
     }
 
     // Execute the program
-    interpret_with_config(&instructions, config)?;
+    let stats = interpret_with_config(&instructions, config)?;
+
+    // Display statistics if requested
+    if cli.stats {
+        eprintln!("\n=== Execution Statistics ===");
+        eprintln!("Total steps executed: {}", stats.total_steps);
+        eprintln!("Loop iterations: {}", stats.loop_iterations);
+        eprintln!("Peak memory used: {} cells", stats.peak_memory_used);
+        eprintln!("Memory allocated: {} bytes", stats.memory_allocated);
+        eprintln!("Cells modified: {}", stats.cells_modified);
+        eprintln!("Bytes read: {}", stats.bytes_read);
+        eprintln!("Bytes written: {}", stats.bytes_written);
+    }
 
     Ok(())
 }

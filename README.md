@@ -28,6 +28,10 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 - **Code minification** - strip comments for compact programs
   - 95%+ size reduction typical
   - Preserves functionality
+- **Execution statistics** tracking
+  - Step count, loop iterations, memory usage
+  - I/O statistics (bytes read/written)
+  - Useful for performance analysis and debugging
 - **Verbose mode** for execution diagnostics
 - Production-grade reliability with comprehensive error checking
 - Command-line interface with extensive options
@@ -99,6 +103,7 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-v, --verbose` | Show detailed execution information | false |
+| `--stats` | Show execution statistics after program finishes | false |
 | `--validate` | Validate program and show warnings | false |
 | `--strict` | Treat warnings as errors (implies --validate) | false |
 | `--minify` | Strip all comments and output only BF commands | false |
@@ -292,6 +297,44 @@ ferrous-cortex program.bf --memory-model unbounded \
 - **Wrapping**: Use for programs designed for wrapping behavior or when porting from other interpreters
 - **Unbounded**: Use for programs with unknown memory requirements or when prototyping
 
+## Execution Statistics
+
+FerrousCortex can track and display detailed execution statistics using the `--stats` flag:
+
+```bash
+ferrous-cortex program.bf --stats
+```
+
+**Statistics Collected:**
+- **Total steps executed**: Number of instructions executed
+- **Loop iterations**: Number of times loop bodies were entered
+- **Peak memory used**: Highest memory cell accessed (cells)
+- **Memory allocated**: Actual memory allocated (bytes)
+- **Cells modified**: Number of memory cells with non-zero values
+- **Bytes read**: Total bytes read from input
+- **Bytes written**: Total bytes written to output
+
+**Example Output:**
+```bash
+$ ferrous-cortex examples/hello_world.bf --stats
+Hello World!
+
+=== Execution Statistics ===
+Total steps executed: 826
+Loop iterations: 80
+Peak memory used: 7 cells
+Memory allocated: 30000 bytes
+Cells modified: 5
+Bytes read: 0
+Bytes written: 13
+```
+
+**Use Cases:**
+- **Performance analysis**: Understand program behavior and complexity
+- **Debugging**: Track memory usage and loop execution
+- **Optimization**: Identify inefficient code patterns
+- **Learning**: See how BrainFuck programs execute internally
+
 ## Program Validation
 
 FerrousCortex can validate your BrainFuck programs and warn about potential issues:
@@ -412,6 +455,7 @@ FerrousCortex/
 - [x] Code minification with comment stripping
 - [x] Better bracket matching (report multiple errors)
 - [x] Multiple memory models (fixed, wrapping, unbounded)
+- [x] Execution statistics tracking
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
