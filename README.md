@@ -8,6 +8,7 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 - **Rich error handling** with source location tracking and context
   - Line and column numbers for parse errors
   - Visual error context with caret (^) pointing to issues
+  - **Multiple bracket error reporting** - shows ALL errors at once
   - Detailed error messages for debugging
 - Support for all 8 BrainFuck commands: `><+-.,[]`
 - **Line comments** using `*` - makes documentation safe and easy
@@ -155,6 +156,40 @@ Error: Unmatched '[' at line 3, column 12
     4 | More code
 ```
 
+#### Multiple Bracket Errors
+
+FerrousCortex detects **all** bracket matching errors in a single pass, saving you time by showing all issues at once:
+
+```
+Found 3 bracket matching error(s):
+
+Error 1:
+Unmatched '[' at line 3, column 1
+    1 | * Test file
+    2 |
+    3 | [>++
+      | ^
+    4 | [<--
+    5 | [+++
+
+Error 2:
+Unmatched '[' at line 4, column 1
+    3 | [>++
+    4 | [<--
+      | ^
+    5 | [+++
+    6 |
+
+Error 3:
+Unmatched '[' at line 5, column 1
+    4 | [<--
+    5 | [+++
+      | ^
+    6 |
+```
+
+This comprehensive error reporting helps you fix all bracket issues in one go instead of fixing them one at a time.
+
 ### Runtime Errors
 
 Runtime errors include:
@@ -297,12 +332,14 @@ FerrousCortex/
 - [x] Comprehensive error handling
 - [x] Validation pass with warnings
 - [x] Strict mode for CI/CD
+- [x] Line comments using `*` for safer documentation
+- [x] Code minification with comment stripping
+- [x] Better bracket matching (report multiple errors)
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
 - [ ] Step-by-step execution
 - [ ] Memory visualization
-- [ ] Better bracket matching (report multiple errors)
 - [ ] Performance optimizations (instruction fusion, loop detection)
 - [ ] Multiple memory models (bounded, unbounded, wrapping)
 - [ ] Advanced I/O error handling (EOF behavior)
