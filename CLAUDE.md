@@ -88,6 +88,27 @@ Example error flow:
 4. Returns `BfError::UnmatchedOpenBracket { location, context }`
 5. Error Display shows formatted message with visual caret
 
+## Validation Architecture
+
+The validation system performs static analysis on parsed instructions:
+
+- **BfWarning enum**: Structured warning types (EmptyLoop, ExtremeNesting, SuspiciousPattern, DeadCode)
+- **validate()**: Entry point that returns `Vec<BfWarning>`
+- **validate_instructions()**: Recursive traversal checking nesting depth
+- **check_suspicious_loop_patterns()**: Pattern matching for common issues
+
+Warnings detected:
+1. **Empty loops** `[]` - No-op that can be removed
+2. **Infinite increment loops** `[+]`, `[++]` - Cell never reaches zero
+3. **Extreme nesting** - Depth > 10 levels (performance impact)
+4. **Inefficient patterns** - `[--]` instead of `[-]`
+
+Note: Common patterns like `[>]`, `[<]`, and `[-]` are NOT flagged as they're standard BF idioms.
+
+CLI integration:
+- `--validate`: Show warnings but continue execution
+- `--strict`: Treat warnings as errors (exit code 1)
+
 ## Testing
 
 The test suite covers:
@@ -95,12 +116,14 @@ The test suite covers:
 - **Error tests**: All error types with proper context
 - **Limit tests**: Step limits, timeouts, memory bounds
 - **Location tests**: Multiline programs, error positions
+- **Validation tests**: Empty loops, infinite loops, nesting, clean programs (5 tests)
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()`
 2. Test execution with `interpret_with_config(&instructions, config)`
-3. Use `matches!` macro for error pattern matching
-4. Check error details (location, context, values)
+3. Test validation with `validate(&instructions)`
+4. Use `matches!` macro for error/warning pattern matching
+5. Check error details (location, context, values)
 
 ## Future Architecture Notes
 
@@ -114,16 +137,17 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 
 ## Implementation Status
 
-**Completed (Phase 1 & 3.1 from PRD)**:
+**Completed (Phase 1, 2.1, 3.1, 4.1 from PRD)**:
 - ✅ Source location tracking
 - ✅ Rich error messages with context
 - ✅ Execution limits (step count, timeout)
 - ✅ Configurable memory size
 - ✅ Verbose mode
-- ✅ Comprehensive test suite
+- ✅ Comprehensive test suite (19 tests)
+- ✅ Validation pass with warnings
+- ✅ Strict mode for CI/CD
 
 **Remaining (from PRD)**:
-- ⏳ Validation pass with warnings (Phase 2.1)
 - ⏳ Better bracket matching (Phase 2.2)
 - ⏳ Multiple memory models (Phase 3.2)
 - ⏳ Advanced I/O error handling (Phase 3.3)

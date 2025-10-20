@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 mod bf;
 
-use bf::{BfError, ExecutionConfig, interpret_with_config, parse};
+use bf::{BfError, ExecutionConfig, interpret_with_config, parse, validate};
 
 #[derive(Parser)]
 #[command(name = "ferrous-cortex")]
@@ -29,6 +29,14 @@ struct Cli {
     /// Show detailed execution information
     #[arg(short, long)]
     verbose: bool,
+
+    /// Validate program and show warnings
+    #[arg(long)]
+    validate: bool,
+
+    /// Treat warnings as errors (implies --validate)
+    #[arg(long)]
+    strict: bool,
 }
 
 fn main() -> Result<(), BfError> {
@@ -40,6 +48,26 @@ fn main() -> Result<(), BfError> {
 
     // Parse the program
     let instructions = parse(&source)?;
+
+    // Validate if requested
+    let should_validate = cli.validate || cli.strict;
+    if should_validate {
+        let warnings = validate(&instructions);
+
+        if !warnings.is_empty() {
+            eprintln!("Validation found {} warning(s):\n", warnings.len());
+            for warning in &warnings {
+                eprintln!("{}\n", warning);
+            }
+
+            if cli.strict {
+                eprintln!("Error: Warnings treated as errors in strict mode");
+                std::process::exit(1);
+            }
+        } else if cli.verbose {
+            eprintln!("Validation: No warnings found\n");
+        }
+    }
 
     // Build execution config
     let mut config = ExecutionConfig::default().with_memory_size(cli.memory_size);
