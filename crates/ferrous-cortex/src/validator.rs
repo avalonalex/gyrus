@@ -23,20 +23,17 @@ fn validate_instructions(
     }
 
     for instruction in instructions {
-        match instruction {
-            Instruction::Loop(body) => {
-                // Check for empty loops
-                if body.is_empty() {
-                    warnings.push(BfWarning::EmptyLoop { location });
-                } else {
-                    // Check for suspicious patterns
-                    check_suspicious_loop_patterns(body, warnings, location);
+        if let Instruction::Loop(body) = instruction {
+            // Check for empty loops
+            if body.is_empty() {
+                warnings.push(BfWarning::EmptyLoop { location });
+            } else {
+                // Check for suspicious patterns
+                check_suspicious_loop_patterns(body, warnings, location);
 
-                    // Recursively validate nested loops
-                    validate_instructions(body, warnings, depth + 1, location);
-                }
+                // Recursively validate nested loops
+                validate_instructions(body, warnings, depth + 1, location);
             }
-            _ => {}
         }
     }
 }
@@ -69,7 +66,7 @@ fn check_suspicious_loop_patterns(
         warnings.push(BfWarning::SuspiciousPattern {
             location,
             pattern: format!("[{}]", "-".repeat(body.len())),
-            reason: format!("Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell."),
+            reason: "Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell.".to_string(),
         });
     }
 
@@ -77,7 +74,7 @@ fn check_suspicious_loop_patterns(
     let all_increments = body
         .iter()
         .all(|i| matches!(i, Instruction::IncrementValue));
-    if all_increments && body.len() >= 1 {
+    if all_increments && !body.is_empty() {
         warnings.push(BfWarning::SuspiciousPattern {
             location,
             pattern: format!("[{}]", "+".repeat(body.len())),
