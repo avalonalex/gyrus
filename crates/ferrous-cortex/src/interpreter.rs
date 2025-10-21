@@ -1,5 +1,5 @@
 use crate::config::{EofBehavior, ExecutionConfig, MemoryModel};
-use crate::error::{BfError, Result};
+use crate::error::{BfError, MemoryDump, Result};
 use crate::instruction::Instruction;
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
@@ -60,10 +60,19 @@ fn increment_pointer(
     match config.memory_model() {
         MemoryModel::Fixed(size) => {
             if pointer.get() >= size.get() {
+                let dump = MemoryDump::from_memory(memory, *pointer);
                 return Err(BfError::MemoryOutOfBounds {
                     instruction_index: step_count.into(),
                     attempted: pointer.get() as isize,
                     max: MemorySize::new(size.get() - 1),
+                    memory_dump: Some(dump),
+                    hint: format!(
+                        "Attempted to access cell {}, but memory size is fixed at {} cells. \
+                         Try increasing memory size with --memory-size {} or use --memory-model wrapping",
+                        pointer.get(),
+                        size.get(),
+                        pointer.get() + 1000
+                    ),
                 });
             }
         }
@@ -77,10 +86,18 @@ fn increment_pointer(
             max_size,
         } => {
             if pointer.get() >= max_size.get() {
+                let dump = MemoryDump::from_memory(memory, *pointer);
                 return Err(BfError::MemoryOutOfBounds {
                     instruction_index: step_count.into(),
                     attempted: pointer.get() as isize,
                     max: MemorySize::new(max_size.get() - 1),
+                    memory_dump: Some(dump),
+                    hint: format!(
+                        "Attempted to access cell {}, exceeding maximum size of {}. \
+                         This may indicate an infinite loop moving the pointer",
+                        pointer.get(),
+                        max_size.get()
+                    ),
                 });
             }
             // Grow memory if needed
@@ -97,16 +114,20 @@ fn increment_pointer(
 #[inline]
 fn decrement_pointer(
     pointer: &mut MemoryAddress,
+    memory: &[u8],
     config: &ExecutionConfig,
     step_count: StepCount,
 ) -> Result<()> {
     match config.memory_model() {
         MemoryModel::Fixed(size) | MemoryModel::Unbounded { max_size: size, .. } => {
             if pointer.get() == 0 && !config.allow_negative_pointer() {
+                let dump = MemoryDump::from_memory(memory, *pointer);
                 return Err(BfError::MemoryOutOfBounds {
                     instruction_index: step_count.into(),
                     attempted: -1,
                     max: MemorySize::new(size.get() - 1),
+                    memory_dump: Some(dump),
+                    hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
                 });
             }
             if pointer.get() > 0 {
@@ -139,7 +160,18 @@ fn execute_block(
         step_count.increment();
         if let Some(max_steps) = config.max_steps() {
             if step_count.get() > max_steps {
-                return Err(BfError::StepLimitExceeded { limit: max_steps });
+                return Err(BfError::StepLimitExceeded {
+                    limit: max_steps,
+                    actual_steps: *step_count,
+                    hint: format!(
+                        "Program executed {} steps, exceeding the limit of {}. \
+                         This may indicate an infinite loop. Try increasing the limit with --max-steps {} \
+                         or add breakpoints to debug.",
+                        step_count.get(),
+                        max_steps,
+                        max_steps * 2
+                    ),
+                });
             }
         }
 
@@ -150,6 +182,14 @@ fn execute_block(
                 if elapsed > timeout_ms {
                     return Err(BfError::ExecutionTimeout {
                         limit_ms: timeout_ms,
+                        actual_steps: Some(*step_count),
+                        hint: format!(
+                            "Program exceeded {}ms timeout after executing {} steps. \
+                             Try increasing timeout with --timeout {} or optimize your BrainFuck code.",
+                            timeout_ms,
+                            step_count.get(),
+                            timeout_ms * 2
+                        ),
                     });
                 }
             }
@@ -164,7 +204,7 @@ fn execute_block(
                 }
             }
             Instruction::DecrementPointer => {
-                decrement_pointer(pointer, config, *step_count)?;
+                decrement_pointer(pointer, memory, config, *step_count)?;
             }
             Instruction::IncrementValue => {
                 memory[pointer.get()] = memory[pointer.get()].wrapping_add(1);
@@ -175,11 +215,15 @@ fn execute_block(
             Instruction::Output => {
                 io::stdout()
                     .write_all(&[memory[pointer.get()]])
-                    .map_err(|e| BfError::IoError {
-                        message: e.to_string(),
+                    .map_err(|source| BfError::IoError {
+                        operation: "writing output".to_string(),
+                        instruction_index: Some((*step_count).into()),
+                        source,
                     })?;
-                io::stdout().flush().map_err(|e| BfError::IoError {
-                    message: e.to_string(),
+                io::stdout().flush().map_err(|source| BfError::IoError {
+                    operation: "flushing output".to_string(),
+                    instruction_index: Some((*step_count).into()),
+                    source,
                 })?;
                 stats.bytes_written += 1;
             }
@@ -204,14 +248,18 @@ fn execute_block(
                             }
                             EofBehavior::Error => {
                                 return Err(BfError::IoError {
-                                    message: "End of input reached".to_string(),
+                                    operation: "reading input (EOF reached)".to_string(),
+                                    instruction_index: Some((*step_count).into()),
+                                    source: e,
                                 });
                             }
                         }
                     }
-                    Err(e) => {
+                    Err(source) => {
                         return Err(BfError::IoError {
-                            message: e.to_string(),
+                            operation: "reading input".to_string(),
+                            instruction_index: Some((*step_count).into()),
+                            source,
                         });
                     }
                 }
@@ -259,11 +307,14 @@ mod tests {
     fn test_step_limit() {
         let source = "+[+]"; // Infinite loop
         let instructions = parse(&source).unwrap();
-        let config = ExecutionConfigBuilder::new().with_memory_size(MEMORY_SIZE).with_max_steps(100).build();
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(MEMORY_SIZE)
+            .with_max_steps(100)
+            .build();
         let result = interpret_with_config(&instructions, config);
         assert!(matches!(
             result,
-            Err(BfError::StepLimitExceeded { limit: 100 })
+            Err(BfError::StepLimitExceeded { limit: 100, .. })
         ));
     }
 
@@ -282,7 +333,10 @@ mod tests {
         // Create a program that runs longer - moving pointer takes more time
         let source = "+[>+<]".repeat(1000); // Infinite loop with more instructions
         let instructions = parse(&source).unwrap();
-        let config = ExecutionConfigBuilder::new().with_memory_size(1000).with_timeout_ms(100).build(); // Smaller memory to hit bounds faster
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(1000)
+            .with_timeout_ms(100)
+            .build(); // Smaller memory to hit bounds faster
         let result = interpret_with_config(&instructions, config);
         // Should fail with either timeout or memory bounds
         assert!(result.is_err());
@@ -307,7 +361,9 @@ mod tests {
         let source = format!("{}+.", ">".repeat(10)); // Move to cell 10, increment, output
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new().with_wrapping_memory(10).build(); // 10 cells (0-9)
+        let config = ExecutionConfigBuilder::new()
+            .with_wrapping_memory(10)
+            .build(); // 10 cells (0-9)
 
         // Should wrap to cell 0 and output value
         let result = interpret_with_config(&instructions, config);
@@ -320,7 +376,9 @@ mod tests {
         let source = "<+."; // Move left from 0, increment, output
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new().with_wrapping_memory(10).build(); // 10 cells
+        let config = ExecutionConfigBuilder::new()
+            .with_wrapping_memory(10)
+            .build(); // 10 cells
 
         // Should wrap to cell 9
         let result = interpret_with_config(&instructions, config);
@@ -333,7 +391,10 @@ mod tests {
         let source = format!("{}+.", ">".repeat(100)); // Move right 100 times
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new().with_unbounded_memory(10, 200).unwrap().build(); // Start small, allow growth
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(10, 200)
+            .unwrap()
+            .build(); // Start small, allow growth
 
         let result = interpret_with_config(&instructions, config);
         assert!(result.is_ok());
@@ -345,7 +406,10 @@ mod tests {
         let source = format!("{}+.", ">".repeat(150)); // Move right 150 times
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new().with_unbounded_memory(10, 100).unwrap().build(); // Max 100 cells
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(10, 100)
+            .unwrap()
+            .build(); // Max 100 cells
 
         let result = interpret_with_config(&instructions, config);
         assert!(result.is_err());
@@ -371,7 +435,9 @@ mod tests {
         let source = format!("{}>+.", ">".repeat(25)); // Move right 25 times (2.5 wraps with size 10)
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new().with_wrapping_memory(10).build();
+        let config = ExecutionConfigBuilder::new()
+            .with_wrapping_memory(10)
+            .build();
         let result = interpret_with_config(&instructions, config);
 
         // Should end at cell 5 (25 % 10 = 5), then move to 6
@@ -437,7 +503,10 @@ mod tests {
         let source = format!("{}+", ">".repeat(50)); // Move to cell 50
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new().with_unbounded_memory(10, 100).unwrap().build();
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(10, 100)
+            .unwrap()
+            .build();
         let stats = interpret_with_config(&instructions, config).unwrap();
 
         assert_eq!(stats.peak_memory_used, MemoryAddress::new(51)); // Cell 50 + 1

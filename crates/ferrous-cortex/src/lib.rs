@@ -15,7 +15,7 @@ pub use config::{
     EofBehavior, ExecutionConfig, ExecutionConfigBuilder, MEMORY_SIZE, MemoryModel, ReadyToBuild,
     Unbuilt,
 };
-pub use error::{BfError, BfWarning, Result};
+pub use error::{BfError, BfWarning, MemoryDump, Result};
 pub use instruction::Instruction;
 pub use interpreter::{interpret, interpret_with_config};
 pub use location::SourceLocation;
