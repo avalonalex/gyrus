@@ -58,20 +58,35 @@ Call stack (nested loops):
 4. **Debugger Foundation**: Enable future step-by-step debugging
 5. **Minimal Overhead**: Debug info should be optional and lightweight
 
+## Status (Updated: October 2025)
+
+**Overall Status**: ❌ NOT STARTED - Debug symbols not yet implemented
+
 ## Current State
 
-### What We Have
-- ✅ Parse-time error locations (bracket mismatches)
-- ✅ Source location tracking during parsing (`SourceLocation` struct)
-- ✅ Error context generation with source snippets
-- ✅ Instruction parsing to IR
+### What We Have ✅
+- ✅ Parse-time error locations (bracket mismatches with full context)
+- ✅ Source location tracking during parsing (`SourceLocation` struct in location.rs)
+- ✅ Error context generation with source snippets (2 lines before/after with caret)
+- ✅ Instruction parsing to IR (clean AST representation)
+- ✅ Multiple bracket error reporting (shows all errors at once)
+- ✅ Rich error types with detailed formatting
 
-### What We're Missing
+### What We're Missing ❌ (This PRD)
 - ❌ Mapping from runtime instruction index → source location
-- ❌ Loop call stack tracking
-- ❌ Runtime error messages with source context
-- ❌ Execution tracing capability
+- ❌ Loop call stack tracking (nested loop trace)
+- ❌ Runtime error messages with source context (errors during execution)
+- ❌ Execution tracing capability (--trace flag)
 - ❌ Debug info attached to instructions
+- ❌ CLI flags: --debug, --trace, --trace-memory
+
+### Implementation Status by Phase
+
+**Phase 1: Instruction-to-Source Mapping** ❌ NOT STARTED
+**Phase 2: Loop Call Stack Tracking** ❌ NOT STARTED
+**Phase 3: Execution Tracing** ❌ NOT STARTED
+**Phase 4: CLI Integration** ❌ NOT STARTED
+**Phase 5: Performance Considerations** ❌ NOT STARTED
 
 ## Detailed Design
 
