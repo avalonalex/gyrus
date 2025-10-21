@@ -49,11 +49,11 @@ struct Cli {
     #[arg(long, default_value = "zero")]
     eof_behavior: String,
 
-    /// Validate program and show warnings
+    /// Validate program and show warnings (does not execute)
     #[arg(long)]
     validate: bool,
 
-    /// Treat warnings as errors (implies --validate)
+    /// Treat warnings as errors and fail (executes only if no warnings)
     #[arg(long)]
     strict: bool,
 
@@ -115,8 +115,7 @@ fn run() -> Result<(), BfError> {
     }
 
     // Validate if requested
-    let should_validate = cli.validate || cli.strict;
-    if should_validate {
+    if cli.validate || cli.strict {
         let warnings = validate(&instructions);
 
         if !warnings.is_empty() {
@@ -128,9 +127,22 @@ fn run() -> Result<(), BfError> {
             if cli.strict {
                 eprintln!("Error: Warnings treated as errors in strict mode");
                 std::process::exit(1);
+            } else {
+                // --validate mode: exit without executing
+                return Ok(());
             }
-        } else if cli.verbose {
-            eprintln!("Validation: No warnings found\n");
+        } else {
+            // No warnings found
+            if cli.verbose {
+                eprintln!("Validation: No warnings found\n");
+            }
+
+            if cli.validate {
+                // --validate mode: exit without executing even if clean
+                eprintln!("Validation: No warnings found");
+                return Ok(());
+            }
+            // --strict mode with no warnings: continue to execution
         }
     }
 

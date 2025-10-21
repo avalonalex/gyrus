@@ -79,7 +79,30 @@ cargo run -- examples/simple.bf
 
 # Classic Hello World
 cargo run -- examples/hello_world.bf
+
+# Line comments demonstration
+cargo run -- examples/line_comments.bf
 ```
+
+**Error Handling Examples:**
+
+See the `examples/errors/` directory for comprehensive error handling demonstrations:
+
+```bash
+# Parse error with detailed context
+cargo run -- examples/errors/unmatched_bracket.bf
+
+# Memory bounds error
+cargo run -- examples/errors/memory_overflow.bf --memory-size 100
+
+# Infinite loop with step limit
+cargo run -- examples/errors/infinite_loop.bf --max-steps 10000
+
+# Validation warnings
+cargo run -- examples/errors/validation_warnings.bf --validate
+```
+
+See [`examples/errors/README.md`](examples/errors/README.md) for detailed documentation of all error examples and troubleshooting guides.
 
 ### Command-Line Options
 
@@ -108,8 +131,8 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-v, --verbose` | Show detailed execution information and statistics | false |
-| `--validate` | Validate program and show warnings | false |
-| `--strict` | Treat warnings as errors (implies --validate) | false |
+| `--validate` | Validate program and show warnings (does not execute) | false |
+| `--strict` | Treat warnings as errors and fail (executes only if no warnings) | false |
 | `--minify` | Strip all comments and output only BF commands | false |
 | `-o, --output <FILE>` | Output file for minified code (stdout if not specified) | - |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
@@ -423,9 +446,26 @@ Bytes written: 13
 FerrousCortex can validate your BrainFuck programs and warn about potential issues:
 
 ```bash
-# Validate program for warnings
+# Validate only (does not execute)
 ferrous-cortex program.bf --validate
+
+# Strict mode: validate and execute only if no warnings
+ferrous-cortex program.bf --strict
 ```
+
+### Validation Modes
+
+**`--validate` (Lint Mode)**
+- Parses and analyzes the code for issues
+- Shows all warnings
+- Never executes the program
+- Useful for checking code quality without running
+
+**`--strict` (Strict Execution Mode)**
+- Validates the program first
+- If warnings found: exits with error (does not execute)
+- If no warnings: continues and executes the program
+- Useful for CI/CD pipelines and production environments
 
 ### Warning Types
 
@@ -436,16 +476,18 @@ The validator checks for:
 - **Extreme nesting**: Loops nested more than 10 levels deep (performance impact)
 - **Inefficient patterns**: Multiple operations that could be optimized
 
-### Strict Mode
-
-Use `--strict` to treat warnings as errors (useful for CI/CD):
+### Example Workflows
 
 ```bash
-# Exit with error if warnings are found
-ferrous-cortex program.bf --strict
-```
+# Development: Check for issues without running
+ferrous-cortex program.bf --validate
 
-This is useful for maintaining code quality in automated pipelines.
+# Production: Only run if code is clean
+ferrous-cortex program.bf --strict
+
+# CI/CD: Combine with verbose mode
+ferrous-cortex program.bf --strict --verbose
+```
 
 ## Code Minification
 
@@ -518,7 +560,16 @@ FerrousCortex/
 │   └── bf.rs            # Parser and interpreter core
 ├── examples/            # Example BrainFuck programs
 │   ├── hello_world.bf
-│   └── simple.bf
+│   ├── simple.bf
+│   ├── line_comments.bf
+│   ├── errors/          # Error handling demonstrations
+│   │   ├── README.md    # Error examples documentation
+│   │   ├── unmatched_bracket.bf
+│   │   ├── memory_overflow.bf
+│   │   ├── infinite_loop.bf
+│   │   └── validation_warnings.bf
+│   └── ...
+├── PRD/                 # Product requirement documents
 ├── Cargo.toml
 └── README.md
 ```
