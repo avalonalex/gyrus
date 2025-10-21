@@ -1,8 +1,22 @@
-[package]
-name = "ferrous-cortex"
-version = "0.1.0"
+[workspace]
+members = [
+    "crates/ferrous-cortex",
+    "crates/ferrous-cortex-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
 edition = "2024"
 
-[dependencies]
-clap = { version = "4.5.50", features = ["derive"] }
+[workspace.dependencies]
+# Shared dependencies
 thiserror = "2.0.17"
+clap = { version = "4.5.50", features = ["derive"] }
+
+# Internal dependencies
+ferrous-cortex = { path = "crates/ferrous-cortex" }
+
+[profile.release]
+lto = true
+codegen-units = 1

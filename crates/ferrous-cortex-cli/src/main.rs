@@ -2,9 +2,7 @@ use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 
-mod bf;
-
-use bf::{
+use ferrous_cortex::{
     BfError, EofBehavior, ExecutionConfig, MemoryModel, interpret_with_config, minify, parse,
     validate,
 };

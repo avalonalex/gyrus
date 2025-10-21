@@ -1,0 +1,10 @@
+[package]
+name = "ferrous-cortex"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+# Add test dependencies here if needed
