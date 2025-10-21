@@ -1,7 +1,8 @@
 use crate::config::{EofBehavior, ExecutionConfig, MemoryModel};
-use crate::error::BfError;
+use crate::error::{BfError, Result};
 use crate::instruction::Instruction;
 use crate::stats::ExecutionStats;
+use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::io::{self, Read, Write};
 
 /// Interpret and execute BrainFuck instructions with default configuration
@@ -10,7 +11,7 @@ use std::io::{self, Read, Write};
 /// For custom configuration, use `interpret_with_config()`.
 /// Discards execution statistics.
 #[allow(dead_code)]
-pub fn interpret(instructions: &[Instruction]) -> Result<(), BfError> {
+pub fn interpret(instructions: &[Instruction]) -> Result<()> {
     interpret_with_config(instructions, ExecutionConfig::default()).map(|_| ())
 }
 
@@ -19,14 +20,14 @@ pub fn interpret(instructions: &[Instruction]) -> Result<(), BfError> {
 pub fn interpret_with_config(
     instructions: &[Instruction],
     config: ExecutionConfig,
-) -> Result<ExecutionStats, BfError> {
+) -> Result<ExecutionStats> {
     use std::time::Instant;
 
-    let mut memory = vec![0u8; config.memory_model.initial_size()];
-    let mut pointer = 0usize;
-    let mut step_count = 0u64;
+    let mut memory = vec![0u8; config.memory_model().initial_size().get()];
+    let mut pointer = MemoryAddress::new(0);
+    let mut step_count = StepCount::new(0);
     let mut stats = ExecutionStats::new();
-    let start_time = config.timeout_ms.map(|_| Instant::now());
+    let start_time = config.timeout_ms().map(|_| Instant::now());
 
     execute_block(
         instructions,
@@ -41,49 +42,50 @@ pub fn interpret_with_config(
     // Finalize stats
     stats.total_steps = step_count;
     stats.cells_modified = ExecutionStats::count_modified_cells(&memory);
-    stats.memory_allocated = memory.len();
+    stats.memory_allocated = MemorySize::new(memory.len());
 
     Ok(stats)
 }
 
 /// Handle pointer increment based on memory model
+#[inline]
 fn increment_pointer(
-    pointer: &mut usize,
+    pointer: &mut MemoryAddress,
     memory: &mut Vec<u8>,
     config: &ExecutionConfig,
-    step_count: u64,
-) -> Result<(), BfError> {
-    *pointer += 1;
+    step_count: StepCount,
+) -> Result<()> {
+    pointer.increment();
 
-    match &config.memory_model {
+    match config.memory_model() {
         MemoryModel::Fixed(size) => {
-            if *pointer >= *size {
+            if pointer.get() >= size.get() {
                 return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: step_count as usize,
-                    attempted: *pointer as isize,
-                    max: size - 1,
+                    instruction_index: step_count.into(),
+                    attempted: pointer.get() as isize,
+                    max: MemorySize::new(size.get() - 1),
                 });
             }
         }
         MemoryModel::Wrapping(size) => {
-            if *pointer >= *size {
-                *pointer = 0; // Wrap around to beginning
+            if pointer.get() >= size.get() {
+                *pointer = MemoryAddress::new(0); // Wrap around to beginning
             }
         }
         MemoryModel::Unbounded {
             initial_size: _,
             max_size,
         } => {
-            if *pointer >= *max_size {
+            if pointer.get() >= max_size.get() {
                 return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: step_count as usize,
-                    attempted: *pointer as isize,
-                    max: max_size - 1,
+                    instruction_index: step_count.into(),
+                    attempted: pointer.get() as isize,
+                    max: MemorySize::new(max_size.get() - 1),
                 });
             }
             // Grow memory if needed
-            if *pointer >= memory.len() {
-                memory.resize(*pointer + 1, 0);
+            if pointer.get() >= memory.len() {
+                memory.resize(pointer.get() + 1, 0);
             }
         }
     }
@@ -92,29 +94,30 @@ fn increment_pointer(
 }
 
 /// Handle pointer decrement based on memory model
+#[inline]
 fn decrement_pointer(
-    pointer: &mut usize,
+    pointer: &mut MemoryAddress,
     config: &ExecutionConfig,
-    step_count: u64,
-) -> Result<(), BfError> {
-    match &config.memory_model {
+    step_count: StepCount,
+) -> Result<()> {
+    match config.memory_model() {
         MemoryModel::Fixed(size) | MemoryModel::Unbounded { max_size: size, .. } => {
-            if *pointer == 0 && !config.allow_negative_pointer {
+            if pointer.get() == 0 && !config.allow_negative_pointer() {
                 return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: step_count as usize,
+                    instruction_index: step_count.into(),
                     attempted: -1,
-                    max: size - 1,
+                    max: MemorySize::new(size.get() - 1),
                 });
             }
-            if *pointer > 0 {
-                *pointer -= 1;
+            if pointer.get() > 0 {
+                pointer.decrement();
             }
         }
         MemoryModel::Wrapping(size) => {
-            if *pointer == 0 {
-                *pointer = size - 1; // Wrap around to end
+            if pointer.get() == 0 {
+                *pointer = MemoryAddress::new(size.get() - 1); // Wrap around to end
             } else {
-                *pointer -= 1;
+                pointer.decrement();
             }
         }
     }
@@ -125,24 +128,24 @@ fn decrement_pointer(
 fn execute_block(
     instructions: &[Instruction],
     memory: &mut Vec<u8>,
-    pointer: &mut usize,
-    step_count: &mut u64,
+    pointer: &mut MemoryAddress,
+    step_count: &mut StepCount,
     config: &ExecutionConfig,
     start_time: &Option<std::time::Instant>,
     stats: &mut ExecutionStats,
-) -> Result<(), BfError> {
+) -> Result<()> {
     for instruction in instructions {
         // Check step limit
-        *step_count += 1;
-        if let Some(max_steps) = config.max_steps {
-            if *step_count > max_steps {
+        step_count.increment();
+        if let Some(max_steps) = config.max_steps() {
+            if step_count.get() > max_steps {
                 return Err(BfError::StepLimitExceeded { limit: max_steps });
             }
         }
 
         // Check timeout
         if let Some(start) = start_time {
-            if let Some(timeout_ms) = config.timeout_ms {
+            if let Some(timeout_ms) = config.timeout_ms() {
                 let elapsed = start.elapsed().as_millis() as u64;
                 if elapsed > timeout_ms {
                     return Err(BfError::ExecutionTimeout {
@@ -156,22 +159,22 @@ fn execute_block(
             Instruction::IncrementPointer => {
                 increment_pointer(pointer, memory, config, *step_count)?;
                 // Track peak memory usage
-                if *pointer + 1 > stats.peak_memory_used {
-                    stats.peak_memory_used = *pointer + 1;
+                if pointer.get() + 1 > stats.peak_memory_used.get() {
+                    stats.peak_memory_used = MemoryAddress::new(pointer.get() + 1);
                 }
             }
             Instruction::DecrementPointer => {
                 decrement_pointer(pointer, config, *step_count)?;
             }
             Instruction::IncrementValue => {
-                memory[*pointer] = memory[*pointer].wrapping_add(1);
+                memory[pointer.get()] = memory[pointer.get()].wrapping_add(1);
             }
             Instruction::DecrementValue => {
-                memory[*pointer] = memory[*pointer].wrapping_sub(1);
+                memory[pointer.get()] = memory[pointer.get()].wrapping_sub(1);
             }
             Instruction::Output => {
                 io::stdout()
-                    .write_all(&[memory[*pointer]])
+                    .write_all(&[memory[pointer.get()]])
                     .map_err(|e| BfError::IoError {
                         message: e.to_string(),
                     })?;
@@ -184,17 +187,17 @@ fn execute_block(
                 let mut buf = [0u8; 1];
                 match io::stdin().read_exact(&mut buf) {
                     Ok(_) => {
-                        memory[*pointer] = buf[0];
+                        memory[pointer.get()] = buf[0];
                         stats.bytes_read += 1;
                     }
                     Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                         // Handle EOF based on configuration
-                        match config.eof_behavior {
+                        match config.eof_behavior() {
                             EofBehavior::SetZero => {
-                                memory[*pointer] = 0;
+                                memory[pointer.get()] = 0;
                             }
                             EofBehavior::SetNegOne => {
-                                memory[*pointer] = 255; // -1 as u8
+                                memory[pointer.get()] = 255; // -1 as u8
                             }
                             EofBehavior::NoChange => {
                                 // Do nothing, leave cell as-is
@@ -214,7 +217,7 @@ fn execute_block(
                 }
             }
             Instruction::Loop(body) => {
-                while memory[*pointer] != 0 {
+                while memory[pointer.get()] != 0 {
                     stats.loop_iterations += 1;
                     execute_block(body, memory, pointer, step_count, config, start_time, stats)?;
                 }
@@ -228,6 +231,7 @@ fn execute_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ExecutionConfigBuilder, MEMORY_SIZE};
     use crate::parser::parse;
 
     #[test]
@@ -255,7 +259,7 @@ mod tests {
     fn test_step_limit() {
         let source = "+[+]"; // Infinite loop
         let instructions = parse(&source).unwrap();
-        let config = ExecutionConfig::default().with_max_steps(100);
+        let config = ExecutionConfigBuilder::new().with_memory_size(MEMORY_SIZE).with_max_steps(100).build();
         let result = interpret_with_config(&instructions, config);
         assert!(matches!(
             result,
@@ -267,12 +271,10 @@ mod tests {
     fn test_custom_memory_size() {
         let source = ">".repeat(101);
         let instructions = parse(&source).unwrap();
-        let config = ExecutionConfig::default().with_memory_size(100);
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
         let result = interpret_with_config(&instructions, config);
-        assert!(matches!(
-            result,
-            Err(BfError::MemoryOutOfBounds { max: 99, .. })
-        ));
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
     }
 
     #[test]
@@ -280,9 +282,7 @@ mod tests {
         // Create a program that runs longer - moving pointer takes more time
         let source = "+[>+<]".repeat(1000); // Infinite loop with more instructions
         let instructions = parse(&source).unwrap();
-        let config = ExecutionConfig::default()
-            .with_timeout_ms(100)
-            .with_memory_size(1000); // Smaller memory to hit bounds faster
+        let config = ExecutionConfigBuilder::new().with_memory_size(1000).with_timeout_ms(100).build(); // Smaller memory to hit bounds faster
         let result = interpret_with_config(&instructions, config);
         // Should fail with either timeout or memory bounds
         assert!(result.is_err());
@@ -294,7 +294,7 @@ mod tests {
         let source = ">".repeat(100); // Move right 100 times
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_memory_size(50); // Only 50 cells
+        let config = ExecutionConfigBuilder::new().with_memory_size(50).build(); // Only 50 cells
         let result = interpret_with_config(&instructions, config);
 
         assert!(result.is_err());
@@ -307,7 +307,7 @@ mod tests {
         let source = format!("{}+.", ">".repeat(10)); // Move to cell 10, increment, output
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_wrapping_memory(10); // 10 cells (0-9)
+        let config = ExecutionConfigBuilder::new().with_wrapping_memory(10).build(); // 10 cells (0-9)
 
         // Should wrap to cell 0 and output value
         let result = interpret_with_config(&instructions, config);
@@ -320,7 +320,7 @@ mod tests {
         let source = "<+."; // Move left from 0, increment, output
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_wrapping_memory(10); // 10 cells
+        let config = ExecutionConfigBuilder::new().with_wrapping_memory(10).build(); // 10 cells
 
         // Should wrap to cell 9
         let result = interpret_with_config(&instructions, config);
@@ -333,7 +333,7 @@ mod tests {
         let source = format!("{}+.", ">".repeat(100)); // Move right 100 times
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_unbounded_memory(10, 200); // Start small, allow growth
+        let config = ExecutionConfigBuilder::new().with_unbounded_memory(10, 200).unwrap().build(); // Start small, allow growth
 
         let result = interpret_with_config(&instructions, config);
         assert!(result.is_ok());
@@ -345,7 +345,7 @@ mod tests {
         let source = format!("{}+.", ">".repeat(150)); // Move right 150 times
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_unbounded_memory(10, 100); // Max 100 cells
+        let config = ExecutionConfigBuilder::new().with_unbounded_memory(10, 100).unwrap().build(); // Max 100 cells
 
         let result = interpret_with_config(&instructions, config);
         assert!(result.is_err());
@@ -358,7 +358,7 @@ mod tests {
         let source = "<"; // Move left from 0
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_memory_size(100);
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
         let result = interpret_with_config(&instructions, config);
 
         assert!(result.is_err());
@@ -371,7 +371,7 @@ mod tests {
         let source = format!("{}>+.", ">".repeat(25)); // Move right 25 times (2.5 wraps with size 10)
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_wrapping_memory(10);
+        let config = ExecutionConfigBuilder::new().with_wrapping_memory(10).build();
         let result = interpret_with_config(&instructions, config);
 
         // Should end at cell 5 (25 % 10 = 5), then move to 6
@@ -387,9 +387,9 @@ mod tests {
         let config = ExecutionConfig::default();
         let stats = interpret_with_config(&instructions, config).unwrap();
 
-        assert_eq!(stats.total_steps, 7);
+        assert_eq!(stats.total_steps, StepCount::new(7));
         assert_eq!(stats.loop_iterations, 0);
-        assert_eq!(stats.peak_memory_used, 3); // Moved to cell 2, so peak is 3 (0-based + 1)
+        assert_eq!(stats.peak_memory_used, MemoryAddress::new(3)); // Moved to cell 2, so peak is 3 (0-based + 1)
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
         let stats = interpret_with_config(&instructions, config).unwrap();
 
         assert_eq!(stats.loop_iterations, 3);
-        assert!(stats.total_steps > 3); // Should be more than just the setup
+        assert!(stats.total_steps > StepCount::new(3)); // Should be more than just the setup
     }
 
     #[test]
@@ -428,7 +428,7 @@ mod tests {
         let stats = interpret_with_config(&instructions, config).unwrap();
 
         assert_eq!(stats.cells_modified, 3); // 3 non-zero cells
-        assert_eq!(stats.peak_memory_used, 3); // Highest cell accessed + 1
+        assert_eq!(stats.peak_memory_used, MemoryAddress::new(3)); // Highest cell accessed + 1
     }
 
     #[test]
@@ -437,11 +437,11 @@ mod tests {
         let source = format!("{}+", ">".repeat(50)); // Move to cell 50
         let instructions = parse(&source).unwrap();
 
-        let config = ExecutionConfig::default().with_unbounded_memory(10, 100);
+        let config = ExecutionConfigBuilder::new().with_unbounded_memory(10, 100).unwrap().build();
         let stats = interpret_with_config(&instructions, config).unwrap();
 
-        assert_eq!(stats.peak_memory_used, 51); // Cell 50 + 1
-        assert_eq!(stats.memory_allocated, 51); // Should have grown to 51 cells
+        assert_eq!(stats.peak_memory_used, MemoryAddress::new(51)); // Cell 50 + 1
+        assert_eq!(stats.memory_allocated, MemorySize::new(51)); // Should have grown to 51 cells
         assert_eq!(stats.cells_modified, 1); // Only 1 non-zero cell
     }
 
@@ -461,23 +461,35 @@ mod tests {
     #[test]
     fn test_eof_behavior_config() {
         // Test that EOF behavior can be configured
-        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::SetZero);
-        assert!(matches!(config.eof_behavior, EofBehavior::SetZero));
+        let config = ExecutionConfig::builder()
+            .with_memory_size(MEMORY_SIZE)
+            .with_eof_behavior(EofBehavior::SetZero)
+            .build();
+        assert!(matches!(config.eof_behavior(), EofBehavior::SetZero));
 
-        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::SetNegOne);
-        assert!(matches!(config.eof_behavior, EofBehavior::SetNegOne));
+        let config = ExecutionConfig::builder()
+            .with_memory_size(MEMORY_SIZE)
+            .with_eof_behavior(EofBehavior::SetNegOne)
+            .build();
+        assert!(matches!(config.eof_behavior(), EofBehavior::SetNegOne));
 
-        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::NoChange);
-        assert!(matches!(config.eof_behavior, EofBehavior::NoChange));
+        let config = ExecutionConfig::builder()
+            .with_memory_size(MEMORY_SIZE)
+            .with_eof_behavior(EofBehavior::NoChange)
+            .build();
+        assert!(matches!(config.eof_behavior(), EofBehavior::NoChange));
 
-        let config = ExecutionConfig::default().with_eof_behavior(EofBehavior::Error);
-        assert!(matches!(config.eof_behavior, EofBehavior::Error));
+        let config = ExecutionConfig::builder()
+            .with_memory_size(MEMORY_SIZE)
+            .with_eof_behavior(EofBehavior::Error)
+            .build();
+        assert!(matches!(config.eof_behavior(), EofBehavior::Error));
     }
 
     #[test]
     fn test_eof_behavior_default() {
         // Test that default EOF behavior is SetZero
         let config = ExecutionConfig::default();
-        assert!(matches!(config.eof_behavior, EofBehavior::SetZero));
+        assert!(matches!(config.eof_behavior(), EofBehavior::SetZero));
     }
 }

@@ -2,6 +2,10 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::location::SourceLocation;
+use crate::types::{InstructionIndex, MemorySize};
+
+/// Type alias for Results using BfError
+pub type Result<T> = std::result::Result<T, BfError>;
 
 /// Extract source context around a location for error messages
 pub(crate) fn extract_source_context(source: &str, location: SourceLocation) -> String {
@@ -26,6 +30,7 @@ pub(crate) fn extract_source_context(source: &str, location: SourceLocation) -> 
     context
 }
 
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum BfError {
     #[error("Unmatched '[' at {location}\n{context}")]
@@ -47,9 +52,9 @@ pub enum BfError {
         "Memory pointer out of bounds at instruction {instruction_index}\nAttempted to access cell {attempted}, valid range: 0-{max}"
     )]
     MemoryOutOfBounds {
-        instruction_index: usize,
+        instruction_index: InstructionIndex,
         attempted: isize,
-        max: usize,
+        max: MemorySize,
     },
 
     #[error("IO error: {message}")]
@@ -63,9 +68,13 @@ pub enum BfError {
 
     #[error("Step limit exceeded: program exceeded {limit} instruction limit")]
     StepLimitExceeded { limit: u64 },
+
+    #[error("Configuration error: {message}")]
+    ConfigurationError { message: String },
 }
 
 /// Warnings for potentially problematic but valid BrainFuck code
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum BfWarning {
     EmptyLoop {

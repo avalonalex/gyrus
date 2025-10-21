@@ -3,8 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use ferrous_cortex::{
-    BfError, EofBehavior, ExecutionConfig, MemoryModel, interpret_with_config, minify, parse,
-    validate,
+    BfError, EofBehavior, ExecutionConfigBuilder, MemoryModel, interpret_with_config, minify,
+    parse, validate,
 };
 
 #[derive(Parser)]
@@ -144,13 +144,19 @@ fn run() -> Result<(), BfError> {
         }
     }
 
-    // Build execution config
-    let memory_model = match cli.memory_model.to_lowercase().as_str() {
-        "fixed" => MemoryModel::Fixed(cli.memory_size),
-        "wrapping" => MemoryModel::Wrapping(cli.memory_size),
-        "unbounded" => MemoryModel::Unbounded {
-            initial_size: cli.unbounded_initial,
-            max_size: cli.unbounded_max,
+    // Build execution config using enhanced builder
+    let builder = ExecutionConfigBuilder::new();
+
+    // Set memory model (required)
+    let builder = match cli.memory_model.to_lowercase().as_str() {
+        "fixed" => builder.with_memory_size(cli.memory_size),
+        "wrapping" => builder.with_wrapping_memory(cli.memory_size),
+        "unbounded" => match builder.with_unbounded_memory(cli.unbounded_initial, cli.unbounded_max) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Configuration error: {}", e);
+                std::process::exit(1);
+            }
         },
         other => {
             eprintln!(
@@ -161,12 +167,12 @@ fn run() -> Result<(), BfError> {
         }
     };
 
-    // Parse EOF behavior
-    let eof_behavior = match cli.eof_behavior.to_lowercase().as_str() {
-        "zero" => EofBehavior::SetZero,
-        "neg-one" | "negone" | "-1" | "255" => EofBehavior::SetNegOne,
-        "no-change" | "nochange" | "unchanged" => EofBehavior::NoChange,
-        "error" => EofBehavior::Error,
+    // Set EOF behavior
+    let builder = match cli.eof_behavior.to_lowercase().as_str() {
+        "zero" => builder.with_eof_behavior(EofBehavior::SetZero),
+        "neg-one" | "negone" | "-1" | "255" => builder.with_eof_behavior(EofBehavior::SetNegOne),
+        "no-change" | "nochange" | "unchanged" => builder.with_eof_behavior(EofBehavior::NoChange),
+        "error" => builder.with_eof_behavior(EofBehavior::Error),
         other => {
             eprintln!(
                 "Error: Invalid EOF behavior '{}'. Valid options: zero, neg-one, no-change, error",
@@ -176,21 +182,25 @@ fn run() -> Result<(), BfError> {
         }
     };
 
-    let mut config = ExecutionConfig::default()
-        .with_memory_model(memory_model)
-        .with_eof_behavior(eof_behavior);
+    // Set optional parameters
+    let builder = if cli.max_steps > 0 {
+        builder.with_max_steps(cli.max_steps)
+    } else {
+        builder
+    };
 
-    if cli.max_steps > 0 {
-        config = config.with_max_steps(cli.max_steps);
-    }
+    let builder = if cli.timeout > 0 {
+        builder.with_timeout_ms(cli.timeout)
+    } else {
+        builder
+    };
 
-    if cli.timeout > 0 {
-        config = config.with_timeout_ms(cli.timeout);
-    }
+    // Build the final config
+    let config = builder.build();
 
     if cli.verbose {
         eprintln!("Configuration:");
-        match &config.memory_model {
+        match config.memory_model() {
             MemoryModel::Fixed(size) => {
                 eprintln!("  Memory model: Fixed({} bytes)", size);
             }
@@ -206,17 +216,21 @@ fn run() -> Result<(), BfError> {
                     initial_size, max_size
                 );
             }
+            _ => {
+                // Future memory models - generic display
+                eprintln!("  Memory model: Custom");
+            }
         }
         eprintln!(
             "  Max steps: {}",
             config
-                .max_steps
+                .max_steps()
                 .map_or("unlimited".to_string(), |s| s.to_string())
         );
         eprintln!(
             "  Timeout: {}ms",
             config
-                .timeout_ms
+                .timeout_ms()
                 .map_or("unlimited".to_string(), |t| t.to_string())
         );
         eprintln!();
