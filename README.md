@@ -555,24 +555,53 @@ cargo run -- path/to/your/program.bf
 
 ```
 FerrousCortex/
-├── src/
-│   ├── main.rs          # CLI interface and entry point
-│   └── bf.rs            # Parser and interpreter core
-├── examples/            # Example BrainFuck programs
+├── crates/
+│   ├── ferrous-cortex/      # Core library crate
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs           # Module interface (21 lines)
+│   │       ├── parser.rs        # Source → AST parsing (+ 22 tests)
+│   │       ├── interpreter.rs   # AST → Execution (+ 20 tests)
+│   │       ├── validator.rs     # AST validation (+ 5 tests)
+│   │       ├── minify.rs        # AST → Source (+ 5 tests)
+│   │       ├── error.rs         # Error types and formatting
+│   │       ├── config.rs        # Configuration types
+│   │       ├── instruction.rs   # AST node definition
+│   │       ├── location.rs      # Source position tracking
+│   │       └── stats.rs         # Execution statistics
+│   └── ferrous-cortex-cli/  # CLI binary crate
+│       ├── Cargo.toml
+│       └── src/
+│           └── main.rs      # CLI interface and entry point
+├── examples/                # Example BrainFuck programs
 │   ├── hello_world.bf
 │   ├── simple.bf
 │   ├── line_comments.bf
-│   ├── errors/          # Error handling demonstrations
-│   │   ├── README.md    # Error examples documentation
+│   ├── errors/              # Error handling demonstrations
+│   │   ├── README.md        # Error examples documentation
 │   │   ├── unmatched_bracket.bf
 │   │   ├── memory_overflow.bf
 │   │   ├── infinite_loop.bf
 │   │   └── validation_warnings.bf
 │   └── ...
-├── PRD/                 # Product requirement documents
-├── Cargo.toml
+├── PRD/                     # Product requirement documents
+├── ARCHITECTURE.md          # Architecture and design decisions
+├── Cargo.toml               # Workspace root
 └── README.md
 ```
+
+### Module Organization
+
+The core library follows idiomatic Rust structure with clear separation of concerns:
+
+- **lib.rs** (21 lines): Pure module interface with re-exports
+- **parser.rs** (431 lines): Converts BrainFuck source code to AST
+- **interpreter.rs** (484 lines): Executes AST with configurable runtime
+- **validator.rs** (145 lines): Analyzes AST for warnings and best practices
+- **minify.rs** (75 lines): Converts AST back to minimal source code
+- **Supporting modules**: error, config, instruction, location, stats
+
+All modules include comprehensive tests (52 total) co-located with implementation.
 
 ## Roadmap
 

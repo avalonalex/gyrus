@@ -6,11 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FerrousCortex is an industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust. The project uses Rust edition 2024.
 
+**Project Structure**: Cargo workspace with multiple crates
+- **ferrous-cortex** (`crates/ferrous-cortex/`): Core library crate
+- **ferrous-cortex-cli** (`crates/ferrous-cortex-cli/`): CLI binary crate
+- Future: debugger, REPL, JIT compiler as separate crates
+
 ## Core Architecture
 
-The codebase follows a pipeline architecture with comprehensive error handling:
+### Module Structure (Idiomatic Rust)
 
-1. **Parse** (`src/bf.rs`): BrainFuck source → AST (Abstract Syntax Tree)
+The library uses a clean module structure with `lib.rs` as a pure interface (21 lines):
+
+**Core Modules:**
+
+1. **parser** (`crates/ferrous-cortex/src/parser.rs` - 431 lines + 22 tests)
+   - BrainFuck source → AST (Abstract Syntax Tree)
    - Recursive descent parser that converts source text into `Vec<Instruction>`
    - **Location tracking**: Maintains line, column, and offset for every position
    - **Bracket validation**: Pre-parse phase validates ALL bracket matching errors at once
@@ -20,8 +30,10 @@ The codebase follows a pipeline architecture with comprehensive error handling:
      - `*` starts line comments - everything after `*` on that line is ignored
    - Rich error messages with source context (shows 2 lines before/after with caret)
    - **Multiple error reporting**: Shows all bracket errors in a single pass
+   - Public API: `parse(source: &str) -> Result<Vec<Instruction>, BfError>`
 
-2. **Interpret** (`src/bf.rs`): AST → Execution with safety limits and statistics
+2. **interpreter** (`crates/ferrous-cortex/src/interpreter.rs` - 484 lines + 20 tests)
+   - AST → Execution with safety limits and statistics
    - Tree-walking interpreter with configurable memory
    - **Multiple memory models**:
      - Fixed: Traditional fixed-size array (default 30,000 bytes)
@@ -35,14 +47,32 @@ The codebase follows a pipeline architecture with comprehensive error handling:
      - Modified cell count
    - Recursive execution for nested loops via `execute_block()`
    - Direct I/O to stdin/stdout
-   - Returns `ExecutionStats` instead of `()`
+   - Public API: `interpret()`, `interpret_with_config()`
 
-3. **CLI** (`src/main.rs`): Entry point with extensive configuration
+3. **validator** (`crates/ferrous-cortex/src/validator.rs` - 145 lines + 5 tests)
+   - AST → Warnings for suspicious patterns
+   - Detects: empty loops, infinite loops, extreme nesting, inefficient patterns
+   - Public API: `validate(instructions: &[Instruction]) -> Vec<BfWarning>`
+
+4. **minify** (`crates/ferrous-cortex/src/minify.rs` - 75 lines + 5 tests)
+   - AST → Minimal BrainFuck source (removes comments)
+   - Public API: `minify(instructions: &[Instruction]) -> String`
+
+**Supporting Modules:**
+- **error** (`error.rs`): `BfError`, `BfWarning` types with rich formatting
+- **config** (`config.rs`): `ExecutionConfig`, `MemoryModel`, `EofBehavior`
+- **instruction** (`instruction.rs`): AST node definition `Instruction` enum
+- **location** (`location.rs`): Source position tracking `SourceLocation`
+- **stats** (`stats.rs`): Execution statistics `ExecutionStats`
+- **lib** (`lib.rs` - 21 lines): Pure module interface with re-exports
+
+**CLI** (`crates/ferrous-cortex-cli/src/main.rs`)
    - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
-   - Flags: `--verbose`, `--stats`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`
+   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
-   - Stats mode: Displays execution statistics after program finishes
+   - Validate mode: Parse → validate → show warnings (no execution)
+   - Strict mode: Parse → validate → execute if clean (exits on warnings)
 
 ### Key Design Decisions
 
@@ -59,14 +89,61 @@ The codebase follows a pipeline architecture with comprehensive error handling:
 - **Safety**: Multiple layers of protection (step limits, timeouts, bounds checks)
 - **Configuration**: Builder pattern for `ExecutionConfig` (fluent API)
 
+## Workspace Structure
+
+This is a Cargo workspace with the following crates:
+
+- **`ferrous-cortex`** (library): Core BrainFuck interpreter, parser, and runtime
+  - Location: `crates/ferrous-cortex/`
+  - **Structure**: 10 modules, 1,502 lines total
+  - **Tests**: 52 tests co-located with implementation
+    - Parser: 22 tests
+    - Interpreter: 20 tests
+    - Validator: 5 tests
+    - Minify: 5 tests
+  - **Module breakdown**:
+    ```
+    src/
+    ├── lib.rs           (21 lines)   - Module interface
+    ├── parser.rs        (431 lines)  - Source → AST
+    ├── interpreter.rs   (484 lines)  - AST → Execution
+    ├── validator.rs     (145 lines)  - AST validation
+    ├── minify.rs        (75 lines)   - AST → Source
+    ├── error.rs         (127 lines)  - Error types
+    ├── config.rs        (137 lines)  - Configuration
+    ├── instruction.rs   (11 lines)   - AST nodes
+    ├── location.rs      (35 lines)   - Source tracking
+    └── stats.rs         (36 lines)   - Statistics
+    ```
+  - Can be used as a library by other Rust projects
+  - Ready for publication to crates.io
+
+- **`ferrous-cortex-cli`** (binary): Command-line interface
+  - Location: `crates/ferrous-cortex-cli/`
+  - Thin wrapper around the library
+  - Handles argument parsing and output formatting
+  - Binary name: `ferrous-cortex`
+
+**Benefits of workspace structure**:
+- ✅ Clear separation between library and CLI
+- ✅ Easy to add new binaries (debugger, REPL, etc.)
+- ✅ Library can be published to crates.io independently
+- ✅ Each crate can have its own version
+- ✅ Faster incremental compilation
+- ✅ Clean module boundaries prevent coupling
+
 ## Common Commands
 
 ### Build and Run
 ```bash
-cargo build                           # Development build
+cargo build                           # Build entire workspace
 cargo build --release                 # Optimized build
-cargo run -- <file.bf>                # Run a BF program
+cargo run -- <file.bf>                # Run CLI (auto-detects binary)
 cargo run -- examples/hello_world.bf  # Run example
+
+# Build specific crate
+cargo build -p ferrous-cortex         # Build library only
+cargo build -p ferrous-cortex-cli     # Build CLI only
 ```
 
 ### Testing
@@ -208,7 +285,18 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
   - I/O tracking
   - `--stats` CLI flag
 
+- ✅ Advanced I/O error handling (Phase 3.3)
+  - EOF behavior configuration (SetZero, SetNegOne, NoChange, Error)
+  - `--eof-behavior` CLI flag
+  - Graceful EOF handling in Input instruction
+
 **Remaining (from PRD)**:
-- ⏳ Advanced I/O error handling (Phase 3.3)
+- ⏳ Debug symbols and runtime diagnostics (Phase 4.2)
 - ⏳ Visual TUI debugger
+- ⏳ Performance optimizations (instruction fusion, I/O buffering)
 - ⏳ JIT/AOT compiler backend
+
+**Project Structure Improvements**:
+- ✅ Workspace migration (v0.2.0)
+  - Separated core library from CLI binary
+  - Foundation for future crates (debugger, REPL, JIT)

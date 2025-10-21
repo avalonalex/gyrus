@@ -100,10 +100,17 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "ferrous-cortex"
-version = "0.1.0"
+version = "0.2.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "ferrous-cortex-cli"
+version = "0.2.0"
 dependencies = [
  "clap",
- "thiserror",
+ "ferrous-cortex",
 ]
 
 [[package]]
