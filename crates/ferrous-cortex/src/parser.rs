@@ -93,7 +93,7 @@ pub fn parse(source: impl AsRef<str>) -> Result<Vec<Instruction>> {
     }
 
     let mut location = SourceLocation::start();
-    parse_block(source, &mut location, None).map(|instructions| instructions)
+    parse_block(source, &mut location, None)
 }
 
 fn parse_block(

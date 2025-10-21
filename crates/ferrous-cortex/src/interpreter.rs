@@ -158,8 +158,8 @@ fn execute_block(
     for instruction in instructions {
         // Check step limit
         step_count.increment();
-        if let Some(max_steps) = config.max_steps() {
-            if step_count.get() > max_steps {
+        if let Some(max_steps) = config.max_steps()
+            && step_count.get() > max_steps {
                 return Err(BfError::StepLimitExceeded {
                     limit: max_steps,
                     actual_steps: *step_count,
@@ -173,11 +173,10 @@ fn execute_block(
                     ),
                 });
             }
-        }
 
         // Check timeout
-        if let Some(start) = start_time {
-            if let Some(timeout_ms) = config.timeout_ms() {
+        if let Some(start) = start_time
+            && let Some(timeout_ms) = config.timeout_ms() {
                 let elapsed = start.elapsed().as_millis() as u64;
                 if elapsed > timeout_ms {
                     return Err(BfError::ExecutionTimeout {
@@ -193,7 +192,6 @@ fn execute_block(
                     });
                 }
             }
-        }
 
         match instruction {
             Instruction::IncrementPointer => {
@@ -294,7 +292,7 @@ mod tests {
     #[test]
     fn test_memory_underflow() {
         let source = "<"; // Try to go below 0
-        let instructions = parse(&source).unwrap();
+        let instructions = parse(source).unwrap();
         let config = ExecutionConfig::default();
         let result = interpret_with_config(&instructions, config);
         assert!(matches!(
@@ -306,7 +304,7 @@ mod tests {
     #[test]
     fn test_step_limit() {
         let source = "+[+]"; // Infinite loop
-        let instructions = parse(&source).unwrap();
+        let instructions = parse(source).unwrap();
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(MEMORY_SIZE)
             .with_max_steps(100)
@@ -374,7 +372,7 @@ mod tests {
     fn test_memory_model_wrapping_backward() {
         // Wrapping memory model should wrap from beginning to end
         let source = "<+."; // Move left from 0, increment, output
-        let instructions = parse(&source).unwrap();
+        let instructions = parse(source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
             .with_wrapping_memory(10)
@@ -420,7 +418,7 @@ mod tests {
     fn test_memory_model_fixed_left_boundary() {
         // Fixed model should error when going below 0
         let source = "<"; // Move left from 0
-        let instructions = parse(&source).unwrap();
+        let instructions = parse(source).unwrap();
 
         let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
         let result = interpret_with_config(&instructions, config);

@@ -8,8 +8,10 @@ pub const MEMORY_SIZE: usize = 30000;
 /// Behavior when input (,) encounters EOF
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum EofBehavior {
     /// Set cell to 0 on EOF (most common, used by many interpreters)
+    #[default]
     SetZero,
 
     /// Set cell to 255 (-1 as unsigned byte) on EOF
@@ -22,11 +24,6 @@ pub enum EofBehavior {
     Error,
 }
 
-impl Default for EofBehavior {
-    fn default() -> Self {
-        EofBehavior::SetZero // Most common behavior
-    }
-}
 
 /// Memory model for interpreter execution
 #[non_exhaustive]
