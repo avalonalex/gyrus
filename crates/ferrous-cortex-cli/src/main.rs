@@ -66,7 +66,7 @@ struct Cli {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("Error: {}", e);
+        eprintln!("{}", e.format_detailed());
         std::process::exit(1);
     }
 }
@@ -75,8 +75,15 @@ fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
     // Read the source file
-    let source = fs::read_to_string(&cli.file)
-        .map_err(|e| BfError::FileError(format!("Failed to read file: {}", e)))?;
+    let source = fs::read_to_string(&cli.file).map_err(|source| BfError::FileError {
+        path: cli.file.clone(),
+        source,
+        hint: format!(
+            "Make sure the file exists and you have permission to read it. \
+             Current path: {}",
+            cli.file.display()
+        ),
+    })?;
 
     // Parse the program
     let instructions = match parse(&source) {
@@ -94,8 +101,14 @@ fn run() -> Result<(), BfError> {
 
         if let Some(output_path) = &cli.output {
             // Write to file
-            fs::write(output_path, &minified)
-                .map_err(|e| BfError::FileError(format!("Failed to write output: {}", e)))?;
+            fs::write(output_path, &minified).map_err(|source| BfError::FileError {
+                path: output_path.clone(),
+                source,
+                hint: format!(
+                    "Make sure you have write permission for: {}",
+                    output_path.display()
+                ),
+            })?;
             if cli.verbose {
                 eprintln!(
                     "Minified {} bytes to {} bytes (saved to {})",
@@ -151,13 +164,15 @@ fn run() -> Result<(), BfError> {
     let builder = match cli.memory_model.to_lowercase().as_str() {
         "fixed" => builder.with_memory_size(cli.memory_size),
         "wrapping" => builder.with_wrapping_memory(cli.memory_size),
-        "unbounded" => match builder.with_unbounded_memory(cli.unbounded_initial, cli.unbounded_max) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("Configuration error: {}", e);
-                std::process::exit(1);
+        "unbounded" => {
+            match builder.with_unbounded_memory(cli.unbounded_initial, cli.unbounded_max) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Configuration error: {}", e);
+                    std::process::exit(1);
+                }
             }
-        },
+        }
         other => {
             eprintln!(
                 "Error: Invalid memory model '{}'. Valid options: fixed, wrapping, unbounded",

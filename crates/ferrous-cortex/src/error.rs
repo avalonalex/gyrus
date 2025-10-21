@@ -1,11 +1,64 @@
 use std::fmt;
+use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::location::SourceLocation;
-use crate::types::{InstructionIndex, MemorySize};
+use crate::types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};
 
 /// Type alias for Results using BfError
 pub type Result<T> = std::result::Result<T, BfError>;
+
+/// Memory state snapshot for error reporting
+#[derive(Debug, Clone)]
+pub struct MemoryDump {
+    /// Current pointer position
+    pub pointer: MemoryAddress,
+
+    /// Nearby cells (address, value) around the pointer
+    pub nearby_cells: Vec<(usize, u8)>,
+
+    /// Total number of non-zero cells
+    pub non_zero_count: usize,
+}
+
+impl MemoryDump {
+    /// Create a memory dump showing cells around the pointer
+    pub fn from_memory(memory: &[u8], pointer: MemoryAddress) -> Self {
+        let ptr = pointer.get();
+        let range_start = ptr.saturating_sub(3);
+        let range_end = (ptr + 4).min(memory.len());
+
+        let nearby_cells: Vec<(usize, u8)> = (range_start..range_end)
+            .map(|addr| (addr, memory[addr]))
+            .collect();
+
+        let non_zero_count = memory.iter().filter(|&&b| b != 0).count();
+
+        Self {
+            pointer,
+            nearby_cells,
+            non_zero_count,
+        }
+    }
+}
+
+impl fmt::Display for MemoryDump {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Memory state:")?;
+        writeln!(f, "  Pointer: {}", self.pointer)?;
+        writeln!(f, "  Non-zero cells: {}", self.non_zero_count)?;
+        writeln!(f, "  Nearby cells:")?;
+        for (addr, value) in &self.nearby_cells {
+            let marker = if *addr == self.pointer.get() {
+                "→"
+            } else {
+                " "
+            };
+            writeln!(f, "    {} [{:5}] = {}", marker, addr, value)?;
+        }
+        Ok(())
+    }
+}
 
 /// Extract source context around a location for error messages
 pub(crate) fn extract_source_context(source: &str, location: SourceLocation) -> String {
@@ -48,29 +101,90 @@ pub enum BfError {
     #[error("Found {count} bracket matching errors (see details above)")]
     MultipleBracketErrors { count: usize },
 
-    #[error(
-        "Memory pointer out of bounds at instruction {instruction_index}\nAttempted to access cell {attempted}, valid range: 0-{max}"
-    )]
+    #[error("Memory pointer out of bounds at instruction {instruction_index}")]
     MemoryOutOfBounds {
         instruction_index: InstructionIndex,
         attempted: isize,
         max: MemorySize,
+        memory_dump: Option<MemoryDump>,
+        hint: String,
     },
 
-    #[error("IO error: {message}")]
-    IoError { message: String },
+    #[error("IO error during {operation}")]
+    IoError {
+        operation: String,
+        instruction_index: Option<InstructionIndex>,
+        #[source]
+        source: std::io::Error,
+    },
 
-    #[error("File read error: {0}")]
-    FileError(String),
+    #[error("Failed to read source file '{}'", path.display())]
+    FileError {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+        hint: String,
+    },
 
     #[error("Execution timeout: program exceeded {limit_ms}ms execution limit")]
-    ExecutionTimeout { limit_ms: u64 },
+    ExecutionTimeout {
+        limit_ms: u64,
+        actual_steps: Option<StepCount>,
+        hint: String,
+    },
 
     #[error("Step limit exceeded: program exceeded {limit} instruction limit")]
-    StepLimitExceeded { limit: u64 },
+    StepLimitExceeded {
+        limit: u64,
+        actual_steps: StepCount,
+        hint: String,
+    },
 
     #[error("Configuration error: {message}")]
     ConfigurationError { message: String },
+}
+
+impl BfError {
+    /// Get a hint message for this error, if available
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            BfError::MemoryOutOfBounds { hint, .. } => Some(hint),
+            BfError::FileError { hint, .. } => Some(hint),
+            BfError::ExecutionTimeout { hint, .. } => Some(hint),
+            BfError::StepLimitExceeded { hint, .. } => Some(hint),
+            _ => None,
+        }
+    }
+
+    /// Get memory dump if available
+    pub fn memory_dump(&self) -> Option<&MemoryDump> {
+        match self {
+            BfError::MemoryOutOfBounds { memory_dump, .. } => memory_dump.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Format error with full context
+    pub fn format_detailed(&self) -> String {
+        let mut output = format!("Error: {}", self);
+
+        // Add hint if available
+        if let Some(hint) = self.hint() {
+            output.push_str(&format!("\n\nHint: {}", hint));
+        }
+
+        // Add memory dump if available
+        if let Some(dump) = self.memory_dump() {
+            output.push_str(&format!("\n\n{}", dump));
+        }
+
+        // Add source chain if available
+        if let Some(source) = std::error::Error::source(self) {
+            output.push_str(&format!("\n\nCaused by:\n    {}", source));
+        }
+
+        output
+    }
 }
 
 /// Warnings for potentially problematic but valid BrainFuck code
