@@ -16,6 +16,7 @@ impl fmt::Display for SourceLocation {
 
 impl SourceLocation {
     /// Create a new SourceLocation (primarily for testing or external use)
+    #[inline]
     #[allow(dead_code)]
     pub fn new(line: usize, column: usize, offset: usize) -> Self {
         Self {
@@ -25,6 +26,7 @@ impl SourceLocation {
         }
     }
 
+    #[inline]
     pub fn start() -> Self {
         Self {
             line: 1,

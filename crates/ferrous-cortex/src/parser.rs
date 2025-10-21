@@ -1,4 +1,4 @@
-use crate::error::{BfError, extract_source_context};
+use crate::error::{BfError, Result, extract_source_context};
 use crate::instruction::Instruction;
 use crate::location::SourceLocation;
 
@@ -69,7 +69,11 @@ fn validate_brackets(source: &str) -> Vec<BfError> {
 }
 
 /// Parse BrainFuck source code into a list of instructions
-pub fn parse(source: &str) -> Result<Vec<Instruction>, BfError> {
+///
+/// Accepts any string-like type (`&str`, `String`, `Cow<str>`, etc.)
+pub fn parse(source: impl AsRef<str>) -> Result<Vec<Instruction>> {
+    let source = source.as_ref();
+
     // First validate brackets and report all errors at once
     let bracket_errors = validate_brackets(source);
     if !bracket_errors.is_empty() {
@@ -96,7 +100,7 @@ fn parse_block(
     source: &str,
     location: &mut SourceLocation,
     loop_start: Option<SourceLocation>,
-) -> Result<Vec<Instruction>, BfError> {
+) -> Result<Vec<Instruction>> {
     let mut instructions = Vec::new();
     let chars: Vec<char> = source.chars().collect();
 
@@ -167,6 +171,7 @@ fn parse_block(
     Ok(instructions)
 }
 
+#[inline]
 fn advance_location(location: &mut SourceLocation, ch: char) {
     if ch == '\n' {
         location.line += 1;
