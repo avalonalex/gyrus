@@ -7,8 +7,7 @@ pub const MEMORY_SIZE: usize = 30000;
 
 /// Behavior when input (,) encounters EOF
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EofBehavior {
     /// Set cell to 0 on EOF (most common, used by many interpreters)
     #[default]
@@ -23,7 +22,6 @@ pub enum EofBehavior {
     /// Return error on EOF (strictest, prevents silent bugs)
     Error,
 }
-
 
 /// Memory model for interpreter execution
 #[non_exhaustive]

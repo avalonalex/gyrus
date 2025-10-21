@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod instruction;
 mod interpreter;
+pub mod io;
 mod location;
 mod minify;
 mod parser;
@@ -17,7 +18,7 @@ pub use config::{
 };
 pub use error::{BfError, BfWarning, MemoryDump, Result};
 pub use instruction::Instruction;
-pub use interpreter::{interpret, interpret_with_config};
+pub use interpreter::{interpret, interpret_with_config, interpret_with_io};
 pub use location::SourceLocation;
 pub use minify::minify;
 pub use parser::parse;

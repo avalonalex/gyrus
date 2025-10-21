@@ -1,9 +1,10 @@
 use crate::config::{EofBehavior, ExecutionConfig, MemoryModel};
 use crate::error::{BfError, MemoryDump, Result};
 use crate::instruction::Instruction;
+use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
-use std::io::{self, Read, Write};
+use std::io;
 
 /// Interpret and execute BrainFuck instructions with default configuration
 ///
@@ -15,11 +16,28 @@ pub fn interpret(instructions: &[Instruction]) -> Result<()> {
     interpret_with_config(instructions, ExecutionConfig::default()).map(|_| ())
 }
 
-/// Interpret and execute BrainFuck instructions with custom configuration
-/// Returns execution statistics
-pub fn interpret_with_config(
+/// Interpret and execute BrainFuck instructions with custom I/O.
+///
+/// This is the primary interpreter function that allows custom input and output.
+///
+/// # Examples
+///
+/// ```rust
+/// use ferrous_cortex::{parse, interpret_with_io, io::StringIo, ExecutionConfig};
+///
+/// // Echo program: reads input and outputs it
+/// let instructions = parse(",[.,]")?;
+/// let mut input = StringIo::new("Hi");
+/// let mut output = StringIo::empty();
+/// let stats = interpret_with_io(&instructions, ExecutionConfig::default(), &mut input, &mut output)?;
+/// assert_eq!(output.output_string(), "Hi");
+/// # Ok::<(), ferrous_cortex::BfError>(())
+/// ```
+pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
     config: ExecutionConfig,
+    input: &mut I,
+    output: &mut O,
 ) -> Result<ExecutionStats> {
     use std::time::Instant;
 
@@ -37,6 +55,8 @@ pub fn interpret_with_config(
         &config,
         &start_time,
         &mut stats,
+        input,
+        output,
     )?;
 
     // Finalize stats
@@ -45,6 +65,31 @@ pub fn interpret_with_config(
     stats.memory_allocated = MemorySize::new(memory.len());
 
     Ok(stats)
+}
+
+/// Interpret and execute BrainFuck instructions with custom configuration.
+///
+/// This is a convenience function that uses stdin/stdout for I/O.
+/// For custom I/O, use `interpret_with_io()`.
+/// Returns execution statistics.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use ferrous_cortex::{parse, interpret_with_config, ExecutionConfig};
+///
+/// let instructions = parse("++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.")?;
+/// let stats = interpret_with_config(&instructions, ExecutionConfig::default())?;
+/// println!("Executed {} steps", stats.total_steps);
+/// # Ok::<(), ferrous_cortex::BfError>(())
+/// ```
+pub fn interpret_with_config(
+    instructions: &[Instruction],
+    config: ExecutionConfig,
+) -> Result<ExecutionStats> {
+    let mut input = StdInput;
+    let mut output = StdOutput;
+    interpret_with_io(instructions, config, &mut input, &mut output)
 }
 
 /// Handle pointer increment based on memory model
@@ -146,7 +191,8 @@ fn decrement_pointer(
     Ok(())
 }
 
-fn execute_block(
+#[allow(clippy::too_many_arguments)]
+fn execute_block<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
     memory: &mut Vec<u8>,
     pointer: &mut MemoryAddress,
@@ -154,44 +200,48 @@ fn execute_block(
     config: &ExecutionConfig,
     start_time: &Option<std::time::Instant>,
     stats: &mut ExecutionStats,
+    input: &mut I,
+    output: &mut O,
 ) -> Result<()> {
     for instruction in instructions {
         // Check step limit
         step_count.increment();
         if let Some(max_steps) = config.max_steps()
-            && step_count.get() > max_steps {
-                return Err(BfError::StepLimitExceeded {
-                    limit: max_steps,
-                    actual_steps: *step_count,
-                    hint: format!(
-                        "Program executed {} steps, exceeding the limit of {}. \
+            && step_count.get() > max_steps
+        {
+            return Err(BfError::StepLimitExceeded {
+                limit: max_steps,
+                actual_steps: *step_count,
+                hint: format!(
+                    "Program executed {} steps, exceeding the limit of {}. \
                          This may indicate an infinite loop. Try increasing the limit with --max-steps {} \
                          or add breakpoints to debug.",
-                        step_count.get(),
-                        max_steps,
-                        max_steps * 2
-                    ),
-                });
-            }
+                    step_count.get(),
+                    max_steps,
+                    max_steps * 2
+                ),
+            });
+        }
 
         // Check timeout
         if let Some(start) = start_time
-            && let Some(timeout_ms) = config.timeout_ms() {
-                let elapsed = start.elapsed().as_millis() as u64;
-                if elapsed > timeout_ms {
-                    return Err(BfError::ExecutionTimeout {
-                        limit_ms: timeout_ms,
-                        actual_steps: Some(*step_count),
-                        hint: format!(
-                            "Program exceeded {}ms timeout after executing {} steps. \
+            && let Some(timeout_ms) = config.timeout_ms()
+        {
+            let elapsed = start.elapsed().as_millis() as u64;
+            if elapsed > timeout_ms {
+                return Err(BfError::ExecutionTimeout {
+                    limit_ms: timeout_ms,
+                    actual_steps: Some(*step_count),
+                    hint: format!(
+                        "Program exceeded {}ms timeout after executing {} steps. \
                              Try increasing timeout with --timeout {} or optimize your BrainFuck code.",
-                            timeout_ms,
-                            step_count.get(),
-                            timeout_ms * 2
-                        ),
-                    });
-                }
+                        timeout_ms,
+                        step_count.get(),
+                        timeout_ms * 2
+                    ),
+                });
             }
+        }
 
         match instruction {
             Instruction::IncrementPointer => {
@@ -211,14 +261,14 @@ fn execute_block(
                 memory[pointer.get()] = memory[pointer.get()].wrapping_sub(1);
             }
             Instruction::Output => {
-                io::stdout()
-                    .write_all(&[memory[pointer.get()]])
+                output
+                    .write_byte(memory[pointer.get()])
                     .map_err(|source| BfError::IoError {
                         operation: "writing output".to_string(),
                         instruction_index: Some((*step_count).into()),
                         source,
                     })?;
-                io::stdout().flush().map_err(|source| BfError::IoError {
+                output.flush().map_err(|source| BfError::IoError {
                     operation: "flushing output".to_string(),
                     instruction_index: Some((*step_count).into()),
                     source,
@@ -226,13 +276,12 @@ fn execute_block(
                 stats.bytes_written += 1;
             }
             Instruction::Input => {
-                let mut buf = [0u8; 1];
-                match io::stdin().read_exact(&mut buf) {
-                    Ok(_) => {
-                        memory[pointer.get()] = buf[0];
+                match input.read_byte() {
+                    Ok(Some(byte)) => {
+                        memory[pointer.get()] = byte;
                         stats.bytes_read += 1;
                     }
-                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    Ok(None) => {
                         // Handle EOF based on configuration
                         match config.eof_behavior() {
                             EofBehavior::SetZero => {
@@ -248,7 +297,10 @@ fn execute_block(
                                 return Err(BfError::IoError {
                                     operation: "reading input (EOF reached)".to_string(),
                                     instruction_index: Some((*step_count).into()),
-                                    source: e,
+                                    source: io::Error::new(
+                                        io::ErrorKind::UnexpectedEof,
+                                        "EOF reached",
+                                    ),
                                 });
                             }
                         }
@@ -265,7 +317,9 @@ fn execute_block(
             Instruction::Loop(body) => {
                 while memory[pointer.get()] != 0 {
                     stats.loop_iterations += 1;
-                    execute_block(body, memory, pointer, step_count, config, start_time, stats)?;
+                    execute_block(
+                        body, memory, pointer, step_count, config, start_time, stats, input, output,
+                    )?;
                 }
             }
         }
@@ -558,5 +612,64 @@ mod tests {
         // Test that default EOF behavior is SetZero
         let config = ExecutionConfig::default();
         assert!(matches!(config.eof_behavior(), EofBehavior::SetZero));
+    }
+
+    #[test]
+    fn test_string_io_echo() {
+        // Test that we can use StringIo to capture output
+        use crate::io::StringIo;
+
+        let source = ",[.,]"; // Echo program: read and output until EOF
+        let instructions = parse(source).unwrap();
+        let config = ExecutionConfig::default();
+
+        let mut input = StringIo::new("Hello");
+        let mut output = StringIo::empty();
+        let stats = interpret_with_io(&instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(output.output_string(), "Hello");
+        assert_eq!(stats.bytes_read, 5);
+        assert_eq!(stats.bytes_written, 5);
+    }
+
+    #[test]
+    fn test_string_io_hello_world() {
+        // Test classic Hello World program with string output
+        use crate::io::StringIo;
+
+        let source = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
+        let instructions = parse(source).unwrap();
+        let config = ExecutionConfig::default();
+
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        let stats = interpret_with_io(&instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(output.output_string(), "Hello World!\n");
+        assert_eq!(stats.bytes_written, 13);
+    }
+
+    #[test]
+    fn test_string_io_add_numbers() {
+        // Test program that adds two single-digit numbers
+        use crate::io::StringIo;
+
+        // Program: read two numbers, add them, output result
+        // ,>     Read first number into cell 0, move to cell 1
+        // ,      Read second number into cell 1
+        // [<+>-] Add cell 1 to cell 0 (move all from cell 1 to cell 0)
+        // <.     Move back to cell 0 and output result
+        let source = ",>,[-<+>]<.";
+        let instructions = parse(source).unwrap();
+        let config = ExecutionConfig::default();
+
+        // ASCII '5' = 53, ASCII '3' = 51, sum = 104 = ASCII 'h'
+        let mut input = StringIo::new("\x05\x03");
+        let mut output = StringIo::empty();
+        let stats = interpret_with_io(&instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(output.output_bytes(), &[8]); // 5 + 3 = 8
+        assert_eq!(stats.bytes_read, 2);
+        assert_eq!(stats.bytes_written, 1);
     }
 }
