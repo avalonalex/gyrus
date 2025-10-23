@@ -13,8 +13,8 @@ mod validator;
 
 // Re-exports for public API
 pub use config::{
-    EofBehavior, ExecutionConfig, ExecutionConfigBuilder, MEMORY_SIZE, MemoryModel, ReadyToBuild,
-    Unbuilt,
+    EofBehavior, ExecutionConfig, ExecutionConfigBuilder, MEMORY_SIZE, MemoryBehavior, MemoryModel,
+    ReadyToBuild, Unbuilt,
 };
 pub use error::{BfError, BfWarning, MemoryDump, Result};
 pub use instruction::Instruction;
