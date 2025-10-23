@@ -1,10 +1,12 @@
-use crate::config::{EofBehavior, ExecutionConfig, MemoryModel};
-use crate::error::{BfError, MemoryDump, Result};
+use crate::config::{EofBehavior, ExecutionConfig};
+use crate::error::{BfError, Result};
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::io;
+
+use crate::config::MemoryModel;
 
 /// Virtual machine state for BrainFuck execution
 struct VmState {
@@ -18,17 +20,21 @@ struct VmState {
     stats: ExecutionStats,
     /// Start time for timeout tracking (if enabled)
     start_time: Option<std::time::Instant>,
+    /// Memory model that dictates how memory operations behave
+    memory_model: MemoryModel,
 }
 
 impl VmState {
-    /// Create a new VM state with the given memory size and optional start time
-    fn new(memory_size: usize, start_time: Option<std::time::Instant>) -> Self {
+    /// Create a new VM state with the given memory model and optional start time
+    fn new(memory_model: MemoryModel, start_time: Option<std::time::Instant>) -> Self {
+        let memory_size = memory_model.initial_size().get();
         Self {
             memory: vec![0u8; memory_size],
             pointer: MemoryAddress::new(0),
             step_count: StepCount::new(0),
             stats: ExecutionStats::new(),
             start_time,
+            memory_model,
         }
     }
 }
@@ -69,7 +75,7 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     use std::time::Instant;
 
     let start_time = config.timeout_ms().map(|_| Instant::now());
-    let mut state = VmState::new(config.memory_model().initial_size().get(), start_time);
+    let mut state = VmState::new(*config.memory_model(), start_time);
 
     execute_block(instructions, &mut state, &config, input, output)?;
 
@@ -108,91 +114,23 @@ pub fn interpret_with_config(
 
 /// Handle pointer increment based on memory model
 #[inline]
-fn increment_pointer(state: &mut VmState, config: &ExecutionConfig) -> Result<()> {
-    state.pointer.increment();
-
-    match config.memory_model() {
-        MemoryModel::Fixed(size) => {
-            if state.pointer.get() >= size.get() {
-                let dump = MemoryDump::from_memory(&state.memory, state.pointer);
-                return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: state.step_count.into(),
-                    attempted: state.pointer.get() as isize,
-                    max: MemorySize::new(size.get() - 1),
-                    memory_dump: Some(dump),
-                    hint: format!(
-                        "Attempted to access cell {}, but memory size is fixed at {} cells. \
-                         Try increasing memory size with --memory-size {} or use --memory-model wrapping",
-                        state.pointer.get(),
-                        size.get(),
-                        state.pointer.get() + 1000
-                    ),
-                });
-            }
-        }
-        MemoryModel::Wrapping(size) => {
-            if state.pointer.get() >= size.get() {
-                state.pointer = MemoryAddress::new(0); // Wrap around to beginning
-            }
-        }
-        MemoryModel::Unbounded {
-            initial_size: _,
-            max_size,
-        } => {
-            if state.pointer.get() >= max_size.get() {
-                let dump = MemoryDump::from_memory(&state.memory, state.pointer);
-                return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: state.step_count.into(),
-                    attempted: state.pointer.get() as isize,
-                    max: MemorySize::new(max_size.get() - 1),
-                    memory_dump: Some(dump),
-                    hint: format!(
-                        "Attempted to access cell {}, exceeding maximum size of {}. \
-                         This may indicate an infinite loop moving the pointer",
-                        state.pointer.get(),
-                        max_size.get()
-                    ),
-                });
-            }
-            // Grow memory if needed
-            if state.pointer.get() >= state.memory.len() {
-                state.memory.resize(state.pointer.get() + 1, 0);
-            }
-        }
-    }
-
-    Ok(())
+fn increment_pointer(state: &mut VmState) -> Result<()> {
+    state.memory_model.try_increment_pointer(
+        &mut state.pointer,
+        &mut state.memory,
+        state.step_count,
+    )
 }
 
 /// Handle pointer decrement based on memory model
 #[inline]
-fn decrement_pointer(state: &mut VmState, config: &ExecutionConfig) -> Result<()> {
-    match config.memory_model() {
-        MemoryModel::Fixed(size) | MemoryModel::Unbounded { max_size: size, .. } => {
-            if state.pointer.get() == 0 && !config.allow_negative_pointer() {
-                let dump = MemoryDump::from_memory(&state.memory, state.pointer);
-                return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: state.step_count.into(),
-                    attempted: -1,
-                    max: MemorySize::new(size.get() - 1),
-                    memory_dump: Some(dump),
-                    hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
-                });
-            }
-            if state.pointer.get() > 0 {
-                state.pointer.decrement();
-            }
-        }
-        MemoryModel::Wrapping(size) => {
-            if state.pointer.get() == 0 {
-                state.pointer = MemoryAddress::new(size.get() - 1); // Wrap around to end
-            } else {
-                state.pointer.decrement();
-            }
-        }
-    }
-
-    Ok(())
+fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Result<()> {
+    state.memory_model.try_decrement_pointer(
+        &mut state.pointer,
+        &state.memory,
+        allow_negative_pointer,
+        state.step_count,
+    )
 }
 
 fn execute_block<I: BfInput, O: BfOutput>(
@@ -244,14 +182,14 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
         match instruction {
             Instruction::IncrementPointer => {
-                increment_pointer(state, config)?;
+                increment_pointer(state)?;
                 // Track peak memory usage
                 if state.pointer.get() + 1 > state.stats.peak_memory_used.get() {
                     state.stats.peak_memory_used = MemoryAddress::new(state.pointer.get() + 1);
                 }
             }
             Instruction::DecrementPointer => {
-                decrement_pointer(state, config)?;
+                decrement_pointer(state, config.allow_negative_pointer())?;
             }
             Instruction::IncrementValue => {
                 state.memory[state.pointer.get()] =

@@ -3,8 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use ferrous_cortex::{
-    BfError, EofBehavior, ExecutionConfigBuilder, MemoryModel, interpret_with_config, minify,
-    parse, validate,
+    BfError, EofBehavior, ExecutionConfigBuilder, interpret_with_config, minify, parse, validate,
 };
 
 #[derive(Parser)]
@@ -215,27 +214,7 @@ fn run() -> Result<(), BfError> {
 
     if cli.verbose {
         eprintln!("Configuration:");
-        match config.memory_model() {
-            MemoryModel::Fixed(size) => {
-                eprintln!("  Memory model: Fixed({} bytes)", size);
-            }
-            MemoryModel::Wrapping(size) => {
-                eprintln!("  Memory model: Wrapping({} bytes)", size);
-            }
-            MemoryModel::Unbounded {
-                initial_size,
-                max_size,
-            } => {
-                eprintln!(
-                    "  Memory model: Unbounded(initial: {}, max: {})",
-                    initial_size, max_size
-                );
-            }
-            _ => {
-                // Future memory models - generic display
-                eprintln!("  Memory model: Custom");
-            }
-        }
+        eprintln!("  Memory model: {}", config.memory_model());
         eprintln!(
             "  Max steps: {}",
             config
