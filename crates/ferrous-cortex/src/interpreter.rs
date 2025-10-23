@@ -6,6 +6,33 @@ use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::io;
 
+/// Virtual machine state for BrainFuck execution
+struct VmState {
+    /// Memory tape (array of cells)
+    memory: Vec<u8>,
+    /// Current memory pointer position
+    pointer: MemoryAddress,
+    /// Number of steps executed so far
+    step_count: StepCount,
+    /// Execution statistics
+    stats: ExecutionStats,
+    /// Start time for timeout tracking (if enabled)
+    start_time: Option<std::time::Instant>,
+}
+
+impl VmState {
+    /// Create a new VM state with the given memory size and optional start time
+    fn new(memory_size: usize, start_time: Option<std::time::Instant>) -> Self {
+        Self {
+            memory: vec![0u8; memory_size],
+            pointer: MemoryAddress::new(0),
+            step_count: StepCount::new(0),
+            stats: ExecutionStats::new(),
+            start_time,
+        }
+    }
+}
+
 /// Interpret and execute BrainFuck instructions with default configuration
 ///
 /// This is a convenience function that uses default settings.
@@ -41,30 +68,17 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
 ) -> Result<ExecutionStats> {
     use std::time::Instant;
 
-    let mut memory = vec![0u8; config.memory_model().initial_size().get()];
-    let mut pointer = MemoryAddress::new(0);
-    let mut step_count = StepCount::new(0);
-    let mut stats = ExecutionStats::new();
     let start_time = config.timeout_ms().map(|_| Instant::now());
+    let mut state = VmState::new(config.memory_model().initial_size().get(), start_time);
 
-    execute_block(
-        instructions,
-        &mut memory,
-        &mut pointer,
-        &mut step_count,
-        &config,
-        &start_time,
-        &mut stats,
-        input,
-        output,
-    )?;
+    execute_block(instructions, &mut state, &config, input, output)?;
 
     // Finalize stats
-    stats.total_steps = step_count;
-    stats.cells_modified = ExecutionStats::count_modified_cells(&memory);
-    stats.memory_allocated = MemorySize::new(memory.len());
+    state.stats.total_steps = state.step_count;
+    state.stats.cells_modified = ExecutionStats::count_modified_cells(&state.memory);
+    state.stats.memory_allocated = MemorySize::new(state.memory.len());
 
-    Ok(stats)
+    Ok(state.stats)
 }
 
 /// Interpret and execute BrainFuck instructions with custom configuration.
@@ -94,60 +108,55 @@ pub fn interpret_with_config(
 
 /// Handle pointer increment based on memory model
 #[inline]
-fn increment_pointer(
-    pointer: &mut MemoryAddress,
-    memory: &mut Vec<u8>,
-    config: &ExecutionConfig,
-    step_count: StepCount,
-) -> Result<()> {
-    pointer.increment();
+fn increment_pointer(state: &mut VmState, config: &ExecutionConfig) -> Result<()> {
+    state.pointer.increment();
 
     match config.memory_model() {
         MemoryModel::Fixed(size) => {
-            if pointer.get() >= size.get() {
-                let dump = MemoryDump::from_memory(memory, *pointer);
+            if state.pointer.get() >= size.get() {
+                let dump = MemoryDump::from_memory(&state.memory, state.pointer);
                 return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: step_count.into(),
-                    attempted: pointer.get() as isize,
+                    instruction_index: state.step_count.into(),
+                    attempted: state.pointer.get() as isize,
                     max: MemorySize::new(size.get() - 1),
                     memory_dump: Some(dump),
                     hint: format!(
                         "Attempted to access cell {}, but memory size is fixed at {} cells. \
                          Try increasing memory size with --memory-size {} or use --memory-model wrapping",
-                        pointer.get(),
+                        state.pointer.get(),
                         size.get(),
-                        pointer.get() + 1000
+                        state.pointer.get() + 1000
                     ),
                 });
             }
         }
         MemoryModel::Wrapping(size) => {
-            if pointer.get() >= size.get() {
-                *pointer = MemoryAddress::new(0); // Wrap around to beginning
+            if state.pointer.get() >= size.get() {
+                state.pointer = MemoryAddress::new(0); // Wrap around to beginning
             }
         }
         MemoryModel::Unbounded {
             initial_size: _,
             max_size,
         } => {
-            if pointer.get() >= max_size.get() {
-                let dump = MemoryDump::from_memory(memory, *pointer);
+            if state.pointer.get() >= max_size.get() {
+                let dump = MemoryDump::from_memory(&state.memory, state.pointer);
                 return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: step_count.into(),
-                    attempted: pointer.get() as isize,
+                    instruction_index: state.step_count.into(),
+                    attempted: state.pointer.get() as isize,
                     max: MemorySize::new(max_size.get() - 1),
                     memory_dump: Some(dump),
                     hint: format!(
                         "Attempted to access cell {}, exceeding maximum size of {}. \
                          This may indicate an infinite loop moving the pointer",
-                        pointer.get(),
+                        state.pointer.get(),
                         max_size.get()
                     ),
                 });
             }
             // Grow memory if needed
-            if pointer.get() >= memory.len() {
-                memory.resize(pointer.get() + 1, 0);
+            if state.pointer.get() >= state.memory.len() {
+                state.memory.resize(state.pointer.get() + 1, 0);
             }
         }
     }
@@ -157,33 +166,28 @@ fn increment_pointer(
 
 /// Handle pointer decrement based on memory model
 #[inline]
-fn decrement_pointer(
-    pointer: &mut MemoryAddress,
-    memory: &[u8],
-    config: &ExecutionConfig,
-    step_count: StepCount,
-) -> Result<()> {
+fn decrement_pointer(state: &mut VmState, config: &ExecutionConfig) -> Result<()> {
     match config.memory_model() {
         MemoryModel::Fixed(size) | MemoryModel::Unbounded { max_size: size, .. } => {
-            if pointer.get() == 0 && !config.allow_negative_pointer() {
-                let dump = MemoryDump::from_memory(memory, *pointer);
+            if state.pointer.get() == 0 && !config.allow_negative_pointer() {
+                let dump = MemoryDump::from_memory(&state.memory, state.pointer);
                 return Err(BfError::MemoryOutOfBounds {
-                    instruction_index: step_count.into(),
+                    instruction_index: state.step_count.into(),
                     attempted: -1,
                     max: MemorySize::new(size.get() - 1),
                     memory_dump: Some(dump),
                     hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
                 });
             }
-            if pointer.get() > 0 {
-                pointer.decrement();
+            if state.pointer.get() > 0 {
+                state.pointer.decrement();
             }
         }
         MemoryModel::Wrapping(size) => {
-            if pointer.get() == 0 {
-                *pointer = MemoryAddress::new(size.get() - 1); // Wrap around to end
+            if state.pointer.get() == 0 {
+                state.pointer = MemoryAddress::new(size.get() - 1); // Wrap around to end
             } else {
-                pointer.decrement();
+                state.pointer.decrement();
             }
         }
     }
@@ -191,32 +195,27 @@ fn decrement_pointer(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn execute_block<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
-    memory: &mut Vec<u8>,
-    pointer: &mut MemoryAddress,
-    step_count: &mut StepCount,
+    state: &mut VmState,
     config: &ExecutionConfig,
-    start_time: &Option<std::time::Instant>,
-    stats: &mut ExecutionStats,
     input: &mut I,
     output: &mut O,
 ) -> Result<()> {
     for instruction in instructions {
         // Check step limit
-        step_count.increment();
+        state.step_count.increment();
         if let Some(max_steps) = config.max_steps()
-            && step_count.get() > max_steps
+            && state.step_count.get() > max_steps
         {
             return Err(BfError::StepLimitExceeded {
                 limit: max_steps,
-                actual_steps: *step_count,
+                actual_steps: state.step_count,
                 hint: format!(
                     "Program executed {} steps, exceeding the limit of {}. \
                          This may indicate an infinite loop. Try increasing the limit with --max-steps {} \
                          or add breakpoints to debug.",
-                    step_count.get(),
+                    state.step_count.get(),
                     max_steps,
                     max_steps * 2
                 ),
@@ -224,19 +223,19 @@ fn execute_block<I: BfInput, O: BfOutput>(
         }
 
         // Check timeout
-        if let Some(start) = start_time
+        if let Some(start) = &state.start_time
             && let Some(timeout_ms) = config.timeout_ms()
         {
             let elapsed = start.elapsed().as_millis() as u64;
             if elapsed > timeout_ms {
                 return Err(BfError::ExecutionTimeout {
                     limit_ms: timeout_ms,
-                    actual_steps: Some(*step_count),
+                    actual_steps: Some(state.step_count),
                     hint: format!(
                         "Program exceeded {}ms timeout after executing {} steps. \
                              Try increasing timeout with --timeout {} or optimize your BrainFuck code.",
                         timeout_ms,
-                        step_count.get(),
+                        state.step_count.get(),
                         timeout_ms * 2
                     ),
                 });
@@ -245,50 +244,52 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
         match instruction {
             Instruction::IncrementPointer => {
-                increment_pointer(pointer, memory, config, *step_count)?;
+                increment_pointer(state, config)?;
                 // Track peak memory usage
-                if pointer.get() + 1 > stats.peak_memory_used.get() {
-                    stats.peak_memory_used = MemoryAddress::new(pointer.get() + 1);
+                if state.pointer.get() + 1 > state.stats.peak_memory_used.get() {
+                    state.stats.peak_memory_used = MemoryAddress::new(state.pointer.get() + 1);
                 }
             }
             Instruction::DecrementPointer => {
-                decrement_pointer(pointer, memory, config, *step_count)?;
+                decrement_pointer(state, config)?;
             }
             Instruction::IncrementValue => {
-                memory[pointer.get()] = memory[pointer.get()].wrapping_add(1);
+                state.memory[state.pointer.get()] =
+                    state.memory[state.pointer.get()].wrapping_add(1);
             }
             Instruction::DecrementValue => {
-                memory[pointer.get()] = memory[pointer.get()].wrapping_sub(1);
+                state.memory[state.pointer.get()] =
+                    state.memory[state.pointer.get()].wrapping_sub(1);
             }
             Instruction::Output => {
                 output
-                    .write_byte(memory[pointer.get()])
+                    .write_byte(state.memory[state.pointer.get()])
                     .map_err(|source| BfError::IoError {
                         operation: "writing output".to_string(),
-                        instruction_index: Some((*step_count).into()),
+                        instruction_index: Some(state.step_count.into()),
                         source,
                     })?;
                 output.flush().map_err(|source| BfError::IoError {
                     operation: "flushing output".to_string(),
-                    instruction_index: Some((*step_count).into()),
+                    instruction_index: Some(state.step_count.into()),
                     source,
                 })?;
-                stats.bytes_written += 1;
+                state.stats.bytes_written += 1;
             }
             Instruction::Input => {
                 match input.read_byte() {
                     Ok(Some(byte)) => {
-                        memory[pointer.get()] = byte;
-                        stats.bytes_read += 1;
+                        state.memory[state.pointer.get()] = byte;
+                        state.stats.bytes_read += 1;
                     }
                     Ok(None) => {
                         // Handle EOF based on configuration
                         match config.eof_behavior() {
                             EofBehavior::SetZero => {
-                                memory[pointer.get()] = 0;
+                                state.memory[state.pointer.get()] = 0;
                             }
                             EofBehavior::SetNegOne => {
-                                memory[pointer.get()] = 255; // -1 as u8
+                                state.memory[state.pointer.get()] = 255; // -1 as u8
                             }
                             EofBehavior::NoChange => {
                                 // Do nothing, leave cell as-is
@@ -296,7 +297,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                             EofBehavior::Error => {
                                 return Err(BfError::IoError {
                                     operation: "reading input (EOF reached)".to_string(),
-                                    instruction_index: Some((*step_count).into()),
+                                    instruction_index: Some(state.step_count.into()),
                                     source: io::Error::new(
                                         io::ErrorKind::UnexpectedEof,
                                         "EOF reached",
@@ -308,18 +309,16 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     Err(source) => {
                         return Err(BfError::IoError {
                             operation: "reading input".to_string(),
-                            instruction_index: Some((*step_count).into()),
+                            instruction_index: Some(state.step_count.into()),
                             source,
                         });
                     }
                 }
             }
             Instruction::Loop(body) => {
-                while memory[pointer.get()] != 0 {
-                    stats.loop_iterations += 1;
-                    execute_block(
-                        body, memory, pointer, step_count, config, start_time, stats, input, output,
-                    )?;
+                while state.memory[state.pointer.get()] != 0 {
+                    state.stats.loop_iterations += 1;
+                    execute_block(body, state, config, input, output)?;
                 }
             }
         }
