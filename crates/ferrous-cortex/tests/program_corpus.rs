@@ -111,7 +111,10 @@ fn test_rot13() {
     // ROT13 runs in infinite loop (interactive program)
     // We let it process input then hit step limit (like Ctrl-C)
     let base_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let full_path = base_path.join("programs/advanced/rot13.bf");
     let source = fs::read_to_string(&full_path).unwrap();
     let instructions = parse(&source).unwrap();
@@ -131,7 +134,10 @@ fn test_rot13() {
     );
 
     // Should fail with step limit (like Ctrl-C), but output should be correct
-    assert!(result.is_err(), "ROT13 should hit step limit (infinite loop)");
+    assert!(
+        result.is_err(),
+        "ROT13 should hit step limit (infinite loop)"
+    );
 
     // ROT13 cipher: H->U, e->r, l->y, o->b, W->J, r->e, d->q
     // Output starts with correct transformation, followed by null bytes from infinite loop
@@ -146,7 +152,10 @@ fn test_fibonacci() {
     // Fibonacci runs in infinite loop (outputs sequence indefinitely)
     // We let it generate first few numbers then hit step limit (like Ctrl-C)
     let base_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     let full_path = base_path.join("programs/advanced/fibonacci.bf");
     let source = fs::read_to_string(&full_path).unwrap();
     let instructions = parse(&source).unwrap();
@@ -166,7 +175,10 @@ fn test_fibonacci() {
     );
 
     // Should fail with step limit (like Ctrl-C), but output should be correct
-    assert!(result.is_err(), "Fibonacci should hit step limit (infinite loop)");
+    assert!(
+        result.is_err(),
+        "Fibonacci should hit step limit (infinite loop)"
+    );
 
     // Fibonacci sequence in decimal with newlines: "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n..."
     let output = output_io.output_string();
@@ -218,8 +230,12 @@ fn test_collatz() {
 
 #[test]
 fn test_cat() {
-    let output = run_program("utilities/cat.bf", "Hello World", ExecutionConfig::default())
-        .expect("Cat should succeed");
+    let output = run_program(
+        "utilities/cat.bf",
+        "Hello World",
+        ExecutionConfig::default(),
+    )
+    .expect("Cat should succeed");
 
     assert_eq!(output, "Hello World");
 }
@@ -229,9 +245,7 @@ fn test_reverse() {
     let output = run_program(
         "utilities/reverse.bf",
         "hello",
-        ExecutionConfigBuilder::new()
-            .with_memory_size(1000)
-            .build(),
+        ExecutionConfigBuilder::new().with_memory_size(1000).build(),
     )
     .expect("Reverse should succeed");
 
@@ -252,12 +266,8 @@ fn test_strip_tabs_lf() {
 
 #[test]
 fn test_ascii_unary() {
-    let output = run_program_bytes(
-        "utilities/ascii_unary.bf",
-        "AB",
-        ExecutionConfig::default(),
-    )
-    .expect("ASCII unary should succeed");
+    let output = run_program_bytes("utilities/ascii_unary.bf", "AB", ExecutionConfig::default())
+        .expect("ASCII unary should succeed");
 
     // 'A' = 65, 'B' = 66
     // Program outputs '!' for each count, separated by spaces
@@ -272,12 +282,8 @@ fn test_ascii_unary() {
 
 #[test]
 fn test_clearscreen() {
-    let output = run_program_bytes(
-        "utilities/clearscreen.bf",
-        "",
-        ExecutionConfig::default(),
-    )
-    .expect("Clear screen should succeed");
+    let output = run_program_bytes("utilities/clearscreen.bf", "", ExecutionConfig::default())
+        .expect("Clear screen should succeed");
 
     // Should output 100 newlines
     let expected: Vec<u8> = vec![b'\n'; 100];
@@ -286,12 +292,8 @@ fn test_clearscreen() {
 
 #[test]
 fn test_beep() {
-    let output = run_program_bytes(
-        "utilities/beep.bf",
-        "",
-        ExecutionConfig::default(),
-    )
-    .expect("Beep should succeed");
+    let output = run_program_bytes("utilities/beep.bf", "", ExecutionConfig::default())
+        .expect("Beep should succeed");
 
     // Should output ASCII 7 (bell)
     assert_eq!(output, vec![7]);
@@ -299,12 +301,8 @@ fn test_beep() {
 
 #[test]
 fn test_true() {
-    let output = run_program(
-        "utilities/true.bf",
-        "",
-        ExecutionConfig::default(),
-    )
-    .expect("True should succeed");
+    let output = run_program("utilities/true.bf", "", ExecutionConfig::default())
+        .expect("True should succeed");
 
     // Should output nothing (shortest quine!)
     assert_eq!(output, "");
