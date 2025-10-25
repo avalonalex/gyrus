@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn test_step_limit() {
         // Using test_utils for cleaner error testing
-        use crate::test_utils::{run_bf_with_config, configs};
+        use crate::test_utils::{configs, run_bf_with_config};
 
         let result = run_bf_with_config("+[+]", "", configs::with_step_limit(100));
         assert!(matches!(
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn test_custom_memory_size() {
         // Using test_utils for cleaner config testing
-        use crate::test_utils::{run_bf_with_config, configs};
+        use crate::test_utils::{configs, run_bf_with_config};
 
         let source = ">".repeat(101);
         let result = run_bf_with_config(&source, "", configs::small_memory());
