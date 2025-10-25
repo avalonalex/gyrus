@@ -84,6 +84,235 @@ pub enum EofBehavior {
     Error,
 }
 
+/// Trait defining cell arithmetic behavior
+///
+/// **Important**: This trait controls CELL VALUE ARITHMETIC only, not pointer movement!
+///
+/// Each cell model implements this trait to provide its own arithmetic logic:
+/// - `try_increment()`: Handles `+` instruction (increment cell value)
+/// - `try_decrement()`: Handles `-` instruction (decrement cell value)
+/// - `is_zero()`: Checks if cell value is zero (for loop conditions)
+///
+/// Pointer movement (`>` and `<` instructions) is NOT part of this trait.
+/// Pointer behavior is controlled by `MemoryBehavior` trait.
+///
+/// # Cell Models
+///
+/// Different cell models define different overflow/underflow behaviors:
+/// - **U8 Wrapping**: 255+1=0, 0-1=255 (most compatible, default)
+/// - **U8 Checked**: Overflow/underflow returns error
+/// - **U8 Saturating**: 255+1=255, 0-1=0 (clamps at boundaries)
+///
+/// # Orthogonality with MemoryModel
+///
+/// CellModel and MemoryModel are completely independent:
+/// - **MemoryModel**: Controls pointer position (Fixed/Wrapping/Unbounded)
+/// - **CellModel**: Controls cell values (U8Wrapping/U8Checked/U8Saturating)
+///
+/// Any combination is valid:
+/// - Fixed memory + U8 Wrapping cells (default)
+/// - Wrapping memory + U8 Checked cells
+/// - Unbounded memory + U8 Saturating cells
+pub trait CellBehavior {
+    /// Try to increment the cell value by 1
+    ///
+    /// Returns an error if the operation would violate the cell model's constraints
+    /// (e.g., overflow with checked arithmetic).
+    fn try_increment(&self, value: &mut u8, step_count: StepCount) -> Result<()>;
+
+    /// Try to decrement the cell value by 1
+    ///
+    /// Returns an error if the operation would violate the cell model's constraints
+    /// (e.g., underflow with checked arithmetic).
+    fn try_decrement(&self, value: &mut u8, step_count: StepCount) -> Result<()>;
+
+    /// Check if the cell value represents zero
+    ///
+    /// Used for loop conditions `[` and `]`.
+    /// Currently always checks `value == 0`, but included for future extensibility
+    /// (e.g., signed types where -0 might need special handling).
+    #[inline]
+    fn is_zero(&self, value: u8) -> bool {
+        value == 0
+    }
+}
+
+/// U8 wrapping cell model (default, most compatible)
+///
+/// Overflow and underflow wrap around using modular arithmetic:
+/// - Increment overflow: `255 + 1 = 0`
+/// - Decrement underflow: `0 - 1 = 255`
+///
+/// This is the traditional BrainFuck behavior and matches most implementations.
+/// Programs like `[+]` will terminate (not infinite) as the value wraps through 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct U8WrappingCells;
+
+impl CellBehavior for U8WrappingCells {
+    #[inline]
+    fn try_increment(&self, value: &mut u8, _step_count: StepCount) -> Result<()> {
+        *value = value.wrapping_add(1); // 255 + 1 = 0
+        Ok(())
+    }
+
+    #[inline]
+    fn try_decrement(&self, value: &mut u8, _step_count: StepCount) -> Result<()> {
+        *value = value.wrapping_sub(1); // 0 - 1 = 255
+        Ok(())
+    }
+}
+
+impl fmt::Display for U8WrappingCells {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "u8-wrapping")
+    }
+}
+
+/// U8 checked cell model (errors on overflow/underflow)
+///
+/// Overflow and underflow return errors instead of wrapping:
+/// - Increment overflow: `255 + 1` → `BfError::CellOverflow`
+/// - Decrement underflow: `0 - 1` → `BfError::CellUnderflow`
+///
+/// Use this mode to catch arithmetic bugs in BrainFuck programs.
+/// Programs like `[+]` will error when they reach 255+1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct U8CheckedCells;
+
+impl CellBehavior for U8CheckedCells {
+    fn try_increment(&self, value: &mut u8, step_count: StepCount) -> Result<()> {
+        *value = value.checked_add(1).ok_or_else(|| BfError::CellOverflow {
+            instruction_index: step_count.into(),
+            current_value: 255,
+            hint: format!(
+                "Cell value reached maximum (255) and cannot be incremented further with checked arithmetic. \
+                 Try using --cell-model wrapping if wrapping behavior is intended, \
+                 or check your program logic for infinite loops."
+            ),
+        })?;
+        Ok(())
+    }
+
+    fn try_decrement(&self, value: &mut u8, step_count: StepCount) -> Result<()> {
+        *value = value.checked_sub(1).ok_or_else(|| BfError::CellUnderflow {
+            instruction_index: step_count.into(),
+            current_value: 0,
+            hint: format!(
+                "Cell value reached minimum (0) and cannot be decremented further with checked arithmetic. \
+                 Try using --cell-model wrapping if wrapping behavior is intended, \
+                 or check your program logic."
+            ),
+        })?;
+        Ok(())
+    }
+}
+
+impl fmt::Display for U8CheckedCells {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "u8-checked")
+    }
+}
+
+/// Cell model for interpreter execution
+///
+/// **Important**: This controls CELL ARITHMETIC (+,-) only, not pointer movement (>,<)!
+///
+/// # Cell Arithmetic Behaviors
+///
+/// - **U8Wrapping**: Overflow wraps (255+1=0, 0-1=255) - traditional BF, most compatible (default)
+/// - **U8Checked**: Overflow/underflow returns error - strict mode for catching bugs
+///
+/// # Use Cases
+///
+/// - **Production/Compatibility**: Use `U8Wrapping` - matches standard BrainFuck behavior
+/// - **Development/Debugging**: Use `U8Checked` - catches arithmetic bugs immediately
+///
+/// # Pointer Movement (NOT controlled by this enum)
+///
+/// Pointer movement is controlled by `MemoryModel` (Fixed/Wrapping/Unbounded).
+/// See `MemoryModel` documentation for pointer behavior.
+///
+/// # Orthogonality
+///
+/// CellModel and MemoryModel can be mixed independently:
+/// ```rust
+/// # use ferrous_cortex::*;
+/// // Fixed memory + wrapping cells (default - traditional BF)
+/// let config = ExecutionConfig::builder()
+///     .with_memory_size(30000)
+///     .with_wrapping_cells()
+///     .build();
+///
+/// // Wrapping memory + checked cells (debugging)
+/// let config = ExecutionConfig::builder()
+///     .with_wrapping_memory(30000)
+///     .with_checked_cells()
+///     .build();
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellModel {
+    /// U8 wrapping arithmetic (traditional BrainFuck, default)
+    ///
+    /// Cell values wrap at boundaries: 255+1=0, 0-1=255.
+    /// This is the standard BrainFuck behavior and matches most implementations.
+    /// Patterns like `[+]` terminate (not infinite) by wrapping through 0.
+    U8Wrapping(U8WrappingCells),
+
+    /// U8 checked arithmetic (strict debugging mode)
+    ///
+    /// Cell overflow/underflow raises `BfError::CellOverflow` or `BfError::CellUnderflow`.
+    /// Use this to catch arithmetic bugs in programs during development.
+    U8Checked(U8CheckedCells),
+    // Future cell models:
+    // I8Wrapping(I8WrappingCells),
+    // U16Wrapping(U16WrappingCells),
+}
+
+impl Default for CellModel {
+    fn default() -> Self {
+        CellModel::U8Wrapping(U8WrappingCells)
+    }
+}
+
+impl CellModel {
+    /// Delegate increment to the specific cell model
+    #[inline]
+    pub fn try_increment(&self, value: &mut u8, step_count: StepCount) -> Result<()> {
+        match self {
+            CellModel::U8Wrapping(m) => m.try_increment(value, step_count),
+            CellModel::U8Checked(m) => m.try_increment(value, step_count),
+        }
+    }
+
+    /// Delegate decrement to the specific cell model
+    #[inline]
+    pub fn try_decrement(&self, value: &mut u8, step_count: StepCount) -> Result<()> {
+        match self {
+            CellModel::U8Wrapping(m) => m.try_decrement(value, step_count),
+            CellModel::U8Checked(m) => m.try_decrement(value, step_count),
+        }
+    }
+
+    /// Check if value is zero (for loop conditions)
+    #[inline]
+    pub fn is_zero(&self, value: u8) -> bool {
+        match self {
+            CellModel::U8Wrapping(m) => m.is_zero(value),
+            CellModel::U8Checked(m) => m.is_zero(value),
+        }
+    }
+}
+
+impl fmt::Display for CellModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CellModel::U8Wrapping(m) => write!(f, "{}", m),
+            CellModel::U8Checked(m) => write!(f, "{}", m),
+        }
+    }
+}
+
 /// Trait defining memory behavior operations
 ///
 /// **Important**: This trait controls POINTER MOVEMENT only, not cell arithmetic!
@@ -466,6 +695,7 @@ pub struct ReadyToBuild;
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
     memory_model: MemoryModel,
+    cell_model: CellModel,
     max_steps: Option<u64>,
     timeout_ms: Option<u64>,
     allow_negative_pointer: bool,
@@ -476,6 +706,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             memory_model: MemoryModel::Fixed(FixedMemory::new(MemorySize::new(MEMORY_SIZE))),
+            cell_model: CellModel::default(), // U8Wrapping by default
             max_steps: None,
             timeout_ms: None,
             allow_negative_pointer: false,
@@ -489,6 +720,12 @@ impl ExecutionConfig {
     #[inline]
     pub fn memory_model(&self) -> &MemoryModel {
         &self.memory_model
+    }
+
+    /// Get the cell model
+    #[inline]
+    pub fn cell_model(&self) -> &CellModel {
+        &self.cell_model
     }
 
     /// Get the maximum number of steps
@@ -524,6 +761,7 @@ impl ExecutionConfig {
 /// Enhanced builder for ExecutionConfig with type-state pattern and validation
 pub struct ExecutionConfigBuilder<State = Unbuilt> {
     memory_model: Option<MemoryModel>,
+    cell_model: CellModel,
     max_steps: Option<u64>,
     timeout_ms: Option<u64>,
     eof_behavior: EofBehavior,
@@ -536,6 +774,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
     pub fn new() -> Self {
         Self {
             memory_model: None,
+            cell_model: CellModel::default(), // U8Wrapping by default
             max_steps: None,
             timeout_ms: None,
             eof_behavior: EofBehavior::default(),
@@ -549,6 +788,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
         self.memory_model = Some(MemoryModel::Fixed(FixedMemory::new(MemorySize::new(size))));
         ExecutionConfigBuilder {
             memory_model: self.memory_model,
+            cell_model: self.cell_model,
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
@@ -564,6 +804,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
         ))));
         ExecutionConfigBuilder {
             memory_model: self.memory_model,
+            cell_model: self.cell_model,
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
@@ -608,6 +849,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
 
         Ok(ExecutionConfigBuilder {
             memory_model: self.memory_model,
+            cell_model: self.cell_model,
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
@@ -621,12 +863,31 @@ impl ExecutionConfigBuilder<Unbuilt> {
         self.memory_model = Some(model);
         ExecutionConfigBuilder {
             memory_model: self.memory_model,
+            cell_model: self.cell_model,
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
             allow_negative_pointer: self.allow_negative_pointer,
             _state: PhantomData,
         }
+    }
+
+    /// Set cell model
+    pub fn with_cell_model(mut self, model: CellModel) -> Self {
+        self.cell_model = model;
+        self
+    }
+
+    /// Set cell model to U8 wrapping (default)
+    pub fn with_wrapping_cells(mut self) -> Self {
+        self.cell_model = CellModel::U8Wrapping(U8WrappingCells);
+        self
+    }
+
+    /// Set cell model to U8 checked (errors on overflow/underflow)
+    pub fn with_checked_cells(mut self) -> Self {
+        self.cell_model = CellModel::U8Checked(U8CheckedCells);
+        self
     }
 
     /// Set EOF behavior
@@ -655,6 +916,24 @@ impl ExecutionConfigBuilder<Unbuilt> {
 }
 
 impl ExecutionConfigBuilder<ReadyToBuild> {
+    /// Set cell model
+    pub fn with_cell_model(mut self, model: CellModel) -> Self {
+        self.cell_model = model;
+        self
+    }
+
+    /// Set cell model to U8 wrapping (default)
+    pub fn with_wrapping_cells(mut self) -> Self {
+        self.cell_model = CellModel::U8Wrapping(U8WrappingCells);
+        self
+    }
+
+    /// Set cell model to U8 checked (errors on overflow/underflow)
+    pub fn with_checked_cells(mut self) -> Self {
+        self.cell_model = CellModel::U8Checked(U8CheckedCells);
+        self
+    }
+
     /// Set EOF behavior
     pub fn with_eof_behavior(mut self, behavior: EofBehavior) -> Self {
         self.eof_behavior = behavior;
@@ -685,6 +964,7 @@ impl ExecutionConfigBuilder<ReadyToBuild> {
     pub fn build(self) -> ExecutionConfig {
         ExecutionConfig {
             memory_model: self.memory_model.expect("memory_model must be set"),
+            cell_model: self.cell_model,
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,

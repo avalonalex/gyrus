@@ -29,15 +29,15 @@
 //! - **Pointer seeking patterns** like `[>]` and `[<]` are NOT warned about,
 //!   as they are idiomatic BrainFuck patterns for seeking non-zero cells
 //!
-//! ## Future: Configuration-Aware Validation
+//! ## Cell-Model-Aware Validation
 //!
-//! When cell models become configurable (e.g., `CellModel::U8Checked`,
-//! `CellModel::U8Saturating`), validation will become model-aware:
+//! Validation is now cell-model-aware using `validate_with_cell_model()`:
 //!
-//! - **U8Wrapping**: `[+]` → inefficient (~256 iterations), not infinite (current behavior)
-//! - **U8Checked**: `[+]` → will error on overflow (255+1 panics)
-//! - **U8Saturating**: `[+]` → TRULY infinite (stuck at 255, never reaches 0)
-//! - **I8Wrapping**: Similar to u8 (~256 iterations, wraps -128→127)
+//! - **U8Wrapping**: `[+]` → inefficient (~256 iterations), not infinite - standard BF behavior
+//! - **U8Checked**: `[+]` → will error on overflow (255+1 panics) - strict debugging mode
+//!
+//! Future cell models (I8Wrapping, U16Wrapping) will also be supported with
+//! model-specific validation logic.
 //!
 //! # Examples
 //!
@@ -63,11 +63,15 @@
 //! assert_eq!(warnings.len(), 0);
 //! ```
 
+use crate::config::CellModel;
 use crate::error::BfWarning;
 use crate::instruction::Instruction;
 use crate::location::SourceLocation;
 
 /// Validate parsed instructions for common issues and potential problems
+///
+/// This function assumes U8 wrapping cell arithmetic (the default).
+/// For cell-model-aware validation, use [`validate_with_cell_model`].
 ///
 /// Returns a vector of warnings for suspicious patterns and potential bugs.
 /// Programs with warnings may still execute successfully, but likely contain
@@ -85,11 +89,42 @@ use crate::location::SourceLocation;
 ///
 /// - Module documentation for detailed assumptions about overflow behavior
 /// - [`BfWarning`] for the types of warnings that can be produced
+/// - [`validate_with_cell_model`] for cell-model-aware validation
 pub fn validate(instructions: &[Instruction]) -> Vec<BfWarning> {
+    validate_with_cell_model(instructions, &CellModel::default())
+}
+
+/// Validate parsed instructions with cell-model-aware analysis
+///
+/// This function provides cell-model-aware validation, adjusting warnings
+/// based on the specific cell arithmetic model being used.
+///
+/// # Cell Model Behaviors
+///
+/// Different cell models change what patterns are problematic:
+///
+/// - **U8Wrapping**: `[+]` is inefficient (~256 iterations) but terminates - standard BF behavior
+/// - **U8Checked**: `[+]` will error on overflow (255+1 raises error) - strict debugging mode
+///
+/// # Examples
+///
+/// ```rust
+/// use ferrous_cortex::{parse, validate_with_cell_model, CellModel, U8WrappingCells};
+///
+/// let instructions = parse("[+]").unwrap();
+///
+/// // With wrapping: warns about inefficiency
+/// let warnings = validate_with_cell_model(&instructions, &CellModel::U8Wrapping(U8WrappingCells));
+/// assert!(!warnings.is_empty());  // Inefficient but not infinite
+/// ```
+pub fn validate_with_cell_model(
+    instructions: &[Instruction],
+    cell_model: &CellModel,
+) -> Vec<BfWarning> {
     let mut warnings = Vec::new();
     let location = SourceLocation::start(); // Placeholder - would need actual tracking
 
-    validate_instructions(instructions, &mut warnings, 0, location);
+    validate_instructions(instructions, &mut warnings, 0, location, cell_model);
     warnings
 }
 
@@ -98,6 +133,7 @@ fn validate_instructions(
     warnings: &mut Vec<BfWarning>,
     depth: usize,
     location: SourceLocation,
+    cell_model: &CellModel,
 ) {
     // Check for extreme nesting
     if depth > 10 {
@@ -110,11 +146,11 @@ fn validate_instructions(
             if body.is_empty() {
                 warnings.push(BfWarning::EmptyLoop { location });
             } else {
-                // Check for suspicious patterns
-                check_suspicious_loop_patterns(body, warnings, location);
+                // Check for suspicious patterns (cell-model-aware)
+                check_suspicious_loop_patterns(body, warnings, location, cell_model);
 
                 // Recursively validate nested loops
-                validate_instructions(body, warnings, depth + 1, location);
+                validate_instructions(body, warnings, depth + 1, location, cell_model);
             }
         }
     }
@@ -134,43 +170,47 @@ fn check_suspicious_loop_patterns(
     body: &[Instruction],
     warnings: &mut Vec<BfWarning>,
     location: SourceLocation,
+    cell_model: &CellModel,
 ) {
     // Note: [>] and [<] are common patterns for seeking in BF, so we don't warn about them
     // Note: [-] is a common pattern for clearing a cell, so we don't warn about it
 
-    // Check for [+] and variants - complex termination behavior with u8 wrapping
-    //
-    // IMPORTANT: Termination depends on mathematical properties (GCD) and starting value!
-    //
-    // [+]: Always terminates (gcd(1,256)=1, visits all values including 0)
-    // [++]: May be infinite! Depends on starting value:
-    //   - From even: terminates (visits 0,2,4,...,254,0)
-    //   - From odd: INFINITE (visits 1,3,5,...,255,1 - never 0!)
-    // [+++]: Always terminates (gcd(3,256)=1)
-    // [++++]: May terminate depending on starting value (gcd(4,256)=4)
-    //
-    // Since we don't know starting values at validation time, we warn about all of them.
+    // Check for [+] and variants - behavior depends on cell model!
     let all_increments = body
         .iter()
         .all(|i| matches!(i, Instruction::IncrementValue));
     if all_increments && !body.is_empty() {
-        let gcd = gcd(body.len(), 256);
-        let reason = if body.len() == 1 {
-            "Inefficient pattern: loops ~256 times before reaching zero. Use [-] to clear a cell."
-                .to_string()
-        } else if gcd > 1 {
-            format!(
-                "Suspicious pattern: may be infinite or inefficient depending on starting cell value. \
-                 Increment by {} only visits multiples of {} (gcd={}).",
-                body.len(),
-                gcd,
-                gcd
-            )
-        } else {
-            format!(
-                "Inefficient pattern: loops ~{} times before reaching zero. Use [-] to clear a cell.",
-                256 / body.len()
-            )
+        // Generate cell-model-aware warning for increment loops
+        let reason = match cell_model {
+            CellModel::U8Wrapping(_) => {
+                // With wrapping arithmetic, termination depends on GCD
+                let gcd_value = gcd(body.len(), 256);
+                if body.len() == 1 {
+                    "Inefficient pattern: loops ~256 times before reaching zero. Use [-] to clear a cell."
+                        .to_string()
+                } else if gcd_value > 1 {
+                    format!(
+                        "Suspicious pattern: may be infinite or inefficient depending on starting cell value. \
+                         Increment by {} only visits multiples of {} (gcd={}).",
+                        body.len(),
+                        gcd_value,
+                        gcd_value
+                    )
+                } else {
+                    format!(
+                        "Inefficient pattern: loops ~{} times before reaching zero. Use [-] to clear a cell.",
+                        256 / body.len()
+                    )
+                }
+            }
+            CellModel::U8Checked(_) => {
+                // With checked arithmetic, will error on overflow
+                format!(
+                    "Suspicious pattern: will error on overflow with checked arithmetic. \
+                     Cell will reach 255 and then increment will panic. \
+                     Consider using wrapping arithmetic or use [-] to clear cells."
+                )
+            }
         };
 
         warnings.push(BfWarning::SuspiciousPattern {
@@ -181,15 +221,19 @@ fn check_suspicious_loop_patterns(
     }
 
     // Check for [--] and variants - inefficient compared to [-]
-    // Unlike [+], these are legitimately less efficient than the single-decrement form
+    // Behavior is similar across all cell models
     let all_decrements = body
         .iter()
         .all(|i| matches!(i, Instruction::DecrementValue));
     if all_decrements && body.len() > 1 {
+        let reason =
+            "Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell."
+                .to_string();
+
         warnings.push(BfWarning::SuspiciousPattern {
             location,
             pattern: format!("[{}]", "-".repeat(body.len())),
-            reason: "Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell.".to_string(),
+            reason,
         });
     }
 }

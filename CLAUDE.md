@@ -60,7 +60,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 **Supporting Modules:**
 - **error** (`error.rs`): `BfError`, `BfWarning` types with rich formatting
-- **config** (`config.rs`): `ExecutionConfig`, `MemoryModel`, `EofBehavior`
+- **config** (`config.rs`): `ExecutionConfig`, `MemoryModel`, `CellModel`, `EofBehavior`
 - **instruction** (`instruction.rs`): AST node definition `Instruction` enum
 - **location** (`location.rs`): Source position tracking `SourceLocation`
 - **stats** (`stats.rs`): Execution statistics `ExecutionStats`
@@ -68,7 +68,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 **CLI** (`crates/ferrous-cortex-cli/src/main.rs`)
    - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
-   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`, `--eof-behavior`
+   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
    - Validate mode: Parse → validate → show warnings (no execution)
@@ -89,36 +89,51 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 - **Safety**: Multiple layers of protection (step limits, timeouts, bounds checks)
 - **Configuration**: Builder pattern for `ExecutionConfig` (fluent API)
 
-## Overflow Behaviors and Cell Arithmetic
+## Memory and Cell Models: Orthogonal Configuration
 
-FerrousCortex currently has **hardcoded** cell arithmetic behavior with **configurable** pointer movement behavior. Understanding these distinctions is critical for understanding validation warnings and execution semantics.
+FerrousCortex separates two independent concerns for maximum flexibility:
 
-### Cell Arithmetic (Currently Hardcoded)
+1. **MemoryModel**: Controls pointer movement (`>`, `<` instructions)
+2. **CellModel**: Controls cell arithmetic (`+`, `-` instructions)
 
-**Current Implementation** (`interpreter.rs:195-200`):
-- **Cell type**: `u8` (unsigned 8-bit integer, range 0-255)
-- **Increment overflow**: `255 + 1 = 0` (wraps to zero via `wrapping_add(1)`)
-- **Decrement underflow**: `0 - 1 = 255` (wraps to 255 via `wrapping_sub(1)`)
+These can be mixed independently (e.g., Fixed memory + Checked cells, or Wrapping memory + Wrapping cells).
 
-**Code location**:
+### CellModel: Cell Arithmetic Behavior
+
+**CellModel** controls how `+` and `-` instructions behave at boundaries:
+
+1. **U8Wrapping** (default - production use):
+   - Cell type: `u8` (0-255)
+   - Overflow: `255 + 1 = 0` (wraps)
+   - Underflow: `0 - 1 = 255` (wraps)
+   - **Use case**: Standard BrainFuck behavior, maximum compatibility
+   - **Aligns with JIT/AOT**: Compiled code will use wrapping arithmetic
+
+2. **U8Checked** (debugging mode):
+   - Cell type: `u8` (0-255)
+   - Overflow: `255 + 1` → `BfError::CellOverflow`
+   - Underflow: `0 - 1` → `BfError::CellUnderflow`
+   - **Use case**: Catch arithmetic bugs during development
+   - **Strict mode**: Errors immediately on boundary violations
+
+**Code location**: `config.rs` defines `CellModel` enum and `CellBehavior` trait
+
+**Example usage**:
 ```rust
-// interpreter.rs
-Instruction::IncrementValue => {
-    state.memory[state.pointer.get()] =
-        state.memory[state.pointer.get()].wrapping_add(1);  // Hardcoded!
-}
-Instruction::DecrementValue => {
-    state.memory[state.pointer.get()] =
-        state.memory[state.pointer.get()].wrapping_sub(1);  // Hardcoded!
-}
+// Production: wrapping cells (compatible)
+let config = ExecutionConfig::builder()
+    .with_memory_size(30000)
+    .with_wrapping_cells()  // Default
+    .build();
+
+// Debugging: checked cells (strict)
+let config = ExecutionConfig::builder()
+    .with_memory_size(30000)
+    .with_checked_cells()  // Catches bugs
+    .build();
 ```
 
-**Implications**:
-- Programs that rely on wrapping behavior work correctly (e.g., `[-]` clears a cell)
-- Programs that assume checked arithmetic will silently wrap instead of erroring
-- Cell values are always 0-255, never negative
-
-### Pointer Movement (Configurable via MemoryModel)
+### MemoryModel: Pointer Movement Behavior
 
 **MemoryModel** controls how pointer movement behaves at boundaries:
 
@@ -142,80 +157,88 @@ Instruction::DecrementValue => {
 
 **Code location**: `config.rs` defines `MemoryModel` enum and `MemoryBehavior` trait
 
-### Validation Assumptions (Cell Arithmetic)
+### Cell-Model-Aware Validation
 
-The validator (`validator.rs`) makes **specific assumptions** about cell arithmetic when detecting patterns:
+The validator (`validator.rs`) provides **cell-model-aware** warnings via `validate_with_cell_model()`:
 
-**Pattern**: `[+]` (inefficient increment loop)
-- **Assumption**: Cells use u8 wrapping arithmetic
-- **Logic**: Incrementing wraps at 255 (255+1=0), so loop eventually reaches 0 and exits
-- **Iterations**: ~256 iterations (actual count depends on starting value)
-- **Warning**: "Inefficient pattern: loops ~256 times... Use [-] to clear a cell."
-- **Correctness**: NOT infinite with u8 wrapping, just inefficient!
+**Pattern**: `[+]` (increment loop behavior)
+- **With U8Wrapping**: Inefficient (~256 iterations), but terminates by wrapping through 0
+  - Warning: "Inefficient pattern: loops ~256 times. Use [-] to clear a cell."
+- **With U8Checked**: Will error on overflow when reaching 255+1
+  - Warning: "Will error on overflow with checked arithmetic."
 
 **Pattern**: `[-]` (cell clear)
-- **Assumption**: Cells use u8 wrapping arithmetic
-- **Logic**: Decrementing until zero terminates (works with wrapping)
-- **Warning**: None - this is idiomatic BF
-- **Correctness**: Valid with wrapping arithmetic
+- **All models**: This is idiomatic BrainFuck
+- **Warning**: None - this is the recommended way to clear cells
 
-**Pattern**: `[--]` (inefficient clear)
-- **Assumption**: Cells use u8 wrapping arithmetic
-- **Logic**: Multiple decrements per iteration still reaches zero, but slower
-- **Warning**: "Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell."
-- **Correctness**: Valid but suboptimal with wrapping
+**Pattern**: `[--]` (multiple decrements)
+- **All models**: Inefficient compared to `[-]`
+- **Warning**: "Multiple decrements in a loop is inefficient. Consider using [-]."
 
 **Pattern**: `[>]` or `[<]` (pointer seeking)
-- **Assumption**: Memory model independent
-- **Logic**: Seeking non-zero cells is idiomatic BF
+- **All models**: Idiomatic BrainFuck for seeking non-zero cells
 - **Warning**: None - standard pattern
-- **Note**: Termination depends on memory contents and pointer overflow behavior
 
-### Separation of Concerns
+### Orthogonality: Mixing Models
 
-**Important**: MemoryModel and CellModel are orthogonal concepts:
+**Important**: MemoryModel and CellModel are completely independent:
 
-- **MemoryModel** = How pointer movement behaves (Fixed/Wrapping/Unbounded)
-- **CellModel** (future) = How cell arithmetic behaves (u8/i8/checked/saturating)
+Any combination is valid:
+```rust
+// Fixed memory + Wrapping cells (default - traditional BF)
+ExecutionConfig::builder()
+    .with_memory_size(30000)
+    .with_wrapping_cells()
+    .build()
 
-Currently only MemoryModel is configurable; CellModel is hardcoded to u8 wrapping.
+// Wrapping memory + Checked cells (catch bugs with circular buffer)
+ExecutionConfig::builder()
+    .with_wrapping_memory(30000)
+    .with_checked_cells()
+    .build()
 
-### Future: Configurable Cell Arithmetic
+// Unbounded memory + Wrapping cells (dynamic growth + compatibility)
+ExecutionConfig::builder()
+    .with_unbounded_memory(1000, 100000)?
+    .with_wrapping_cells()
+    .build()
+```
 
-When cell arithmetic becomes configurable (e.g., via `CellModel` enum), validation will need to become **model-aware**:
+### Design Rationale
 
-**Proposed CellModel variants**:
-- **U8Wrapping** (current): 255 + 1 = 0, 0 - 1 = 255
-- **U8Checked**: Overflow/underflow raises error
-- **U8Saturating**: 255 + 1 = 255 (clamps at bounds)
-- **I8Wrapping**: Signed 8-bit (-128 to 127), wrapping arithmetic
-- **U16Wrapping**: 16-bit cells (0-65535)
+**Why only 2 cell models?**
+- **U8Wrapping**: Standard BrainFuck behavior, aligns with JIT/AOT compilation
+- **U8Checked**: Debugging mode to catch arithmetic bugs
 
-**Validation impact**:
-- **U8Wrapping**: `[+]` → inefficient (~256 iterations), not infinite (current behavior)
-- **U8Checked**: `[+]` → will error on overflow (255+1 panics)
-- **U8Saturating**: `[+]` → TRULY infinite (stuck at 255, never reaches 0)
-- **I8Wrapping**: Similar to u8 (~256 iterations via wrapping)
+**Why not saturating?**
+- Creates infinite loops (`[+]` gets stuck at 255 forever)
+- Not useful for debugging (just hangs, no useful error)
+- Not used in production (non-standard behavior)
+- Removed in favor of simpler, clearer API
 
-See `validator.rs` module documentation for detailed examples.
+**Future extensions**:
+- **I8Wrapping**: Signed 8-bit cells (-128 to 127) for specific algorithms
+- **U16Wrapping**: 16-bit cells (0-65535) for larger value ranges
+- Both would follow the same pattern: wrapping (production) vs checked (debugging)
 
 ### Where This Matters
 
 **For library users**:
-- Programs written for wrapping arithmetic work correctly (current default)
-- Programs written for checked arithmetic will silently wrap (may cause bugs)
-- Pointer overflow behavior can be configured via `ExecutionConfig`
+- Use `with_wrapping_cells()` for compatibility with standard BrainFuck
+- Use `with_checked_cells()` during development to catch bugs
+- Mix with any MemoryModel for your specific needs
 
 **For contributors**:
-- Cell arithmetic is in `interpreter.rs:195-200` (wrapping_add/wrapping_sub)
-- Pointer movement is in `config.rs` (MemoryBehavior trait implementations)
-- Validation logic is in `validator.rs` (assumes u8 wrapping)
-- Changing cell arithmetic requires updating validation assumptions
+- Cell arithmetic delegation is in `interpreter.rs:205-214`
+- CellModel trait and implementations are in `config.rs`
+- Cell-model-aware validation is in `validator.rs`
+- Trait-based design allows easy extension (I8Wrapping, U16Wrapping, etc.)
 
 **For BrainFuck programs**:
-- `[-]` and `[>]` patterns are safe and idiomatic
-- `[+]` is inefficient (~256 iterations to clear cell) - use `[-]` instead
-- Memory access patterns depend on chosen MemoryModel
+- `[-]` is idiomatic for clearing cells
+- `[+]` is inefficient (~256 iterations) - use `[-]` instead
+- `[>]` and `[<]` are standard for seeking non-zero cells
+- Cell and memory behaviors are independent
 
 ## Workspace Structure
 
@@ -412,7 +435,7 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 - ✅ Execution limits (step count, timeout) (Phase 3.1)
 - ✅ Configurable memory size (Phase 3.1)
 - ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (50 tests)
+- ✅ Comprehensive test suite (137 tests)
 - ✅ Validation pass with warnings (Phase 2.1)
 - ✅ Strict mode for CI/CD (Phase 2.1)
 - ✅ Line comments using `*` (Community feature)
@@ -426,11 +449,16 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
   - Steps, loop iterations, memory usage
   - I/O tracking
   - `--stats` CLI flag
-
 - ✅ Advanced I/O error handling (Phase 3.3)
   - EOF behavior configuration (SetZero, SetNegOne, NoChange, Error)
   - `--eof-behavior` CLI flag
   - Graceful EOF handling in Input instruction
+- ✅ Configurable cell arithmetic (CellModel)
+  - U8Wrapping: Standard BrainFuck (production, aligns with JIT/AOT)
+  - U8Checked: Strict debugging mode (catches overflow/underflow bugs)
+  - Cell-model-aware validation
+  - `--cell-model` CLI flag
+  - Fully orthogonal with MemoryModel (any combination supported)
 
 **Remaining (from PRD)**:
 - ⏳ Debug symbols and runtime diagnostics (Phase 4.2)

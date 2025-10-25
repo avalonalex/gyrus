@@ -3,7 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use ferrous_cortex::{
-    BfError, EofBehavior, ExecutionConfigBuilder, interpret_with_config, minify, parse, validate,
+    BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
+    interpret_with_config, minify, parse, validate_with_cell_model,
 };
 
 #[derive(Parser)]
@@ -29,6 +30,10 @@ struct Cli {
     /// Memory model: fixed, wrapping, or unbounded
     #[arg(long, default_value = "fixed")]
     memory_model: String,
+
+    /// Cell model: wrapping (default, production) or checked (debugging)
+    #[arg(long, default_value = "wrapping")]
+    cell_model: String,
 
     /// Initial memory size for unbounded model
     #[arg(long, default_value = "1000")]
@@ -124,9 +129,22 @@ fn run() -> Result<(), BfError> {
         return Ok(());
     }
 
-    // Validate if requested
+    // Parse cell model for validation
+    let cell_model = match cli.cell_model.to_lowercase().as_str() {
+        "wrapping" | "wrap" | "u8-wrapping" => CellModel::U8Wrapping(U8WrappingCells),
+        "checked" | "check" | "u8-checked" => CellModel::U8Checked(U8CheckedCells),
+        other => {
+            eprintln!(
+                "Error: Invalid cell model '{}'. Valid options: wrapping, checked",
+                other
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Validate if requested (cell-model-aware)
     if cli.validate || cli.strict {
-        let warnings = validate(&instructions);
+        let warnings = validate_with_cell_model(&instructions, &cell_model);
 
         if !warnings.is_empty() {
             eprintln!("Validation found {} warning(s):\n", warnings.len());
@@ -181,6 +199,9 @@ fn run() -> Result<(), BfError> {
         }
     };
 
+    // Set cell model
+    let builder = builder.with_cell_model(cell_model);
+
     // Set EOF behavior
     let builder = match cli.eof_behavior.to_lowercase().as_str() {
         "zero" => builder.with_eof_behavior(EofBehavior::SetZero),
@@ -215,6 +236,7 @@ fn run() -> Result<(), BfError> {
     if cli.verbose {
         eprintln!("Configuration:");
         eprintln!("  Memory model: {}", config.memory_model());
+        eprintln!("  Cell model: {}", config.cell_model());
         eprintln!(
             "  Max steps: {}",
             config

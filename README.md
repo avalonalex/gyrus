@@ -164,6 +164,7 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
 | `--memory-size <BYTES>` | Memory size in bytes (for fixed/wrapping models) | 30000 |
 | `--memory-model <MODEL>` | Memory model: fixed, wrapping, or unbounded | fixed |
+| `--cell-model <MODEL>` | Cell model: wrapping (production) or checked (debugging) | wrapping |
 | `--unbounded-initial <BYTES>` | Initial size for unbounded memory model | 1000 |
 | `--unbounded-max <BYTES>` | Maximum size for unbounded memory model | 1000000 |
 | `--eof-behavior <BEHAVIOR>` | EOF behavior: zero, neg-one, no-change, or error | zero |
@@ -350,99 +351,163 @@ ferrous-cortex program.bf --memory-model unbounded \
 - **Wrapping**: Use for programs designed for wrapping behavior or when porting from other interpreters
 - **Unbounded**: Use for programs with unknown memory requirements or when prototyping
 
-## Cell Arithmetic and Overflow Behavior
+## Cell Models and Arithmetic Behavior
 
-**Important**: FerrousCortex distinguishes between **pointer overflow** (configurable via MemoryModel) and **cell arithmetic overflow** (currently hardcoded).
+FerrousCortex provides **configurable cell arithmetic** to support different use cases. Cell arithmetic is completely independent from memory models - you can mix any cell model with any memory model.
 
-### What is Configurable vs Hardcoded
+### Understanding Memory vs Cell Models
 
-| Aspect | Controlled By | Behavior |
-|--------|--------------|----------|
-| **Pointer movement** (`>`, `<`) | MemoryModel (configurable) | Fixed: error, Wrapping: wraps, Unbounded: grows |
-| **Cell arithmetic** (`+`, `-`) | Hardcoded | Always uses u8 wrapping (0-255) |
+FerrousCortex distinguishes between two orthogonal (independent) configuration axes:
 
-### Cell Arithmetic (Currently Hardcoded)
+| Aspect | Controlled By | What It Affects |
+|--------|--------------|-----------------|
+| **Pointer movement** (`>`, `<`) | `--memory-model` | How pointer moves between cells |
+| **Cell arithmetic** (`+`, `-`) | `--cell-model` | How cell values increment/decrement |
 
-All cells use **unsigned 8-bit wrapping arithmetic** regardless of which memory model you choose:
+These are **completely independent** - you can combine any memory model with any cell model.
 
-- **Cell type**: `u8` (unsigned 8-bit integer)
-- **Value range**: 0 to 255
-- **Increment overflow**: `255 + 1 = 0` (wraps to zero)
-- **Decrement underflow**: `0 - 1 = 255` (wraps to 255)
+### Available Cell Models
 
-**This means:**
-- `+++` on a cell with value 254 → results in 1 (254 → 255 → 0 → 1)
-- `--` on a cell with value 1 → results in 255 (1 → 0 → 255)
-- Cell values are always 0-255, never negative
+Configure cell arithmetic with the `--cell-model` flag:
 
-### How This Affects BrainFuck Patterns
+#### U8 Wrapping (Default - Production)
 
-**Working patterns** (compatible with u8 wrapping):
+Standard BrainFuck behavior with wrapping arithmetic. This is the **default** and aligns with traditional BrainFuck semantics and future JIT/AOT compilation.
+
+```bash
+ferrous-cortex program.bf --cell-model wrapping
+```
+
+**Characteristics:**
+- Cell type: `u8` (unsigned 8-bit integer, range 0-255)
+- Increment overflow: `255 + 1 = 0` (wraps to zero)
+- Decrement underflow: `0 - 1 = 255` (wraps to 255)
+- Use case: **Production use, standard BrainFuck programs**
+
+**Example:**
 ```brainfuck
-[-]      * Clear cell: decrement until zero (works!)
-[->+<]   * Move value: works with wrapping arithmetic
++++      * Increment 3 times
+[-]      * Decrement until zero (standard clear pattern)
 ```
 
-**Inefficient patterns** (detected by validator):
-```brainfuck
-[+]      * Inefficient: loops ~256 times (wraps 255→0, then exits)
-[++]     * Inefficient: loops ~128 times (wraps through 0)
-```
+**Validation behavior:**
+- `[+]` → Warning: "Inefficient pattern: loops ~256 times" (NOT infinite, just slow!)
+- `[-]` → No warning (idiomatic pattern)
 
-These patterns work but are inefficient. With u8 wrapping, they eventually reach 0 and exit (NOT infinite!). The validator warns about them because they're probably not what you intended. Use `[-]` to clear a cell efficiently. See `--validate` for static analysis.
+#### U8 Checked (Debugging)
 
-### Examples
+Strict overflow detection mode that raises errors on overflow/underflow. Use this to catch bugs where your program unexpectedly reaches cell boundaries.
 
-**Fixed memory with cell wrapping**:
 ```bash
-# Memory: pointer overflow errors, cell arithmetic wraps
-ferrous-cortex program.bf --memory-model fixed
+ferrous-cortex program.bf --cell-model checked
 ```
 
-```text
-Configuration: Fixed(30000 bytes), u8 wrapping cells
-Pointer at 29999, execute `>` → ERROR (out of bounds)
-Cell value 255, execute `+` → wraps to 0 (always wraps)
+**Characteristics:**
+- Cell type: `u8` (unsigned 8-bit integer, range 0-255)
+- Increment overflow: `255 + 1` → **ERROR** (execution stops)
+- Decrement underflow: `0 - 1` → **ERROR** (execution stops)
+- Use case: **Debugging, finding arithmetic bugs**
+
+**Example error:**
+```
+Error: Cell overflow at instruction 42: attempted to increment cell with value 255
 ```
 
-**Wrapping memory with cell wrapping**:
+**Validation behavior:**
+- `[+]` → Warning: "Will error on overflow with checked arithmetic"
+- `[-]` → No warning (will terminate at zero before underflow)
+
+### Combining Models
+
+Since CellModel and MemoryModel are orthogonal, all combinations are valid:
+
 ```bash
-# Memory: both pointer AND cells wrap
-ferrous-cortex program.bf --memory-model wrapping
+# Fixed memory + Wrapping cells (traditional BrainFuck)
+ferrous-cortex program.bf --memory-model fixed --cell-model wrapping
+
+# Wrapping memory + Checked cells (debug pointer wrapping but catch cell bugs)
+ferrous-cortex program.bf --memory-model wrapping --cell-model checked
+
+# Unbounded memory + Wrapping cells (dynamic memory, standard arithmetic)
+ferrous-cortex program.bf --memory-model unbounded --cell-model wrapping
 ```
 
-```text
-Configuration: Wrapping(30000 bytes), u8 wrapping cells
-Pointer at 29999, execute `>` → wraps to 0 (pointer wraps)
-Cell value 255, execute `+` → wraps to 0 (cell wraps)
-```
+**Example combinations:**
 
-**Unbounded memory with cell wrapping**:
+| Memory Model | Cell Model | Pointer at boundary | Cell at 255, execute `+` |
+|--------------|-----------|---------------------|--------------------------|
+| Fixed | Wrapping | Error (out of bounds) | Wraps to 0 |
+| Fixed | Checked | Error (out of bounds) | Error (overflow) |
+| Wrapping | Wrapping | Wraps to other end | Wraps to 0 |
+| Wrapping | Checked | Wraps to other end | Error (overflow) |
+| Unbounded | Wrapping | Grows memory | Wraps to 0 |
+| Unbounded | Checked | Grows memory | Error (overflow) |
+
+### When to Use Each Cell Model
+
+**Use Wrapping (default) when:**
+- Running standard BrainFuck programs
+- In production environments
+- When you want traditional BrainFuck semantics
+- When preparing for JIT/AOT compilation (uses u8 wrapping)
+
+**Use Checked when:**
+- Debugging your BrainFuck programs
+- Finding arithmetic overflow bugs
+- Verifying your program doesn't unexpectedly hit cell boundaries
+- Learning BrainFuck and want strict error checking
+
+### Cell-Model-Aware Validation
+
+The validator provides different warnings based on your cell model:
+
 ```bash
-# Memory: pointer grows, cells wrap
-ferrous-cortex program.bf --memory-model unbounded
+# Validate with wrapping model
+ferrous-cortex program.bf --validate --cell-model wrapping
+
+# Validate with checked model
+ferrous-cortex program.bf --validate --cell-model checked
 ```
 
-```text
-Configuration: Unbounded, u8 wrapping cells
-Pointer at N, execute `>` → grows to N+1 (if under max)
-Cell value 255, execute `+` → wraps to 0 (always wraps)
+**Example - `[+]` pattern:**
+
+With `--cell-model wrapping`:
+```
+Warning: Inefficient pattern [+]
+Inefficient pattern: loops ~256 times before reaching zero. Use [-] to clear a cell.
 ```
 
-### Future: Configurable Cell Arithmetic
+With `--cell-model checked`:
+```
+Warning: Suspicious pattern [+]
+Suspicious pattern: will error on overflow with checked arithmetic.
+Cell will reach 255 and then increment will panic.
+```
 
-In future versions, cell arithmetic will be configurable via a `--cell-model` flag:
+### Practical Examples
 
-**Planned cell models:**
-- **u8-wrapping** (current): `255 + 1 = 0` (wraps)
-- **u8-checked**: `255 + 1` → error (overflow detection)
-- **u8-saturating**: `255 + 1 = 255` (clamps at max)
-- **i8-wrapping**: Signed 8-bit (-128 to 127), wrapping
-- **u16-wrapping**: 16-bit cells (0-65535), wrapping
+**Production execution with wrapping:**
+```bash
+ferrous-cortex programs/basic/hello_world.bf --verbose
+# Configuration:
+#   Memory model: Fixed(30000 bytes)
+#   Cell model: U8Wrapping
+```
 
-These would be independent of MemoryModel - you could mix any cell model with any memory model.
+**Debug mode with strict checking:**
+```bash
+ferrous-cortex my_program.bf --cell-model checked --strict
+# Will catch both validation warnings AND runtime overflow errors
+```
 
-**Until then**, all programs execute with u8 wrapping cells. Write your programs accordingly or use `--validate` to check for patterns that assume wrapping behavior.
+**Testing with different models:**
+```bash
+# Test with standard wrapping
+ferrous-cortex program.bf --cell-model wrapping
+
+# Test with strict checking to find bugs
+ferrous-cortex program.bf --cell-model checked
+```
 
 ## EOF Handling
 
@@ -654,12 +719,12 @@ The minified code is functionally identical to the original.
 
 ### Running Tests
 
-FerrousCortex has a comprehensive testing infrastructure with **97 tests** including unit tests, property-based tests, and benchmarks.
+FerrousCortex has a comprehensive testing infrastructure with **137 tests** including unit tests, property-based tests, and benchmarks.
 
 #### Run All Tests
 
 ```bash
-# Run all unit tests (84 tests)
+# Run all unit tests (137 tests)
 cargo test
 
 # Run with output
@@ -815,7 +880,7 @@ The core library follows idiomatic Rust structure with clear separation of conce
 - **io.rs**: I/O abstraction traits (BfInput, BfOutput, StringIo)
 - **Supporting modules**: error, config, instruction, location, stats, types
 
-All modules include comprehensive tests (**97 total**: 84 unit tests, 5 property tests, 12 test utilities tests) with co-located implementation.
+All modules include comprehensive tests (**137 total** including unit tests, property tests, and cell model tests) with co-located implementation.
 
 ## Roadmap
 
@@ -832,10 +897,12 @@ All modules include comprehensive tests (**97 total**: 84 unit tests, 5 property
 - [x] Code minification with comment stripping
 - [x] Better bracket matching (report multiple errors)
 - [x] Multiple memory models (fixed, wrapping, unbounded)
+- [x] Configurable cell arithmetic (wrapping, checked)
+- [x] Cell-model-aware validation
 - [x] Execution statistics tracking
 - [x] Advanced I/O error handling (EOF behavior)
 - [x] I/O abstraction for library usage and testing
-- [x] Comprehensive testing infrastructure (97 tests)
+- [x] Comprehensive testing infrastructure (137 tests)
 - [x] Property-based testing with proptest
 - [x] Performance benchmarking with criterion
 

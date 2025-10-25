@@ -191,28 +191,26 @@ fn execute_block<I: BfInput, O: BfOutput>(
             Instruction::DecrementPointer => {
                 decrement_pointer(state, config.allow_negative_pointer())?;
             }
-            // Cell arithmetic: HARDCODED as u8 wrapping (independent of MemoryModel)
+            // Cell arithmetic: Delegated to CellModel (now configurable!)
             //
-            // IMPORTANT: This behavior is NOT configurable via ExecutionConfig.
-            // Cell values are always u8 (0-255) with wrapping arithmetic:
-            // - Increment overflow: 255 + 1 = 0
-            // - Decrement underflow: 0 - 1 = 255
+            // IMPORTANT: Cell arithmetic is NOW configurable via ExecutionConfig.cell_model().
+            // Different models provide different overflow/underflow behaviors:
+            // - U8Wrapping: 255+1=0, 0-1=255 (default, most compatible)
+            // - U8Checked: Overflow/underflow returns error
+            // - U8Saturating: 255+1=255, 0-1=0 (clamps at boundaries)
             //
             // This is INDEPENDENT of MemoryModel, which only controls pointer movement.
-            // See config.rs module docs for the distinction between MemoryModel and cell arithmetic.
-            // See validator.rs module docs for how validation assumes this wrapping behavior.
-            //
-            // Future: When CellModel becomes configurable, this will delegate to
-            // a cell arithmetic trait (e.g., U8Wrapping, U8Checked, U8Saturating, I8Wrapping).
+            // See config.rs module docs for CellModel and MemoryModel orthogonality.
+            // See validator.rs module docs for cell-model-aware validation.
             Instruction::IncrementValue => {
-                // Uses wrapping_add(1) for overflow: 255 + 1 = 0
-                state.memory[state.pointer.get()] =
-                    state.memory[state.pointer.get()].wrapping_add(1);
+                config
+                    .cell_model()
+                    .try_increment(&mut state.memory[state.pointer.get()], state.step_count)?;
             }
             Instruction::DecrementValue => {
-                // Uses wrapping_sub(1) for underflow: 0 - 1 = 255
-                state.memory[state.pointer.get()] =
-                    state.memory[state.pointer.get()].wrapping_sub(1);
+                config
+                    .cell_model()
+                    .try_decrement(&mut state.memory[state.pointer.get()], state.step_count)?;
             }
             Instruction::Output => {
                 output
@@ -835,5 +833,152 @@ mod tests {
             "Should fail with StepLimitExceeded, got {:?}",
             result
         );
+    }
+
+    // ===================================================================
+    // CELL MODEL TESTS: Testing different cell arithmetic behaviors
+    // ===================================================================
+
+    #[test]
+    fn test_cell_model_wrapping_overflow() {
+        // Test u8 wrapping: 255 + 1 = 0
+        use crate::config::ExecutionConfigBuilder;
+        use crate::io::StringIo;
+
+        // Set cell to 255 using many increments, then increment once more
+        let source = format!("{}", "+".repeat(256)) + "."; // 0+256=0 (wraps at 255), output 0
+        let instructions = parse(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_wrapping_cells()
+            .build();
+
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        let result = interpret_with_io(&instructions, config, &mut input, &mut output);
+
+        assert!(result.is_ok(), "Wrapping should not error on overflow");
+        assert_eq!(output.output_bytes()[0], 0, "Should wrap to 0");
+    }
+
+    #[test]
+    fn test_cell_model_wrapping_underflow() {
+        // Test u8 wrapping: 0 - 1 = 255
+        use crate::config::ExecutionConfigBuilder;
+        use crate::io::StringIo;
+
+        // Start at 0, decrement once, output
+        let source = "-."; // 0-1=255 (wraps), output 255
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_wrapping_cells()
+            .build();
+
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        let result = interpret_with_io(&instructions, config, &mut input, &mut output);
+
+        assert!(result.is_ok(), "Wrapping should not error on underflow");
+        assert_eq!(output.output_bytes()[0], 255, "Should wrap to 255");
+    }
+
+    #[test]
+    fn test_cell_model_checked_overflow() {
+        // Test u8 checked: 255 + 1 → error
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        // Set cell to 255 using increments, then try to increment → should error
+        let source = format!("{}", "+".repeat(256)); // 0+255=255, +1=error!
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        let result = run_bf_with_config(&source, "", config);
+        assert!(result.is_err(), "Checked should error on overflow");
+        assert!(
+            matches!(result, Err(BfError::CellOverflow { .. })),
+            "Should fail with CellOverflow, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_cell_model_checked_underflow() {
+        // Test u8 checked: 0 - 1 → error
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        // Start at 0, try to decrement → should error
+        let source = "-"; // 0-1=error!
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        let result = run_bf_with_config(source, "", config);
+        assert!(result.is_err(), "Checked should error on underflow");
+        assert!(
+            matches!(result, Err(BfError::CellUnderflow { .. })),
+            "Should fail with CellUnderflow, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_cell_model_independence_from_memory_model() {
+        // Test that CellModel and MemoryModel are orthogonal
+        // Use Wrapping memory + Checked cells
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        // Set cell to 255, try to increment → cell overflow
+        let source = format!("{}", "+".repeat(256)); // Should error on cell arithmetic
+
+        let config = ExecutionConfigBuilder::new()
+            .with_wrapping_memory(100) // Wrapping MEMORY
+            .with_checked_cells() // Checked CELLS
+            .build();
+
+        let result = run_bf_with_config(&source, "", config);
+        assert!(
+            matches!(result, Err(BfError::CellOverflow { .. })),
+            "Should fail with CellOverflow, proving cell model is independent"
+        );
+    }
+
+    #[test]
+    fn test_cell_model_normal_operations() {
+        // Test that normal operations work with all cell models
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        let source = "+++."; // 0+3=3, output 3
+
+        // Test with wrapping
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_wrapping_cells()
+            .build();
+        let result = run_bf_with_config(source, "", config);
+        assert!(result.is_ok());
+        let (output, _) = result.unwrap();
+        assert_eq!(output.as_bytes()[0], 3);
+
+        // Test with checked
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+        let result = run_bf_with_config(source, "", config);
+        assert!(result.is_ok());
+        let (output, _) = result.unwrap();
+        assert_eq!(output.as_bytes()[0], 3);
     }
 }
