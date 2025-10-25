@@ -433,3 +433,141 @@ mod tests {
         assert!(matches!(result, Err(BfError::UnmatchedOpenBracket { .. })));
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // Property: Parsing never panics (on any input)
+    proptest! {
+        #[test]
+        fn parse_never_panics(source in ".*") {
+            let _ = parse(&source);  // Should never panic, only return Ok or Err
+        }
+    }
+
+    // Property: Valid BF programs always parse successfully
+    proptest! {
+        #[test]
+        fn valid_bf_always_parses(source in valid_bf_source()) {
+            let result = parse(&source);
+            prop_assert!(result.is_ok(), "Valid BF program failed to parse: {:?}", result.err());
+        }
+    }
+
+    // Property: Parsing is deterministic (same input = same output)
+    proptest! {
+        #[test]
+        fn parse_is_deterministic(source in ".*") {
+            let result1 = parse(&source);
+            let result2 = parse(&source);
+
+            match (result1, result2) {
+                (Ok(ast1), Ok(ast2)) => prop_assert_eq!(ast1, ast2),
+                (Err(_), Err(_)) => {}, // Both failed, that's fine
+                _ => prop_assert!(false, "Parse gave different results"),
+            }
+        }
+    }
+
+    // Property: Balanced brackets always parse (ignoring other validity)
+    proptest! {
+        #[test]
+        fn balanced_brackets_parse(source in balanced_brackets_source()) {
+            let result = parse(&source);
+            prop_assert!(result.is_ok(), "Balanced brackets should parse: {}", source);
+        }
+    }
+
+    // Property: Comments don't affect validity
+    proptest! {
+        #[test]
+        fn comments_dont_affect_validity(bf_code in valid_bf_source(), comment in "[a-zA-Z ]+") {
+            let with_comment = format!("* {}\n{}", comment, bf_code);
+            let without_comment = bf_code;
+
+            let result1 = parse(&with_comment);
+            let result2 = parse(&without_comment);
+
+            prop_assert_eq!(result1.is_ok(), result2.is_ok());
+        }
+    }
+
+    // Strategy: Generate valid BrainFuck programs
+    fn valid_bf_source() -> impl Strategy<Value = String> {
+        prop::collection::vec(bf_instruction(), 0..100).prop_flat_map(|instrs| {
+            // Build a string with balanced brackets
+            let mut result = String::new();
+            let mut depth = 0;
+
+            for instr in instrs {
+                match instr.as_str() {
+                    "[" => {
+                        result.push('[');
+                        depth += 1;
+                    }
+                    "]" => {
+                        if depth > 0 {
+                            result.push(']');
+                            depth -= 1;
+                        }
+                    }
+                    c => result.push_str(c),
+                }
+            }
+
+            // Close any remaining brackets
+            for _ in 0..depth {
+                result.push(']');
+            }
+
+            Just(result)
+        })
+    }
+
+    // Strategy: Generate balanced bracket sequences
+    fn balanced_brackets_source() -> impl Strategy<Value = String> {
+        prop::collection::vec(bf_instruction(), 0..50).prop_map(|instrs| {
+            let mut result = String::new();
+            let mut depth = 0;
+
+            for instr in instrs {
+                match instr.as_str() {
+                    "[" => {
+                        result.push('[');
+                        depth += 1;
+                    }
+                    "]" => {
+                        if depth > 0 {
+                            result.push(']');
+                            depth -= 1;
+                        }
+                    }
+                    c => result.push_str(c),
+                }
+            }
+
+            // Close remaining brackets
+            for _ in 0..depth {
+                result.push(']');
+            }
+
+            result
+        })
+    }
+
+    // Strategy: Generate BF instructions
+    fn bf_instruction() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("+".to_string()),
+            Just("-".to_string()),
+            Just(">".to_string()),
+            Just("<".to_string()),
+            Just(".".to_string()),
+            Just(",".to_string()),
+            Just("[".to_string()),
+            Just("]".to_string()),
+        ]
+    }
+}

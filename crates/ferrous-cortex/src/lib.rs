@@ -8,6 +8,8 @@ mod location;
 mod minify;
 mod parser;
 mod stats;
+#[cfg(test)]
+pub mod test_utils;
 mod types;
 mod validator;
 
