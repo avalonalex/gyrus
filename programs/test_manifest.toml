@@ -1,0 +1,209 @@
+# BrainFuck Program Test Manifest
+# Defines expected behavior for programs in the corpus
+# Used by integration tests to verify correctness
+
+# Format:
+# [[test]]
+# name = "program_name"
+# file = "path/to/program.bf"
+# input = "input string" (optional)
+# expected_output = "expected output"
+# expected_exit = "success" | "error"
+# description = "what this tests"
+# tags = ["tag1", "tag2"]
+
+# ============================================================================
+# BASIC PROGRAMS
+# ============================================================================
+
+[[test]]
+name = "hello_world"
+file = "basic/hello_world.bf"
+input = ""
+expected_output = "Hello World!\n"
+expected_exit = "success"
+description = "Classic Hello World program"
+tags = ["basic", "output", "loops"]
+
+[[test]]
+name = "simple"
+file = "basic/simple.bf"
+input = ""
+expected_output = "H"
+expected_exit = "success"
+description = "Simple program that prints 'H'"
+tags = ["basic", "output"]
+
+[[test]]
+name = "line_comments"
+file = "basic/line_comments.bf"
+input = ""
+expected_output = "H"
+expected_exit = "success"
+description = "Demonstrates line comment syntax"
+tags = ["basic", "comments"]
+
+# ============================================================================
+# ADVANCED PROGRAMS
+# ============================================================================
+
+[[test]]
+name = "quine"
+file = "advanced/quine.bf"
+input = ""
+# Quine should output its own source code
+# Note: This requires reading the file and comparing
+expected_exit = "success"
+description = "Self-replicating program (outputs its own source)"
+tags = ["advanced", "quine", "self-referential"]
+skip_output_check = true  # Special handling required
+
+[[test]]
+name = "factor"
+file = "advanced/factor.bf"
+input = "12\n"
+# Factor.bf is complex and may need special handling
+expected_exit = "success"
+description = "Integer factorization program"
+tags = ["advanced", "math", "slow"]
+timeout_ms = 60000  # May take a while
+
+# ============================================================================
+# EOF BEHAVIOR TESTS
+# ============================================================================
+
+[[test]]
+name = "eof_zero"
+file = "tests/test_eof.bf"
+input = ""
+expected_output = "EOF: 0\n"
+expected_exit = "success"
+description = "Tests EOF behavior: set to zero (default)"
+tags = ["eof", "config"]
+config = { eof_behavior = "zero" }
+
+[[test]]
+name = "eof_nochange"
+file = "tests/test_eof_nochange.bf"
+input = ""
+expected_exit = "success"
+description = "Tests EOF behavior: no change"
+tags = ["eof", "config"]
+config = { eof_behavior = "no_change" }
+
+# ============================================================================
+# VALIDATION TESTS
+# ============================================================================
+
+[[test]]
+name = "warnings_only"
+file = "tests/warnings_only.bf"
+input = ""
+expected_exit = "success"
+expected_warnings = 2
+description = "Program with validation warnings but no errors"
+tags = ["validation", "warnings"]
+
+[[test]]
+name = "warnings_test"
+file = "tests/warnings_test.bf"
+input = ""
+expected_exit = "success"
+expected_warnings = 1
+description = "Mixed program with warnings"
+tags = ["validation"]
+
+# ============================================================================
+# ERROR TESTS
+# ============================================================================
+
+[[test]]
+name = "unmatched_bracket"
+file = "errors/unmatched_bracket.bf"
+input = ""
+expected_exit = "error"
+expected_error_type = "parse"
+description = "Parse error: unmatched '['"
+tags = ["errors", "parse"]
+
+[[test]]
+name = "memory_overflow"
+file = "errors/memory_overflow.bf"
+input = ""
+expected_exit = "error"
+expected_error_type = "runtime"
+description = "Runtime error: memory out of bounds"
+tags = ["errors", "runtime", "memory"]
+config = { memory_size = 100 }
+
+[[test]]
+name = "infinite_loop"
+file = "errors/infinite_loop.bf"
+input = ""
+expected_exit = "error"
+expected_error_type = "limit"
+description = "Step limit exceeded"
+tags = ["errors", "limits"]
+config = { max_steps = 1000 }
+
+# ============================================================================
+# STRESS TESTS
+# ============================================================================
+
+[[test]]
+name = "deep_nesting"
+file = "advanced/deep_nesting.bf"
+input = ""
+expected_exit = "success"
+expected_warnings = 1  # Extreme nesting warning
+description = "Deeply nested loops (11 levels)"
+tags = ["stress", "validation"]
+
+# ============================================================================
+# PROGRAMS TO ADD (TODO)
+# ============================================================================
+
+# [[test]]
+# name = "fibonacci"
+# file = "advanced/fibonacci.bf"
+# input = ""
+# expected_output = "1, 1, 2, 3, 5, 8, 13, 21, 34, 55"
+# description = "Fibonacci sequence generator"
+# tags = ["math", "advanced"]
+
+# [[test]]
+# name = "rot13"
+# file = "advanced/rot13.bf"
+# input = "Hello World"
+# expected_output = "Uryyb Jbeyq"
+# description = "ROT13 cipher"
+# tags = ["cipher", "io"]
+
+# [[test]]
+# name = "mandelbrot"
+# file = "advanced/mandelbrot.bf"
+# input = ""
+# description = "Mandelbrot set renderer"
+# tags = ["graphics", "stress", "slow"]
+# timeout_ms = 120000
+
+# [[test]]
+# name = "99_bottles"
+# file = "advanced/99_bottles.bf"
+# input = ""
+# description = "99 Bottles of Beer song"
+# tags = ["text", "loops"]
+
+# [[test]]
+# name = "prime"
+# file = "advanced/prime.bf"
+# input = ""
+# description = "Prime number generator"
+# tags = ["math"]
+
+# [[test]]
+# name = "hanoi"
+# file = "advanced/hanoi.bf"
+# input = "3"
+# description = "Towers of Hanoi solver"
+# tags = ["algorithm", "recursion"]
