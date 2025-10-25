@@ -76,7 +76,8 @@ use crate::location::SourceLocation;
 /// # Current Limitations
 ///
 /// - Assumes `u8` cells with wrapping arithmetic
-/// - Cannot detect all infinite loops (only simple patterns)
+/// - Cannot detect all infinite loops (see GCD analysis in code for [+*n] patterns)
+/// - Does not track starting cell values (so warnings may be conservative)
 /// - Does not perform data flow analysis
 /// - Location tracking is placeholder (always reports start location)
 ///
@@ -208,7 +209,8 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_infinite_loop() {
+    fn test_validate_inefficient_increment_loop() {
+        // [+] is inefficient (loops ~256 times), not infinite with u8 wrapping
         let source = "+[+]";
         let instructions = parse(source).unwrap();
         let warnings = validate(&instructions);
@@ -241,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_validate_multiple_warnings() {
-        let source = "[]++[+]"; // Empty loop + infinite loop
+        let source = "[]++[+]"; // Empty loop + inefficient increment loop
         let instructions = parse(source).unwrap();
         let warnings = validate(&instructions);
         assert!(warnings.len() >= 2);
