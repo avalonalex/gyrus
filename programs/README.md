@@ -26,13 +26,41 @@ More sophisticated BrainFuck programs showcasing advanced capabilities.
 
 - **`quine.bf`** - Self-replicating program (prints its own source code)
 - **`factor.bf`** - Integer factorization program
+- **`rot13.bf`** - ROT13 Caesar cipher (interactive/infinite loop)
+- **`fibonacci.bf`** - Fibonacci sequence generator with sophisticated multi-digit arithmetic (see fibonacci_README.md)
 - **`deep_nesting.bf`** - Deeply nested loops for testing parser and validator
 
 **Run examples:**
 ```bash
 cargo run -- programs/advanced/quine.bf
 cargo run -- programs/advanced/factor.bf
+echo "Hello World" | cargo run -- programs/advanced/rot13.bf  # Ctrl-C to stop
+cargo run -- programs/advanced/fibonacci.bf  # Ctrl-C to stop
 ```
+
+### `utilities/` - Practical Utilities
+
+Small, useful programs from D.B. Cristofani's collection demonstrating that BrainFuck can be practical.
+
+- **`cat.bf`** - Copy input to output (`,[ .[-],]`)
+- **`reverse.bf`** - Reverse input text
+- **`strip_tabs_lf.bf`** - Remove tabs and linefeeds
+- **`ascii_unary.bf`** - Show ASCII values in unary (as '!' characters)
+- **`clearscreen.bf`** - Output 100 newlines to clear screen
+- **`beep.bf`** - Output bell character (ASCII 7)
+- **`true.bf`** - Do nothing, exit successfully (shortest quine!)
+- **`brainfuck_print.bf`** - Print "brainfuck\n"
+- **`text_to_bf.bf`** - Convert text to BrainFuck code
+
+**Run examples:**
+```bash
+echo "hello" | cargo run -- programs/utilities/cat.bf
+echo "hello" | cargo run -- programs/utilities/reverse.bf  # outputs: olleh
+cargo run -- programs/utilities/beep.bf  # ring terminal bell
+cargo run -- programs/utilities/brainfuck_print.bf
+```
+
+**Source**: http://www.hevanet.com/cristofd/brainfuck/
 
 ### `tests/` - Feature Testing Programs
 
@@ -100,14 +128,25 @@ cargo run -- programs/advanced/factor.bf --memory-model unbounded
 cargo run -- programs/tests/warnings_test.bf --validate
 ```
 
+## Statistics
+
+- **Total programs**: 33
+- **Directories**: 5 (basic, advanced, utilities, tests, errors)
+- **Coverage**: Basic syntax, advanced algorithms, practical utilities, error cases, edge cases
+- **Sources**:
+  - Original implementations
+  - D.B. Cristofani's collection
+  - Community contributions
+
 ## Contributing Programs
 
 When adding new BrainFuck programs:
 
 1. **Basic programs**: Simple, educational examples
 2. **Advanced programs**: Complex algorithms and interesting patterns
-3. **Test programs**: Programs that test specific features
-4. **Error programs**: Programs that demonstrate error handling
+3. **Utilities**: Small, practical tools
+4. **Test programs**: Programs that test specific features
+5. **Error programs**: Programs that demonstrate error handling
 
 Include comments using `*` for better documentation:
 ```brainfuck

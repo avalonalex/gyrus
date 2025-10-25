@@ -106,6 +106,222 @@ fn test_factor() {
     assert!(!output.is_empty());
 }
 
+#[test]
+fn test_rot13() {
+    // ROT13 runs in infinite loop (interactive program)
+    // We let it process input then hit step limit (like Ctrl-C)
+    let base_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let full_path = base_path.join("programs/advanced/rot13.bf");
+    let source = fs::read_to_string(&full_path).unwrap();
+    let instructions = parse(&source).unwrap();
+
+    let mut input_io = StringIo::new("HelloWorld");
+    let mut output_io = StringIo::empty();
+
+    // Program will hit step limit after processing input - this is expected
+    let result = interpret_with_io(
+        &instructions,
+        ExecutionConfigBuilder::new()
+            .with_memory_size(30000)
+            .with_max_steps(10_000_000)
+            .build(),
+        &mut input_io,
+        &mut output_io,
+    );
+
+    // Should fail with step limit (like Ctrl-C), but output should be correct
+    assert!(result.is_err(), "ROT13 should hit step limit (infinite loop)");
+
+    // ROT13 cipher: H->U, e->r, l->y, o->b, W->J, r->e, d->q
+    // Output starts with correct transformation, followed by null bytes from infinite loop
+    assert!(
+        output_io.output_string().starts_with("UryybJbeyq"),
+        "ROT13 output should start with 'UryybJbeyq'"
+    );
+}
+
+#[test]
+fn test_fibonacci() {
+    // Fibonacci runs in infinite loop (outputs sequence indefinitely)
+    // We let it generate first few numbers then hit step limit (like Ctrl-C)
+    let base_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap().parent().unwrap();
+    let full_path = base_path.join("programs/advanced/fibonacci.bf");
+    let source = fs::read_to_string(&full_path).unwrap();
+    let instructions = parse(&source).unwrap();
+
+    let mut input_io = StringIo::new(""); // No input needed
+    let mut output_io = StringIo::empty();
+
+    // Program will hit step limit after generating some numbers - this is expected
+    let result = interpret_with_io(
+        &instructions,
+        ExecutionConfigBuilder::new()
+            .with_memory_size(30000)
+            .with_max_steps(50_000_000) // Needs more steps for multi-digit arithmetic
+            .build(),
+        &mut input_io,
+        &mut output_io,
+    );
+
+    // Should fail with step limit (like Ctrl-C), but output should be correct
+    assert!(result.is_err(), "Fibonacci should hit step limit (infinite loop)");
+
+    // Fibonacci sequence in decimal with newlines: "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n..."
+    let output = output_io.output_string();
+
+    // Sequence starts with F(0)=0, F(1)=1, F(2)=1, ...
+    assert!(
+        output.starts_with("0\n1\n1\n2\n3\n5\n8\n13\n"),
+        "Fibonacci output should start with first 8 numbers: '0\\n1\\n1\\n2\\n3\\n5\\n8\\n13\\n'"
+    );
+
+    // Verify it computes multi-digit numbers (tests sophisticated digit-by-digit arithmetic)
+    assert!(
+        output.contains("21\n") && output.contains("34\n") && output.contains("55\n"),
+        "Fibonacci should compute at least up to 55"
+    );
+
+    // Verify it handles larger multi-digit numbers
+    assert!(
+        output.contains("144\n") && output.contains("233\n"),
+        "Fibonacci should compute three-digit numbers"
+    );
+}
+
+#[test]
+fn test_collatz() {
+    // Collatz computes Collatz conjecture sequences (3n+1 problem)
+    // For each input number, outputs the sequence until reaching 1
+    let output = run_program(
+        "advanced/collatz.bf",
+        "5\n",
+        ExecutionConfigBuilder::new()
+            .with_memory_size(30000)
+            .with_max_steps(50_000_000)
+            .build(),
+    )
+    .expect("Collatz should succeed");
+
+    // Collatz sequence for 5 is: 5 → 16 → 8 → 4 → 2 → 1
+    // Program outputs the sequence in decimal
+    assert!(
+        !output.is_empty(),
+        "Collatz should produce output for input '5'"
+    );
+}
+
+// ============================================================================
+// UTILITY PROGRAMS
+// ============================================================================
+
+#[test]
+fn test_cat() {
+    let output = run_program("utilities/cat.bf", "Hello World", ExecutionConfig::default())
+        .expect("Cat should succeed");
+
+    assert_eq!(output, "Hello World");
+}
+
+#[test]
+fn test_reverse() {
+    let output = run_program(
+        "utilities/reverse.bf",
+        "hello",
+        ExecutionConfigBuilder::new()
+            .with_memory_size(1000)
+            .build(),
+    )
+    .expect("Reverse should succeed");
+
+    assert_eq!(output, "olleh");
+}
+
+#[test]
+fn test_strip_tabs_lf() {
+    let output = run_program(
+        "utilities/strip_tabs_lf.bf",
+        "hello\tworld\n",
+        ExecutionConfig::default(),
+    )
+    .expect("Strip tabs/LF should succeed");
+
+    assert_eq!(output, "helloworld");
+}
+
+#[test]
+fn test_ascii_unary() {
+    let output = run_program_bytes(
+        "utilities/ascii_unary.bf",
+        "AB",
+        ExecutionConfig::default(),
+    )
+    .expect("ASCII unary should succeed");
+
+    // 'A' = 65, 'B' = 66
+    // Program outputs '!' for each count, separated by spaces
+    // Output: 65 '!' chars + space + 66 '!' chars + space
+    let mut expected = vec![b'!'; 65];
+    expected.push(b' ');
+    expected.extend(vec![b'!'; 66]);
+    expected.push(b' ');
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_clearscreen() {
+    let output = run_program_bytes(
+        "utilities/clearscreen.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("Clear screen should succeed");
+
+    // Should output 100 newlines
+    let expected: Vec<u8> = vec![b'\n'; 100];
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_beep() {
+    let output = run_program_bytes(
+        "utilities/beep.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("Beep should succeed");
+
+    // Should output ASCII 7 (bell)
+    assert_eq!(output, vec![7]);
+}
+
+#[test]
+fn test_true() {
+    let output = run_program(
+        "utilities/true.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("True should succeed");
+
+    // Should output nothing (shortest quine!)
+    assert_eq!(output, "");
+}
+
+#[test]
+fn test_brainfuck_print() {
+    let output = run_program(
+        "utilities/brainfuck_print.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("Brainfuck print should succeed");
+
+    assert_eq!(output, "brainfuck\n");
+}
+
 // ============================================================================
 // EOF BEHAVIOR TESTS
 // ============================================================================
