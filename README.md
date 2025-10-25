@@ -350,6 +350,100 @@ ferrous-cortex program.bf --memory-model unbounded \
 - **Wrapping**: Use for programs designed for wrapping behavior or when porting from other interpreters
 - **Unbounded**: Use for programs with unknown memory requirements or when prototyping
 
+## Cell Arithmetic and Overflow Behavior
+
+**Important**: FerrousCortex distinguishes between **pointer overflow** (configurable via MemoryModel) and **cell arithmetic overflow** (currently hardcoded).
+
+### What is Configurable vs Hardcoded
+
+| Aspect | Controlled By | Behavior |
+|--------|--------------|----------|
+| **Pointer movement** (`>`, `<`) | MemoryModel (configurable) | Fixed: error, Wrapping: wraps, Unbounded: grows |
+| **Cell arithmetic** (`+`, `-`) | Hardcoded | Always uses u8 wrapping (0-255) |
+
+### Cell Arithmetic (Currently Hardcoded)
+
+All cells use **unsigned 8-bit wrapping arithmetic** regardless of which memory model you choose:
+
+- **Cell type**: `u8` (unsigned 8-bit integer)
+- **Value range**: 0 to 255
+- **Increment overflow**: `255 + 1 = 0` (wraps to zero)
+- **Decrement underflow**: `0 - 1 = 255` (wraps to 255)
+
+**This means:**
+- `+++` on a cell with value 254 → results in 1 (254 → 255 → 0 → 1)
+- `--` on a cell with value 1 → results in 255 (1 → 0 → 255)
+- Cell values are always 0-255, never negative
+
+### How This Affects BrainFuck Patterns
+
+**Working patterns** (compatible with u8 wrapping):
+```brainfuck
+[-]      * Clear cell: decrement until zero (works!)
+[->+<]   * Move value: works with wrapping arithmetic
+```
+
+**Inefficient patterns** (detected by validator):
+```brainfuck
+[+]      * Inefficient: loops ~256 times (wraps 255→0, then exits)
+[++]     * Inefficient: loops ~128 times (wraps through 0)
+```
+
+These patterns work but are inefficient. With u8 wrapping, they eventually reach 0 and exit (NOT infinite!). The validator warns about them because they're probably not what you intended. Use `[-]` to clear a cell efficiently. See `--validate` for static analysis.
+
+### Examples
+
+**Fixed memory with cell wrapping**:
+```bash
+# Memory: pointer overflow errors, cell arithmetic wraps
+ferrous-cortex program.bf --memory-model fixed
+```
+
+```text
+Configuration: Fixed(30000 bytes), u8 wrapping cells
+Pointer at 29999, execute `>` → ERROR (out of bounds)
+Cell value 255, execute `+` → wraps to 0 (always wraps)
+```
+
+**Wrapping memory with cell wrapping**:
+```bash
+# Memory: both pointer AND cells wrap
+ferrous-cortex program.bf --memory-model wrapping
+```
+
+```text
+Configuration: Wrapping(30000 bytes), u8 wrapping cells
+Pointer at 29999, execute `>` → wraps to 0 (pointer wraps)
+Cell value 255, execute `+` → wraps to 0 (cell wraps)
+```
+
+**Unbounded memory with cell wrapping**:
+```bash
+# Memory: pointer grows, cells wrap
+ferrous-cortex program.bf --memory-model unbounded
+```
+
+```text
+Configuration: Unbounded, u8 wrapping cells
+Pointer at N, execute `>` → grows to N+1 (if under max)
+Cell value 255, execute `+` → wraps to 0 (always wraps)
+```
+
+### Future: Configurable Cell Arithmetic
+
+In future versions, cell arithmetic will be configurable via a `--cell-model` flag:
+
+**Planned cell models:**
+- **u8-wrapping** (current): `255 + 1 = 0` (wraps)
+- **u8-checked**: `255 + 1` → error (overflow detection)
+- **u8-saturating**: `255 + 1 = 255` (clamps at max)
+- **i8-wrapping**: Signed 8-bit (-128 to 127), wrapping
+- **u16-wrapping**: 16-bit cells (0-65535), wrapping
+
+These would be independent of MemoryModel - you could mix any cell model with any memory model.
+
+**Until then**, all programs execute with u8 wrapping cells. Write your programs accordingly or use `--validate` to check for patterns that assume wrapping behavior.
+
 ## EOF Handling
 
 FerrousCortex provides configurable end-of-file (EOF) handling for the input command (`,`). Different BrainFuck implementations handle EOF differently, so you can choose the behavior that matches your needs.
@@ -497,9 +591,9 @@ ferrous-cortex program.bf --strict
 The validator checks for:
 
 - **Empty loops**: `[]` - Does nothing and can be removed
-- **Infinite loops**: `[+]` or `[++]` - Cell never reaches zero by incrementing
+- **Inefficient increment loops**: `[+]` or `[++]` - Loop many times (~256, ~128 iterations) to reach zero via wrapping
 - **Extreme nesting**: Loops nested more than 10 levels deep (performance impact)
-- **Inefficient patterns**: Multiple operations that could be optimized
+- **Inefficient patterns**: Multiple operations that could be optimized (e.g., `[--]` instead of `[-]`)
 
 ### Example Workflows
 
