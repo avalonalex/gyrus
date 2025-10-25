@@ -139,7 +139,7 @@ This is a Cargo workspace with the following crates:
 cargo build                           # Build entire workspace
 cargo build --release                 # Optimized build
 cargo run -- <file.bf>                # Run CLI (auto-detects binary)
-cargo run -- examples/hello_world.bf  # Run example
+cargo run -- programs/basic/hello_world.bf  # Run example
 
 # Build specific crate
 cargo build -p ferrous-cortex         # Build library only
@@ -162,9 +162,23 @@ cargo fmt                             # Format code
 
 ## Testing BF Programs
 
-Example programs are in `examples/`:
-- `simple.bf` - Prints 'H' (simple test case)
-- `hello_world.bf` - Prints "Hello World!" (classic BF program)
+Example BrainFuck programs are in `programs/`:
+- `programs/basic/simple.bf` - Prints 'H' (simple test case)
+- `programs/basic/hello_world.bf` - Prints "Hello World!" (classic BF program)
+- `programs/basic/line_comments.bf` - Demonstrates line comment syntax
+- `programs/errors/` - Error handling demonstrations
+- See `programs/README.md` for full list and documentation
+
+## Library Usage Examples
+
+Rust examples demonstrating library usage are in `crates/ferrous-cortex/examples/`:
+- `basic_usage.rs` - Core parsing, execution, error handling
+- `custom_io.rs` - Implementing custom I/O traits
+- `memory_models.rs` - Different memory model configurations
+- `validation.rs` - Program validation
+- `minify.rs` - Code minification
+
+Run with: `cargo run --example basic_usage`
 
 ## Error Handling Architecture
 

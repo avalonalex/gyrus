@@ -71,38 +71,63 @@ cargo run -- <path-to-bf-file>
 
 ### Examples
 
-Run the included example programs:
+#### Running BrainFuck Programs
+
+Run the included example programs from the `programs/` directory:
 
 ```bash
 # Simple program that prints 'H'
-cargo run -- examples/simple.bf
+cargo run -- programs/basic/simple.bf
 
 # Classic Hello World
-cargo run -- examples/hello_world.bf
+cargo run -- programs/basic/hello_world.bf
 
 # Line comments demonstration
-cargo run -- examples/line_comments.bf
+cargo run -- programs/basic/line_comments.bf
 ```
 
 **Error Handling Examples:**
 
-See the `examples/errors/` directory for comprehensive error handling demonstrations:
+See the `programs/errors/` directory for comprehensive error handling demonstrations:
 
 ```bash
 # Parse error with detailed context
-cargo run -- examples/errors/unmatched_bracket.bf
+cargo run -- programs/errors/unmatched_bracket.bf
 
 # Memory bounds error
-cargo run -- examples/errors/memory_overflow.bf --memory-size 100
+cargo run -- programs/errors/memory_overflow.bf --memory-size 100
 
 # Infinite loop with step limit
-cargo run -- examples/errors/infinite_loop.bf --max-steps 10000
+cargo run -- programs/errors/infinite_loop.bf --max-steps 10000
 
 # Validation warnings
-cargo run -- examples/errors/validation_warnings.bf --validate
+cargo run -- programs/errors/validation_warnings.bf --validate
 ```
 
-See [`examples/errors/README.md`](examples/errors/README.md) for detailed documentation of all error examples and troubleshooting guides.
+See [`programs/errors/README.md`](programs/errors/README.md) for detailed error examples documentation.
+
+#### Using FerrousCortex as a Library
+
+The `crates/ferrous-cortex/examples/` directory contains Rust examples showing library usage:
+
+```bash
+# Basic usage - parsing, execution, error handling
+cargo run --example basic_usage
+
+# Custom I/O implementations
+cargo run --example custom_io
+
+# Memory model configuration
+cargo run --example memory_models
+
+# Program validation
+cargo run --example validation
+
+# Code minification
+cargo run --example minify
+```
+
+See [`crates/ferrous-cortex/examples/README.md`](crates/ferrous-cortex/examples/README.md) for detailed library examples.
 
 ### Command-Line Options
 
@@ -417,7 +442,7 @@ Verbose mode shows both the configuration and execution statistics.
 
 **Example Output:**
 ```bash
-$ ferrous-cortex examples/hello_world.bf --verbose
+$ ferrous-cortex programs/basic/hello_world.bf --verbose
 Configuration:
   Memory model: Fixed(30000 bytes)
   Max steps: unlimited
@@ -506,7 +531,7 @@ ferrous-cortex program.bf --minify -o program.min.bf --verbose
 
 **Example:**
 ```bash
-$ cat examples/line_comments.bf
+$ cat programs/basic/line_comments.bf
 * Line Comment Demo
 * Everything after * is completely ignored!
 
@@ -517,10 +542,10 @@ $ cat examples/line_comments.bf
 ]           * Result: Cell 1 = 70
 >++.        * Add 2, print 'H'
 
-$ ferrous-cortex examples/line_comments.bf --minify
+$ ferrous-cortex programs/basic/line_comments.bf --minify
 ++++++++++[>+++++++<-]>++.
 
-$ ferrous-cortex examples/line_comments.bf --minify --verbose -o min.bf
+$ ferrous-cortex programs/basic/line_comments.bf --minify --verbose -o min.bf
 Minified 514 bytes to 26 bytes (saved to min.bf)
 ```
 
@@ -644,24 +669,38 @@ FerrousCortex/
 │   │   │   ├── location.rs      # Source position tracking
 │   │   │   ├── types.rs         # Type-safe wrappers
 │   │   │   └── stats.rs         # Execution statistics
-│   │   └── benches/
-│   │       ├── interpreter.rs   # Interpreter benchmarks (5 benchmarks)
-│   │       └── parser.rs        # Parser benchmarks (5 benchmarks)
+│   │   ├── benches/
+│   │   │   ├── interpreter.rs   # Interpreter benchmarks (5 benchmarks)
+│   │   │   └── parser.rs        # Parser benchmarks (5 benchmarks)
+│   │   └── examples/            # Rust library usage examples
+│   │       ├── README.md        # Library examples documentation
+│   │       ├── basic_usage.rs   # Basic parsing & execution
+│   │       ├── custom_io.rs     # Custom I/O implementations
+│   │       ├── memory_models.rs # Memory model configuration
+│   │       ├── validation.rs    # Program validation
+│   │       └── minify.rs        # Code minification
 │   └── ferrous-cortex-cli/  # CLI binary crate
 │       ├── Cargo.toml
 │       └── src/
 │           └── main.rs      # CLI interface and entry point
-├── examples/                # Example BrainFuck programs
-│   ├── hello_world.bf
-│   ├── simple.bf
-│   ├── line_comments.bf
-│   ├── errors/              # Error handling demonstrations
-│   │   ├── README.md        # Error examples documentation
-│   │   ├── unmatched_bracket.bf
-│   │   ├── memory_overflow.bf
-│   │   ├── infinite_loop.bf
-│   │   └── validation_warnings.bf
-│   └── ...
+├── programs/                # BrainFuck programs for testing
+│   ├── README.md            # Programs documentation
+│   ├── basic/               # Simple demonstration programs
+│   │   ├── hello_world.bf
+│   │   ├── simple.bf
+│   │   └── line_comments.bf
+│   ├── advanced/            # Complex programs
+│   │   ├── quine.bf
+│   │   └── factor.bf
+│   ├── tests/               # Feature testing programs
+│   │   ├── test_eof.bf
+│   │   └── warnings_test.bf
+│   └── errors/              # Error handling demonstrations
+│       ├── README.md        # Error examples documentation
+│       ├── unmatched_bracket.bf
+│       ├── memory_overflow.bf
+│       ├── infinite_loop.bf
+│       └── validation_warnings.bf
 ├── PRD/                     # Product requirement documents
 │   └── TESTING_STATUS.md    # Testing infrastructure status
 ├── ARCHITECTURE.md          # Architecture and design decisions
