@@ -184,11 +184,9 @@ impl CellBehavior for U8CheckedCells {
         *value = value.checked_add(1).ok_or_else(|| BfError::CellOverflow {
             instruction_index: step_count.into(),
             current_value: 255,
-            hint: format!(
-                "Cell value reached maximum (255) and cannot be incremented further with checked arithmetic. \
+            hint: "Cell value reached maximum (255) and cannot be incremented further with checked arithmetic. \
                  Try using --cell-model wrapping if wrapping behavior is intended, \
-                 or check your program logic for infinite loops."
-            ),
+                 or check your program logic for infinite loops.".to_string(),
         })?;
         Ok(())
     }
@@ -197,11 +195,9 @@ impl CellBehavior for U8CheckedCells {
         *value = value.checked_sub(1).ok_or_else(|| BfError::CellUnderflow {
             instruction_index: step_count.into(),
             current_value: 0,
-            hint: format!(
-                "Cell value reached minimum (0) and cannot be decremented further with checked arithmetic. \
+            hint: "Cell value reached minimum (0) and cannot be decremented further with checked arithmetic. \
                  Try using --cell-model wrapping if wrapping behavior is intended, \
-                 or check your program logic."
-            ),
+                 or check your program logic.".to_string(),
         })?;
         Ok(())
     }
@@ -243,9 +239,9 @@ impl fmt::Display for U8CheckedCells {
 ///     .with_wrapping_cells()
 ///     .build();
 ///
-/// // Wrapping memory + checked cells (debugging)
+/// // Unbounded memory + checked cells (debugging)
 /// let config = ExecutionConfig::builder()
-///     .with_wrapping_memory(30000)
+///     .with_unbounded_memory(1000, 1000000).unwrap()
 ///     .with_checked_cells()
 ///     .build();
 /// ```
@@ -429,64 +425,6 @@ impl fmt::Display for FixedMemory {
     }
 }
 
-/// Wrapping memory model
-///
-/// Pointer wraps around at boundaries.
-/// e.g., at size 30000: pointer 30000 -> 0, pointer -1 -> 29999
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WrappingMemory {
-    size: MemorySize,
-}
-
-impl WrappingMemory {
-    /// Create a new wrapping memory model with the given size
-    pub fn new(size: MemorySize) -> Self {
-        Self { size }
-    }
-}
-
-impl MemoryBehavior for WrappingMemory {
-    fn try_increment_pointer(
-        &self,
-        pointer: &mut MemoryAddress,
-        _memory: &mut Vec<u8>,
-        _step_count: StepCount,
-    ) -> Result<()> {
-        pointer.increment();
-
-        if pointer.get() >= self.size.get() {
-            *pointer = MemoryAddress::new(0); // Wrap around to beginning
-        }
-
-        Ok(())
-    }
-
-    fn try_decrement_pointer(
-        &self,
-        pointer: &mut MemoryAddress,
-        _memory: &[u8],
-        _allow_negative: bool,
-        _step_count: StepCount,
-    ) -> Result<()> {
-        if pointer.get() == 0 {
-            *pointer = MemoryAddress::new(self.size.get() - 1); // Wrap around to end
-        } else {
-            pointer.decrement();
-        }
-        Ok(())
-    }
-
-    fn initial_size(&self) -> MemorySize {
-        self.size
-    }
-}
-
-impl fmt::Display for WrappingMemory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Wrapping({} bytes)", self.size)
-    }
-}
-
 /// Unbounded memory model
 ///
 /// Grows as needed up to a maximum limit.
@@ -607,18 +545,13 @@ pub enum MemoryModel {
     ///
     /// Pointer movement beyond bounds raises `BfError::MemoryOutOfBounds`.
     /// Use this for strict BrainFuck compliance and catching bugs.
+    /// This is the default and recommended for production/JIT targets.
     Fixed(FixedMemory),
-
-    /// Wrapping memory: pointer wraps around at boundaries
-    ///
-    /// Pointer acts like a circular buffer (e.g., pointer N-1 + 1 = 0).
-    /// Use this for programs that rely on circular buffer semantics.
-    Wrapping(WrappingMemory),
 
     /// Unbounded memory: grows as needed up to a maximum limit
     ///
     /// Memory expands dynamically when accessed beyond current size.
-    /// Use this for programs with dynamic memory needs.
+    /// Use this for programs with dynamic memory needs or during development.
     Unbounded(UnboundedMemory),
 }
 
@@ -628,7 +561,6 @@ impl MemoryModel {
     pub fn initial_size(&self) -> MemorySize {
         match self {
             MemoryModel::Fixed(m) => m.initial_size(),
-            MemoryModel::Wrapping(m) => m.initial_size(),
             MemoryModel::Unbounded(m) => m.initial_size(),
         }
     }
@@ -645,7 +577,6 @@ impl MemoryModel {
     ) -> Result<()> {
         match self {
             MemoryModel::Fixed(m) => m.try_increment_pointer(pointer, memory, step_count),
-            MemoryModel::Wrapping(m) => m.try_increment_pointer(pointer, memory, step_count),
             MemoryModel::Unbounded(m) => m.try_increment_pointer(pointer, memory, step_count),
         }
     }
@@ -665,9 +596,6 @@ impl MemoryModel {
             MemoryModel::Fixed(m) => {
                 m.try_decrement_pointer(pointer, memory, allow_negative, step_count)
             }
-            MemoryModel::Wrapping(m) => {
-                m.try_decrement_pointer(pointer, memory, allow_negative, step_count)
-            }
             MemoryModel::Unbounded(m) => {
                 m.try_decrement_pointer(pointer, memory, allow_negative, step_count)
             }
@@ -679,7 +607,6 @@ impl fmt::Display for MemoryModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MemoryModel::Fixed(m) => write!(f, "{}", m),
-            MemoryModel::Wrapping(m) => write!(f, "{}", m),
             MemoryModel::Unbounded(m) => write!(f, "{}", m),
         }
     }
@@ -786,22 +713,6 @@ impl ExecutionConfigBuilder<Unbuilt> {
     /// Set fixed-size memory model
     pub fn with_memory_size(mut self, size: usize) -> ExecutionConfigBuilder<ReadyToBuild> {
         self.memory_model = Some(MemoryModel::Fixed(FixedMemory::new(MemorySize::new(size))));
-        ExecutionConfigBuilder {
-            memory_model: self.memory_model,
-            cell_model: self.cell_model,
-            max_steps: self.max_steps,
-            timeout_ms: self.timeout_ms,
-            eof_behavior: self.eof_behavior,
-            allow_negative_pointer: self.allow_negative_pointer,
-            _state: PhantomData,
-        }
-    }
-
-    /// Set wrapping memory model
-    pub fn with_wrapping_memory(mut self, size: usize) -> ExecutionConfigBuilder<ReadyToBuild> {
-        self.memory_model = Some(MemoryModel::Wrapping(WrappingMemory::new(MemorySize::new(
-            size,
-        ))));
         ExecutionConfigBuilder {
             memory_model: self.memory_model,
             cell_model: self.cell_model,

@@ -23,11 +23,11 @@ struct Cli {
     #[arg(long, default_value = "0")]
     timeout: u64,
 
-    /// Memory size in bytes (for fixed and wrapping models)
+    /// Memory size in bytes (for fixed model)
     #[arg(long, default_value = "30000")]
     memory_size: usize,
 
-    /// Memory model: fixed, wrapping, or unbounded
+    /// Memory model: fixed or unbounded
     #[arg(long, default_value = "fixed")]
     memory_model: String,
 
@@ -162,7 +162,6 @@ fn run() -> Result<(), BfError> {
     // Set memory model (required)
     let builder = match cli.memory_model.to_lowercase().as_str() {
         "fixed" => builder.with_memory_size(cli.memory_size),
-        "wrapping" => builder.with_wrapping_memory(cli.memory_size),
         "unbounded" => {
             match builder.with_unbounded_memory(cli.unbounded_initial, cli.unbounded_max) {
                 Ok(b) => b,
@@ -174,7 +173,7 @@ fn run() -> Result<(), BfError> {
         }
         other => {
             eprintln!(
-                "Error: Invalid memory model '{}'. Valid options: fixed, wrapping, unbounded",
+                "Error: Invalid memory model '{}'. Valid options: fixed, unbounded",
                 other
             );
             std::process::exit(1);

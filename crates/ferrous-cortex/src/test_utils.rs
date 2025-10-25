@@ -122,13 +122,6 @@ pub mod configs {
             .build()
     }
 
-    /// Configuration with wrapping memory.
-    pub fn wrapping_memory(size: usize) -> ExecutionConfig {
-        ExecutionConfigBuilder::new()
-            .with_wrapping_memory(size)
-            .build()
-    }
-
     /// Configuration with unbounded memory.
     ///
     /// # Panics
@@ -214,12 +207,6 @@ mod tests {
     fn test_config_with_step_limit() {
         let err = run_bf_with_config("+[>+]", "", configs::with_step_limit(100)).unwrap_err();
         assert!(matches!(err, BfError::StepLimitExceeded { .. }));
-    }
-
-    #[test]
-    fn test_config_wrapping_memory() {
-        let config = configs::wrapping_memory(100);
-        assert!(matches!(config.memory_model(), MemoryModel::Wrapping(_)));
     }
 
     #[test]

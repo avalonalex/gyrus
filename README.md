@@ -14,9 +14,8 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 - **Line comments** using `*` - makes documentation safe and easy
 - Nested loop support
 - **Multiple memory models** for different use cases
-  - Fixed: Traditional fixed-size array with bounds checking
-  - Wrapping: Circular buffer that wraps at boundaries
-  - Unbounded: Dynamic growth up to configurable limit
+  - Fixed: Traditional fixed-size array with bounds checking (production/JIT target)
+  - Unbounded: Dynamic growth up to configurable limit (development/prototyping)
 - **Configurable execution limits**
   - Maximum step count to prevent infinite loops
   - Execution timeout in milliseconds
@@ -161,8 +160,8 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | `-o, --output <FILE>` | Output file for minified code (stdout if not specified) | - |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
-| `--memory-size <BYTES>` | Memory size in bytes (for fixed/wrapping models) | 30000 |
-| `--memory-model <MODEL>` | Memory model: fixed, wrapping, or unbounded | fixed |
+| `--memory-size <BYTES>` | Memory size in bytes (for fixed model) | 30000 |
+| `--memory-model <MODEL>` | Memory model: fixed or unbounded | fixed |
 | `--cell-model <MODEL>` | Cell model: wrapping (production) or checked (debugging) | wrapping |
 | `--unbounded-initial <BYTES>` | Initial size for unbounded memory model | 1000 |
 | `--unbounded-max <BYTES>` | Maximum size for unbounded memory model | 1000000 |
@@ -299,27 +298,6 @@ ferrous-cortex program.bf --memory-model fixed --memory-size 30000
 - Most compatible with standard BrainFuck programs
 - Best for production use and debugging
 
-### Wrapping Memory
-
-Memory pointer wraps around at boundaries (circular buffer).
-
-```bash
-ferrous-cortex program.bf --memory-model wrapping --memory-size 30000
-```
-
-**Characteristics:**
-- Pointer wraps: position 30000 → 0, position -1 → 29999
-- Never raises memory out-of-bounds errors
-- Some BrainFuck variants use this behavior
-- Useful for programs that rely on wrapping
-
-**Example:**
-```brainfuck
-* With wrapping memory size 10:
->>>>>>>>>>  * Move right 10 times
-+.          * Now at cell 0 (wrapped), increment and output
-```
-
 ### Unbounded Memory
 
 Memory grows dynamically as needed, up to a maximum limit.
@@ -346,8 +324,7 @@ ferrous-cortex program.bf --memory-model unbounded \
 
 ### Choosing a Memory Model
 
-- **Fixed**: Use for standard BrainFuck programs and when you want strict bounds checking
-- **Wrapping**: Use for programs designed for wrapping behavior or when porting from other interpreters
+- **Fixed**: Use for standard BrainFuck programs, strict bounds checking, and production/JIT targets (default)
 - **Unbounded**: Use for programs with unknown memory requirements or when prototyping
 
 ## Cell Models and Arithmetic Behavior
@@ -421,11 +398,11 @@ Error: Cell overflow at instruction 42: attempted to increment cell with value 2
 Since CellModel and MemoryModel are orthogonal, all combinations are valid:
 
 ```bash
-# Fixed memory + Wrapping cells (traditional BrainFuck)
+# Fixed memory + Wrapping cells (traditional BrainFuck, default)
 ferrous-cortex program.bf --memory-model fixed --cell-model wrapping
 
-# Wrapping memory + Checked cells (debug pointer wrapping but catch cell bugs)
-ferrous-cortex program.bf --memory-model wrapping --cell-model checked
+# Fixed memory + Checked cells (strict debugging)
+ferrous-cortex program.bf --memory-model fixed --cell-model checked
 
 # Unbounded memory + Wrapping cells (dynamic memory, standard arithmetic)
 ferrous-cortex program.bf --memory-model unbounded --cell-model wrapping
@@ -437,8 +414,6 @@ ferrous-cortex program.bf --memory-model unbounded --cell-model wrapping
 |--------------|-----------|---------------------|--------------------------|
 | Fixed | Wrapping | Error (out of bounds) | Wraps to 0 |
 | Fixed | Checked | Error (out of bounds) | Error (overflow) |
-| Wrapping | Wrapping | Wraps to other end | Wraps to 0 |
-| Wrapping | Checked | Wraps to other end | Error (overflow) |
 | Unbounded | Wrapping | Grows memory | Wraps to 0 |
 | Unbounded | Checked | Grows memory | Error (overflow) |
 
@@ -890,7 +865,7 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 - [x] Line comments using `*` for safer documentation
 - [x] Code minification with comment stripping
 - [x] Better bracket matching (report multiple errors)
-- [x] Multiple memory models (fixed, wrapping, unbounded)
+- [x] Multiple memory models (fixed, unbounded)
 - [x] Configurable cell arithmetic (wrapping, checked)
 - [x] Cell-model-aware validation
 - [x] Execution statistics tracking

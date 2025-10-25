@@ -57,31 +57,8 @@ fn main() -> Result<(), BfError> {
     }
     println!();
 
-    // Example 3: Wrapping memory
-    println!("Example 3: Wrapping Memory Model");
-    println!("---------------------------------");
-    println!("Pointer wraps around at boundaries (circular buffer)\n");
-
-    let program = ">>>>>>>>>>>>>+."; // Move 13 times (wraps to cell 3), then increment and output
-    let instructions = parse(program)?;
-
-    let config = ExecutionConfigBuilder::new()
-        .with_wrapping_memory(10)
-        .build();
-
-    let mut input = StringIo::empty();
-    let mut output = StringIo::empty();
-
-    let stats = interpret_with_io(&instructions, config.clone(), &mut input, &mut output)?;
-
-    println!("✓ Success with wrapping!");
-    println!("  Memory model: {:?}", config.memory_model());
-    println!("  Peak memory: {} cells", stats.peak_memory_used);
-    println!("  Note: Pointer at position 13 wrapped to position 3 (13 % 10)");
-    println!();
-
-    // Example 4: Unbounded memory
-    println!("Example 4: Unbounded Memory Model");
+    // Example 3: Unbounded memory
+    println!("Example 3: Unbounded Memory Model");
     println!("----------------------------------");
     println!("Memory grows dynamically as needed\n");
 
