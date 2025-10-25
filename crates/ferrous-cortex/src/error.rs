@@ -142,6 +142,24 @@ pub enum BfError {
 
     #[error("Configuration error: {message}")]
     ConfigurationError { message: String },
+
+    #[error(
+        "Cell overflow at instruction {instruction_index}: attempted to increment cell with value {current_value}"
+    )]
+    CellOverflow {
+        instruction_index: InstructionIndex,
+        current_value: u8,
+        hint: String,
+    },
+
+    #[error(
+        "Cell underflow at instruction {instruction_index}: attempted to decrement cell with value {current_value}"
+    )]
+    CellUnderflow {
+        instruction_index: InstructionIndex,
+        current_value: u8,
+        hint: String,
+    },
 }
 
 impl BfError {
@@ -152,6 +170,8 @@ impl BfError {
             BfError::FileError { hint, .. } => Some(hint),
             BfError::ExecutionTimeout { hint, .. } => Some(hint),
             BfError::StepLimitExceeded { hint, .. } => Some(hint),
+            BfError::CellOverflow { hint, .. } => Some(hint),
+            BfError::CellUnderflow { hint, .. } => Some(hint),
             _ => None,
         }
     }
