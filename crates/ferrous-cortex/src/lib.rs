@@ -26,4 +26,4 @@ pub use minify::minify;
 pub use parser::parse;
 pub use stats::ExecutionStats;
 pub use types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};
-pub use validator::{validate, validate_with_cell_model};
+pub use validator::validate;

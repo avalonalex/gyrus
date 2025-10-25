@@ -24,7 +24,7 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 - **Program validation** with static analysis
   - Detects empty loops, infinite loops, extreme nesting
   - Identifies suspicious patterns
-  - Strict mode for CI/CD integration
+  - Always validates for production target (u8 wrapping)
 - **Code minification** - strip comments for compact programs
   - 95%+ size reduction typical
   - Preserves functionality
@@ -157,7 +157,6 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 |------|-------------|---------|
 | `-v, --verbose` | Show detailed execution information and statistics | false |
 | `--validate` | Validate program and show warnings (does not execute) | false |
-| `--strict` | Treat warnings as errors and fail (executes only if no warnings) | false |
 | `--minify` | Strip all comments and output only BF commands | false |
 | `-o, --output <FILE>` | Output file for minified code (stdout if not specified) | - |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
@@ -494,18 +493,18 @@ ferrous-cortex programs/basic/hello_world.bf --verbose
 #   Cell model: U8Wrapping
 ```
 
-**Debug mode with strict checking:**
+**Debug mode with overflow checking:**
 ```bash
-ferrous-cortex my_program.bf --cell-model checked --strict
-# Will catch both validation warnings AND runtime overflow errors
+ferrous-cortex my_program.bf --cell-model checked
+# Will catch runtime overflow/underflow errors during execution
 ```
 
 **Testing with different models:**
 ```bash
-# Test with standard wrapping
+# Test with standard wrapping (production)
 ferrous-cortex program.bf --cell-model wrapping
 
-# Test with strict checking to find bugs
+# Test with checked mode to find overflow bugs
 ferrous-cortex program.bf --cell-model checked
 ```
 
@@ -632,24 +631,20 @@ FerrousCortex can validate your BrainFuck programs and warn about potential issu
 ```bash
 # Validate only (does not execute)
 ferrous-cortex program.bf --validate
-
-# Strict mode: validate and execute only if no warnings
-ferrous-cortex program.bf --strict
 ```
 
-### Validation Modes
+### What Validation Does
 
 **`--validate` (Lint Mode)**
 - Parses and analyzes the code for issues
-- Shows all warnings
+- Shows all warnings (or "No warnings found")
 - Never executes the program
 - Useful for checking code quality without running
 
-**`--strict` (Strict Execution Mode)**
-- Validates the program first
-- If warnings found: exits with error (does not execute)
-- If no warnings: continues and executes the program
-- Useful for CI/CD pipelines and production environments
+**Validation Target: U8 Wrapping**
+- Validation ALWAYS assumes u8 wrapping (production/JIT target)
+- Warns about inefficient patterns for standard BrainFuck
+- Independent of runtime cell model (`--cell-model` is for runtime only)
 
 ### Warning Types
 
@@ -666,11 +661,11 @@ The validator checks for:
 # Development: Check for issues without running
 ferrous-cortex program.bf --validate
 
-# Production: Only run if code is clean
-ferrous-cortex program.bf --strict
+# CI/CD: Validate, then run if clean
+ferrous-cortex program.bf --validate && ferrous-cortex program.bf
 
-# CI/CD: Combine with verbose mode
-ferrous-cortex program.bf --strict --verbose
+# CI/CD with verbose output
+ferrous-cortex program.bf --validate && ferrous-cortex program.bf --verbose
 ```
 
 ## Code Minification
@@ -892,7 +887,6 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 - [x] Verbose mode for diagnostics
 - [x] Comprehensive error handling
 - [x] Validation pass with warnings
-- [x] Strict mode for CI/CD
 - [x] Line comments using `*` for safer documentation
 - [x] Code minification with comment stripping
 - [x] Better bracket matching (report multiple errors)

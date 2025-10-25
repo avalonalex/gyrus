@@ -3,11 +3,22 @@
 //! This module provides static analysis of BrainFuck programs to detect
 //! common issues, suspicious patterns, and potential problems.
 //!
-//! # Validation Assumptions
+//! # Validation Target: U8 Wrapping (Production/JIT)
 //!
-//! The validator currently makes specific assumptions about the execution model:
+//! **IMPORTANT**: Validation ALWAYS assumes **u8 wrapping cell arithmetic**.
+//! This is the production target for JIT/AOT compilation.
 //!
-//! ## Cell Arithmetic (Currently Hardcoded)
+//! ## Why U8 Wrapping Only?
+//!
+//! Validation is designed to help you write efficient BrainFuck code that will:
+//! - Compile efficiently to native code (JIT/AOT)
+//! - Follow standard BrainFuck semantics
+//! - Avoid common performance pitfalls
+//!
+//! The cell model (`--cell-model`) is a **runtime debugging tool** and does NOT
+//! affect static validation. Validation always targets production (u8 wrapping).
+//!
+//! ## Cell Arithmetic Assumptions (U8 Wrapping)
 //!
 //! - **Cell type**: `u8` (0-255)
 //! - **Increment overflow**: `255 + 1 = 0` (wraps to zero)
@@ -19,25 +30,14 @@
 //! - `[-]` is valid and idiomatic (decrements until 0, terminates efficiently)
 //! - `[--]` is inefficient but valid (warns to use `[-]` instead)
 //!
-//! ## Memory Model (Mostly Independent)
+//! ## Memory Model Independence
 //!
-//! Validation warnings are mostly independent of the memory model
-//! (Fixed/Wrapping/Unbounded), with a few exceptions:
+//! Validation warnings are independent of the memory model (Fixed/Wrapping/Unbounded):
 //!
 //! - **Extreme nesting** (depth > 10) warns regardless of memory model
 //! - **Empty loops** `[]` warn regardless of memory model
 //! - **Pointer seeking patterns** like `[>]` and `[<]` are NOT warned about,
 //!   as they are idiomatic BrainFuck patterns for seeking non-zero cells
-//!
-//! ## Cell-Model-Aware Validation
-//!
-//! Validation is now cell-model-aware using `validate_with_cell_model()`:
-//!
-//! - **U8Wrapping**: `[+]` → inefficient (~256 iterations), not infinite - standard BF behavior
-//! - **U8Checked**: `[+]` → will error on overflow (255+1 panics) - strict debugging mode
-//!
-//! Future cell models (I8Wrapping, U16Wrapping) will also be supported with
-//! model-specific validation logic.
 //!
 //! # Examples
 //!
@@ -50,7 +50,7 @@
 //! let warnings = validate(&instructions);
 //! assert_eq!(warnings.len(), 0);
 //!
-//! // Inefficient pattern - warning (NOT infinite, just inefficient)
+//! // Inefficient pattern - warning (NOT infinite with u8 wrapping, just inefficient)
 //! let code = "[+]";  // Loops ~256 times, wraps 255→0, then exits
 //! let instructions = parse(code).unwrap();
 //! let warnings = validate(&instructions);
@@ -63,23 +63,38 @@
 //! assert_eq!(warnings.len(), 0);
 //! ```
 
-use crate::config::CellModel;
 use crate::error::BfWarning;
 use crate::instruction::Instruction;
 use crate::location::SourceLocation;
 
 /// Validate parsed instructions for common issues and potential problems
 ///
-/// This function assumes U8 wrapping cell arithmetic (the default).
-/// For cell-model-aware validation, use [`validate_with_cell_model`].
+/// **IMPORTANT**: This function ALWAYS assumes **u8 wrapping cell arithmetic**,
+/// which is the production target for JIT/AOT compilation.
+///
+/// The cell model (`--cell-model`) is a runtime debugging tool and does NOT
+/// affect static validation. This function validates for standard BrainFuck
+/// semantics (u8 wrapping) regardless of what cell model you use at runtime.
 ///
 /// Returns a vector of warnings for suspicious patterns and potential bugs.
 /// Programs with warnings may still execute successfully, but likely contain
 /// errors or inefficiencies.
 ///
+/// # Validation Assumptions
+///
+/// - **Cell type**: `u8` with wrapping arithmetic (production target)
+/// - **Memory model**: Independent (warnings apply to all memory models)
+/// - **Target**: Efficient code for JIT/AOT compilation
+///
+/// # Warnings Detected
+///
+/// - **Empty loops** `[]` - Dead code
+/// - **Inefficient increment loops** `[+]`, `[++]` - Slow with u8 wrapping
+/// - **Inefficient decrement loops** `[--]`, `[---]` - Use `[-]` instead
+/// - **Extreme nesting** - Depth > 10 levels
+///
 /// # Current Limitations
 ///
-/// - Assumes `u8` cells with wrapping arithmetic
 /// - Cannot detect all infinite loops (see GCD analysis in code for [+*n] patterns)
 /// - Does not track starting cell values (so warnings may be conservative)
 /// - Does not perform data flow analysis
@@ -89,42 +104,11 @@ use crate::location::SourceLocation;
 ///
 /// - Module documentation for detailed assumptions about overflow behavior
 /// - [`BfWarning`] for the types of warnings that can be produced
-/// - [`validate_with_cell_model`] for cell-model-aware validation
 pub fn validate(instructions: &[Instruction]) -> Vec<BfWarning> {
-    validate_with_cell_model(instructions, &CellModel::default())
-}
-
-/// Validate parsed instructions with cell-model-aware analysis
-///
-/// This function provides cell-model-aware validation, adjusting warnings
-/// based on the specific cell arithmetic model being used.
-///
-/// # Cell Model Behaviors
-///
-/// Different cell models change what patterns are problematic:
-///
-/// - **U8Wrapping**: `[+]` is inefficient (~256 iterations) but terminates - standard BF behavior
-/// - **U8Checked**: `[+]` will error on overflow (255+1 raises error) - strict debugging mode
-///
-/// # Examples
-///
-/// ```rust
-/// use ferrous_cortex::{parse, validate_with_cell_model, CellModel, U8WrappingCells};
-///
-/// let instructions = parse("[+]").unwrap();
-///
-/// // With wrapping: warns about inefficiency
-/// let warnings = validate_with_cell_model(&instructions, &CellModel::U8Wrapping(U8WrappingCells));
-/// assert!(!warnings.is_empty());  // Inefficient but not infinite
-/// ```
-pub fn validate_with_cell_model(
-    instructions: &[Instruction],
-    cell_model: &CellModel,
-) -> Vec<BfWarning> {
     let mut warnings = Vec::new();
     let location = SourceLocation::start(); // Placeholder - would need actual tracking
 
-    validate_instructions(instructions, &mut warnings, 0, location, cell_model);
+    validate_instructions(instructions, &mut warnings, 0, location);
     warnings
 }
 
@@ -133,7 +117,6 @@ fn validate_instructions(
     warnings: &mut Vec<BfWarning>,
     depth: usize,
     location: SourceLocation,
-    cell_model: &CellModel,
 ) {
     // Check for extreme nesting
     if depth > 10 {
@@ -146,11 +129,11 @@ fn validate_instructions(
             if body.is_empty() {
                 warnings.push(BfWarning::EmptyLoop { location });
             } else {
-                // Check for suspicious patterns (cell-model-aware)
-                check_suspicious_loop_patterns(body, warnings, location, cell_model);
+                // Check for suspicious patterns (assumes u8 wrapping)
+                check_suspicious_loop_patterns(body, warnings, location);
 
                 // Recursively validate nested loops
-                validate_instructions(body, warnings, depth + 1, location, cell_model);
+                validate_instructions(body, warnings, depth + 1, location);
             }
         }
     }
@@ -170,47 +153,33 @@ fn check_suspicious_loop_patterns(
     body: &[Instruction],
     warnings: &mut Vec<BfWarning>,
     location: SourceLocation,
-    cell_model: &CellModel,
 ) {
     // Note: [>] and [<] are common patterns for seeking in BF, so we don't warn about them
     // Note: [-] is a common pattern for clearing a cell, so we don't warn about it
 
-    // Check for [+] and variants - behavior depends on cell model!
+    // Check for [+] and variants - assumes u8 wrapping (production target)
     let all_increments = body
         .iter()
         .all(|i| matches!(i, Instruction::IncrementValue));
     if all_increments && !body.is_empty() {
-        // Generate cell-model-aware warning for increment loops
-        let reason = match cell_model {
-            CellModel::U8Wrapping(_) => {
-                // With wrapping arithmetic, termination depends on GCD
-                let gcd_value = gcd(body.len(), 256);
-                if body.len() == 1 {
-                    "Inefficient pattern: loops ~256 times before reaching zero. Use [-] to clear a cell."
-                        .to_string()
-                } else if gcd_value > 1 {
-                    format!(
-                        "Suspicious pattern: may be infinite or inefficient depending on starting cell value. \
-                         Increment by {} only visits multiples of {} (gcd={}).",
-                        body.len(),
-                        gcd_value,
-                        gcd_value
-                    )
-                } else {
-                    format!(
-                        "Inefficient pattern: loops ~{} times before reaching zero. Use [-] to clear a cell.",
-                        256 / body.len()
-                    )
-                }
-            }
-            CellModel::U8Checked(_) => {
-                // With checked arithmetic, will error on overflow
-                format!(
-                    "Suspicious pattern: will error on overflow with checked arithmetic. \
-                     Cell will reach 255 and then increment will panic. \
-                     Consider using wrapping arithmetic or use [-] to clear cells."
-                )
-            }
+        // With u8 wrapping arithmetic, termination depends on GCD
+        let gcd_value = gcd(body.len(), 256);
+        let reason = if body.len() == 1 {
+            "Inefficient pattern: loops ~256 times before reaching zero. Use [-] to clear a cell."
+                .to_string()
+        } else if gcd_value > 1 {
+            format!(
+                "Suspicious pattern: may be infinite or inefficient depending on starting cell value. \
+                 Increment by {} only visits multiples of {} (gcd={}).",
+                body.len(),
+                gcd_value,
+                gcd_value
+            )
+        } else {
+            format!(
+                "Inefficient pattern: loops ~{} times before reaching zero. Use [-] to clear a cell.",
+                256 / body.len()
+            )
         };
 
         warnings.push(BfWarning::SuspiciousPattern {
@@ -221,7 +190,6 @@ fn check_suspicious_loop_patterns(
     }
 
     // Check for [--] and variants - inefficient compared to [-]
-    // Behavior is similar across all cell models
     let all_decrements = body
         .iter()
         .all(|i| matches!(i, Instruction::DecrementValue));
