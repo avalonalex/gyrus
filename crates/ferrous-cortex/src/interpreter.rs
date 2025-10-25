@@ -356,36 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_model_wrapping_forward() {
-        // Wrapping memory model should wrap from end to beginning
-        let source = format!("{}+.", ">".repeat(10)); // Move to cell 10, increment, output
-        let instructions = parse(&source).unwrap();
-
-        let config = ExecutionConfigBuilder::new()
-            .with_wrapping_memory(10)
-            .build(); // 10 cells (0-9)
-
-        // Should wrap to cell 0 and output value
-        let result = interpret_with_config(&instructions, config);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_memory_model_wrapping_backward() {
-        // Wrapping memory model should wrap from beginning to end
-        let source = "<+."; // Move left from 0, increment, output
-        let instructions = parse(source).unwrap();
-
-        let config = ExecutionConfigBuilder::new()
-            .with_wrapping_memory(10)
-            .build(); // 10 cells
-
-        // Should wrap to cell 9
-        let result = interpret_with_config(&instructions, config);
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn test_memory_model_unbounded_growth() {
         // Unbounded memory should grow as needed
         let source = format!("{}+.", ">".repeat(100)); // Move right 100 times
@@ -427,21 +397,6 @@ mod tests {
 
         assert!(result.is_err());
         assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
-    }
-
-    #[test]
-    fn test_memory_model_wrapping_multiple_wraps() {
-        // Test multiple wraps in wrapping mode
-        let source = format!("{}>+.", ">".repeat(25)); // Move right 25 times (2.5 wraps with size 10)
-        let instructions = parse(&source).unwrap();
-
-        let config = ExecutionConfigBuilder::new()
-            .with_wrapping_memory(10)
-            .build();
-        let result = interpret_with_config(&instructions, config);
-
-        // Should end at cell 5 (25 % 10 = 5), then move to 6
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -942,7 +897,7 @@ mod tests {
         let source = format!("{}", "+".repeat(256)); // Should error on cell arithmetic
 
         let config = ExecutionConfigBuilder::new()
-            .with_wrapping_memory(100) // Wrapping MEMORY
+            .with_memory_size(100) // Fixed MEMORY
             .with_checked_cells() // Checked CELLS
             .build();
 

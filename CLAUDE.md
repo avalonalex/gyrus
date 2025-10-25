@@ -95,7 +95,7 @@ FerrousCortex separates two independent concerns for maximum flexibility:
 1. **MemoryModel**: Controls pointer movement (`>`, `<` instructions)
 2. **CellModel**: Controls cell arithmetic (`+`, `-` instructions)
 
-These can be mixed independently (e.g., Fixed memory + Checked cells, or Wrapping memory + Wrapping cells).
+These can be mixed independently (e.g., Fixed memory + Checked cells, or Unbounded memory + Wrapping cells).
 
 ### CellModel: Cell Arithmetic Behavior
 
@@ -184,15 +184,15 @@ The validator (`validator.rs`) provides **cell-model-aware** warnings via `valid
 
 Any combination is valid:
 ```rust
-// Fixed memory + Wrapping cells (default - traditional BF)
+// Fixed memory + Wrapping cells (default - traditional BF, production/JIT)
 ExecutionConfig::builder()
     .with_memory_size(30000)
     .with_wrapping_cells()
     .build()
 
-// Wrapping memory + Checked cells (catch bugs with circular buffer)
+// Fixed memory + Checked cells (catch overflow bugs)
 ExecutionConfig::builder()
-    .with_wrapping_memory(30000)
+    .with_memory_size(30000)
     .with_checked_cells()
     .build()
 
@@ -405,7 +405,7 @@ The test suite covers:
 - **Comment tests**: Line comments, BF commands in comments, multiline (4 tests)
 - **Minify tests**: Simple, line comments, nested loops, round-trip (5 tests)
 - **Bracket matching tests**: Multiple errors, single errors, location tracking (9 tests)
-- **Memory model tests**: Fixed, wrapping, unbounded behaviors (7 tests)
+- **Memory model tests**: Fixed, unbounded behaviors (4 tests)
 - **Statistics tests**: Step counting, loop iterations, I/O tracking, memory tracking (6 tests)
 - **Total**: 50 tests
 
@@ -441,7 +441,7 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 - ✅ Code minification (Phase 4.1)
 - ✅ Better bracket matching - multiple errors (Phase 2.2)
 - ✅ Multiple memory models (Phase 3.2)
-  - Fixed, Wrapping, and Unbounded models
+  - Fixed and Unbounded models (aligned with JIT/AOT goals)
   - CLI flags for model selection
   - Comprehensive testing
 - ✅ Execution statistics tracking (Community feature)
