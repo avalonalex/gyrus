@@ -294,13 +294,10 @@ mod tests {
 
     #[test]
     fn test_step_limit() {
-        let source = "+[+]"; // Infinite loop
-        let instructions = parse(source).unwrap();
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(MEMORY_SIZE)
-            .with_max_steps(100)
-            .build();
-        let result = interpret_with_config(&instructions, config);
+        // Using test_utils for cleaner error testing
+        use crate::test_utils::{run_bf_with_config, configs};
+
+        let result = run_bf_with_config("+[+]", "", configs::with_step_limit(100));
         assert!(matches!(
             result,
             Err(BfError::StepLimitExceeded { limit: 100, .. })
@@ -309,10 +306,11 @@ mod tests {
 
     #[test]
     fn test_custom_memory_size() {
+        // Using test_utils for cleaner config testing
+        use crate::test_utils::{run_bf_with_config, configs};
+
         let source = ">".repeat(101);
-        let instructions = parse(&source).unwrap();
-        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
-        let result = interpret_with_config(&instructions, config);
+        let result = run_bf_with_config(&source, "", configs::small_memory());
         assert!(result.is_err());
         assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
     }
@@ -553,59 +551,41 @@ mod tests {
 
     #[test]
     fn test_string_io_echo() {
-        // Test that we can use StringIo to capture output
-        use crate::io::StringIo;
+        // Test that we can use StringIo to capture output (using test_utils)
+        use crate::test_utils::run_bf;
 
-        let source = ",[.,]"; // Echo program: read and output until EOF
-        let instructions = parse(source).unwrap();
-        let config = ExecutionConfig::default();
+        let (output, stats) = run_bf(",[.,]", "Hello").unwrap();
 
-        let mut input = StringIo::new("Hello");
-        let mut output = StringIo::empty();
-        let stats = interpret_with_io(&instructions, config, &mut input, &mut output).unwrap();
-
-        assert_eq!(output.output_string(), "Hello");
+        assert_eq!(output, "Hello");
         assert_eq!(stats.bytes_read, 5);
         assert_eq!(stats.bytes_written, 5);
     }
 
     #[test]
     fn test_string_io_hello_world() {
-        // Test classic Hello World program with string output
-        use crate::io::StringIo;
+        // Test classic Hello World program with string output (using test_utils)
+        use crate::test_utils::run_bf;
 
         let source = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
-        let instructions = parse(source).unwrap();
-        let config = ExecutionConfig::default();
+        let (output, stats) = run_bf(source, "").unwrap();
 
-        let mut input = StringIo::empty();
-        let mut output = StringIo::empty();
-        let stats = interpret_with_io(&instructions, config, &mut input, &mut output).unwrap();
-
-        assert_eq!(output.output_string(), "Hello World!\n");
+        assert_eq!(output, "Hello World!\n");
         assert_eq!(stats.bytes_written, 13);
     }
 
     #[test]
     fn test_string_io_add_numbers() {
-        // Test program that adds two single-digit numbers
-        use crate::io::StringIo;
+        // Test program that adds two single-digit numbers (using test_utils)
+        use crate::test_utils::run_bf;
 
         // Program: read two numbers, add them, output result
         // ,>     Read first number into cell 0, move to cell 1
         // ,      Read second number into cell 1
         // [<+>-] Add cell 1 to cell 0 (move all from cell 1 to cell 0)
         // <.     Move back to cell 0 and output result
-        let source = ",>,[-<+>]<.";
-        let instructions = parse(source).unwrap();
-        let config = ExecutionConfig::default();
+        let (output, stats) = run_bf(",>,[-<+>]<.", "\x05\x03").unwrap();
 
-        // ASCII '5' = 53, ASCII '3' = 51, sum = 104 = ASCII 'h'
-        let mut input = StringIo::new("\x05\x03");
-        let mut output = StringIo::empty();
-        let stats = interpret_with_io(&instructions, config, &mut input, &mut output).unwrap();
-
-        assert_eq!(output.output_bytes(), &[8]); // 5 + 3 = 8
+        assert_eq!(output.as_bytes(), &[8]); // 5 + 3 = 8
         assert_eq!(stats.bytes_read, 2);
         assert_eq!(stats.bytes_written, 1);
     }

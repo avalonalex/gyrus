@@ -535,8 +535,80 @@ The minified code is functionally identical to the original.
 
 ### Running Tests
 
+FerrousCortex has a comprehensive testing infrastructure with **97 tests** including unit tests, property-based tests, and benchmarks.
+
+#### Run All Tests
+
 ```bash
+# Run all unit tests (84 tests)
 cargo test
+
+# Run with output
+cargo test -- --nocapture
+```
+
+#### Run Property-Based Tests
+
+Property-based tests use [proptest](https://github.com/proptest-rs/proptest) to verify properties hold across thousands of randomly generated inputs:
+
+```bash
+# Run only property tests
+cargo test proptest
+
+# Run property tests with more cases (default is 100)
+PROPTEST_CASES=1000 cargo test proptest
+```
+
+**What property tests verify:**
+- Parsing never panics on any input
+- Valid BrainFuck programs always parse successfully
+- Parsing is deterministic (same input = same output)
+- Balanced brackets always parse correctly
+- Comments don't affect program validity
+
+#### Run Benchmarks
+
+Benchmarks use [criterion](https://github.com/bheisler/criterion.rs) to measure performance with statistical analysis:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Run specific benchmark suite
+cargo bench --bench interpreter
+cargo bench --bench parser
+
+# Run specific benchmark
+cargo bench -- simple_arithmetic
+```
+
+**Benchmark suites:**
+- **Interpreter benchmarks**: Arithmetic, loops, pointer movement, I/O, Hello World
+- **Parser benchmarks**: Simple programs, nested loops, long programs, comments
+
+Benchmark results are saved in `target/criterion/` with detailed HTML reports including:
+- Performance graphs
+- Regression analysis
+- Statistical comparisons
+
+**View HTML reports:**
+```bash
+# After running benchmarks
+open target/criterion/report/index.html
+```
+
+#### Test Organization
+
+```
+crates/ferrous-cortex/
+├── src/
+│   ├── test_utils.rs        # Test helper functions
+│   ├── parser.rs            # Unit tests + property tests
+│   ├── interpreter.rs       # Unit tests
+│   └── ...
+└── benches/
+    ├── interpreter.rs       # Interpreter benchmarks
+    └── parser.rs            # Parser benchmarks
 ```
 
 ### Development Build
@@ -558,17 +630,23 @@ FerrousCortex/
 ├── crates/
 │   ├── ferrous-cortex/      # Core library crate
 │   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs           # Module interface (21 lines)
-│   │       ├── parser.rs        # Source → AST parsing (+ 22 tests)
-│   │       ├── interpreter.rs   # AST → Execution (+ 20 tests)
-│   │       ├── validator.rs     # AST validation (+ 5 tests)
-│   │       ├── minify.rs        # AST → Source (+ 5 tests)
-│   │       ├── error.rs         # Error types and formatting
-│   │       ├── config.rs        # Configuration types
-│   │       ├── instruction.rs   # AST node definition
-│   │       ├── location.rs      # Source position tracking
-│   │       └── stats.rs         # Execution statistics
+│   │   ├── src/
+│   │   │   ├── lib.rs           # Module interface (21 lines)
+│   │   │   ├── parser.rs        # Source → AST parsing (+ 22 tests + 5 property tests)
+│   │   │   ├── interpreter.rs   # AST → Execution (+ 20 tests)
+│   │   │   ├── validator.rs     # AST validation (+ 5 tests)
+│   │   │   ├── minify.rs        # AST → Source (+ 5 tests)
+│   │   │   ├── test_utils.rs    # Test helper functions (+ 12 tests)
+│   │   │   ├── io.rs            # I/O abstraction traits
+│   │   │   ├── error.rs         # Error types and formatting
+│   │   │   ├── config.rs        # Configuration types
+│   │   │   ├── instruction.rs   # AST node definition
+│   │   │   ├── location.rs      # Source position tracking
+│   │   │   ├── types.rs         # Type-safe wrappers
+│   │   │   └── stats.rs         # Execution statistics
+│   │   └── benches/
+│   │       ├── interpreter.rs   # Interpreter benchmarks (5 benchmarks)
+│   │       └── parser.rs        # Parser benchmarks (5 benchmarks)
 │   └── ferrous-cortex-cli/  # CLI binary crate
 │       ├── Cargo.toml
 │       └── src/
@@ -585,6 +663,7 @@ FerrousCortex/
 │   │   └── validation_warnings.bf
 │   └── ...
 ├── PRD/                     # Product requirement documents
+│   └── TESTING_STATUS.md    # Testing infrastructure status
 ├── ARCHITECTURE.md          # Architecture and design decisions
 ├── Cargo.toml               # Workspace root
 └── README.md
@@ -599,9 +678,11 @@ The core library follows idiomatic Rust structure with clear separation of conce
 - **interpreter.rs** (484 lines): Executes AST with configurable runtime
 - **validator.rs** (145 lines): Analyzes AST for warnings and best practices
 - **minify.rs** (75 lines): Converts AST back to minimal source code
-- **Supporting modules**: error, config, instruction, location, stats
+- **test_utils.rs**: Test helper functions and utilities
+- **io.rs**: I/O abstraction traits (BfInput, BfOutput, StringIo)
+- **Supporting modules**: error, config, instruction, location, stats, types
 
-All modules include comprehensive tests (52 total) co-located with implementation.
+All modules include comprehensive tests (**97 total**: 84 unit tests, 5 property tests, 12 test utilities tests) with co-located implementation.
 
 ## Roadmap
 
@@ -620,6 +701,10 @@ All modules include comprehensive tests (52 total) co-located with implementatio
 - [x] Multiple memory models (fixed, wrapping, unbounded)
 - [x] Execution statistics tracking
 - [x] Advanced I/O error handling (EOF behavior)
+- [x] I/O abstraction for library usage and testing
+- [x] Comprehensive testing infrastructure (97 tests)
+- [x] Property-based testing with proptest
+- [x] Performance benchmarking with criterion
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
