@@ -91,7 +91,6 @@ fn test_quine() {
 }
 
 #[test]
-#[ignore] // Factor is slow and needs input handling
 fn test_factor() {
     let output = run_program(
         "advanced/factor.bf",

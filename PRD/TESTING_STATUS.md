@@ -4,7 +4,7 @@
 
 ## Summary
 
-Testing infrastructure has been significantly improved with **109 total tests** (up from 67 initial).
+Testing infrastructure has been significantly improved with **110 total tests** (up from 67 initial).
 
 ## Completed Work
 
@@ -55,13 +55,14 @@ Testing infrastructure has been significantly improved with **109 total tests** 
 - Created `programs/test_manifest.toml` documenting test expectations
 - Created `tests/program_corpus.rs` with 13 integration tests
 - Tests verify real BrainFuck programs execute correctly
-- Includes basic programs (hello_world, simple), advanced (quine), EOF tests, error tests
+- Includes basic programs (hello_world, simple), advanced (quine, factor), EOF tests, error tests
 - Helper functions `run_program()` and `run_program_bytes()` for testing
 - Tests cover: output verification, error handling, EOF behaviors, memory limits
+- All tests use mock I/O (StringIo) for fast, deterministic execution
 
 **Test Categories**:
 - Basic programs: hello_world, simple, line_comments (3 tests)
-- Advanced programs: quine, factor (2 tests, 1 ignored for slowness)
+- Advanced programs: quine, factor (2 tests)
 - EOF behavior tests: SetZero, SetNegOne, NoChange (3 tests)
 - Error tests: unmatched brackets, memory overflow, infinite loop (3 tests)
 - Stress tests: deep nesting (1 test)
@@ -71,12 +72,10 @@ Testing infrastructure has been significantly improved with **109 total tests** 
 
 | Category | Count | Status |
 |----------|-------|--------|
-| Unit tests (existing) | 67 | ✅ Passing |
-| Test utilities tests | 12 | ✅ Passing |
-| Property-based tests | 5 | ✅ Passing |
-| Integration tests | 12 (+1 ignored) | ✅ Passing |
-| CLI tests | 13 | ✅ Passing |
-| **Total** | **109 tests** | ✅ All passing |
+| Unit tests (library) | 84 | ✅ Passing |
+| Integration tests | 13 | ✅ Passing |
+| Doc tests | 13 | ✅ Passing |
+| **Total** | **110 tests** | ✅ All passing |
 | Benchmarks | 10 | ✅ Compiling |
 
 ## Remaining Work (Per PRD)
@@ -101,20 +100,21 @@ Additional programs that could be added to the corpus:
 ## Impact
 
 **Before**: 67 tests, no property testing, no benchmarks, no integration tests
-**After**: **109 tests**, 5 property tests, 10 benchmarks, 12 integration tests
+**After**: **110 tests**, 5 property tests, 10 benchmarks, 13 integration tests
 
 **Benefits**:
 - ✅ Reduced test boilerplate with utilities (test_utils.rs)
 - ✅ Catch edge cases with property-based testing (proptest)
 - ✅ Performance tracking with benchmarks (criterion)
 - ✅ Real-world verification with integration tests (program corpus)
-- ✅ Better confidence in correctness (63% more tests)
+- ✅ Better confidence in correctness (64% more tests)
 - ✅ Foundation for future optimizations (baseline metrics)
 - ✅ Documented test expectations (test_manifest.toml)
+- ✅ Fast, deterministic testing with mock I/O (StringIo)
 
 ## Next Steps
 
-1. ~~Add integration tests~~ ✅ DONE - 12 integration tests with program corpus
+1. ~~Add integration tests~~ ✅ DONE - 13 integration tests with program corpus
 2. **Fix stub programs** (Optional) - Replace fibonacci.bf and rot13.bf with working implementations
 3. **Expand property tests** (Optional) - Add interpreter properties (determinism, I/O correctness)
 4. **Expand program corpus** (Optional) - Add reverse, 99_bottles, mandelbrot, prime, hanoi
@@ -124,7 +124,7 @@ Additional programs that could be added to the corpus:
 ## Running Tests
 
 ```bash
-# All tests (109 total)
+# All tests (110 total)
 cargo test
 
 # Just integration tests
