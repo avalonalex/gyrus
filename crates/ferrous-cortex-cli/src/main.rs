@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use ferrous_cortex::{
     BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
-    interpret_with_config, minify, parse, validate_with_cell_model,
+    interpret_with_config, minify, parse, validate,
 };
 
 #[derive(Parser)]
@@ -54,10 +54,6 @@ struct Cli {
     /// Validate program and show warnings (does not execute)
     #[arg(long)]
     validate: bool,
-
-    /// Treat warnings as errors and fail (executes only if no warnings)
-    #[arg(long)]
-    strict: bool,
 
     /// Minify the program (strip all comments and output only BF commands)
     #[arg(long)]
@@ -142,36 +138,22 @@ fn run() -> Result<(), BfError> {
         }
     };
 
-    // Validate if requested (cell-model-aware)
-    if cli.validate || cli.strict {
-        let warnings = validate_with_cell_model(&instructions, &cell_model);
+    // Validate if requested (always assumes u8 wrapping - production target)
+    if cli.validate {
+        let warnings = validate(&instructions);
 
         if !warnings.is_empty() {
             eprintln!("Validation found {} warning(s):\n", warnings.len());
             for warning in &warnings {
                 eprintln!("{}\n", warning);
             }
-
-            if cli.strict {
-                eprintln!("Error: Warnings treated as errors in strict mode");
-                std::process::exit(1);
-            } else {
-                // --validate mode: exit without executing
-                return Ok(());
-            }
         } else {
             // No warnings found
-            if cli.verbose {
-                eprintln!("Validation: No warnings found\n");
-            }
-
-            if cli.validate {
-                // --validate mode: exit without executing even if clean
-                eprintln!("Validation: No warnings found");
-                return Ok(());
-            }
-            // --strict mode with no warnings: continue to execution
+            eprintln!("Validation: No warnings found");
         }
+
+        // --validate mode: always exit without executing
+        return Ok(());
     }
 
     // Build execution config using enhanced builder

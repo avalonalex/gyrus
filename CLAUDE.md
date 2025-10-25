@@ -68,11 +68,10 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 **CLI** (`crates/ferrous-cortex-cli/src/main.rs`)
    - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
-   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--strict`, `--minify`, `-o/--output`, `--eof-behavior`
+   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
-   - Validate mode: Parse → validate → show warnings (no execution)
-   - Strict mode: Parse → validate → execute if clean (exits on warnings)
+   - Validate mode: Parse → validate → show warnings (no execution, always assumes u8 wrapping)
 
 ### Key Design Decisions
 
@@ -375,8 +374,9 @@ Warnings detected:
 Note: Common patterns like `[>]`, `[<]`, and `[-]` are NOT flagged as they're standard BF idioms.
 
 CLI integration:
-- `--validate`: Show warnings but continue execution
-- `--strict`: Treat warnings as errors (exit code 1)
+- `--validate`: Show warnings and exit (does not execute)
+- Validation always assumes u8 wrapping (production/JIT target)
+- Independent of runtime cell model
 
 ## Minification System
 
@@ -437,7 +437,6 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 - ✅ Verbose mode (Phase 1)
 - ✅ Comprehensive test suite (137 tests)
 - ✅ Validation pass with warnings (Phase 2.1)
-- ✅ Strict mode for CI/CD (Phase 2.1)
 - ✅ Line comments using `*` (Community feature)
 - ✅ Code minification (Phase 4.1)
 - ✅ Better bracket matching - multiple errors (Phase 2.2)
