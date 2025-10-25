@@ -191,11 +191,26 @@ fn execute_block<I: BfInput, O: BfOutput>(
             Instruction::DecrementPointer => {
                 decrement_pointer(state, config.allow_negative_pointer())?;
             }
+            // Cell arithmetic: HARDCODED as u8 wrapping (independent of MemoryModel)
+            //
+            // IMPORTANT: This behavior is NOT configurable via ExecutionConfig.
+            // Cell values are always u8 (0-255) with wrapping arithmetic:
+            // - Increment overflow: 255 + 1 = 0
+            // - Decrement underflow: 0 - 1 = 255
+            //
+            // This is INDEPENDENT of MemoryModel, which only controls pointer movement.
+            // See config.rs module docs for the distinction between MemoryModel and cell arithmetic.
+            // See validator.rs module docs for how validation assumes this wrapping behavior.
+            //
+            // Future: When CellModel becomes configurable, this will delegate to
+            // a cell arithmetic trait (e.g., U8Wrapping, U8Checked, U8Saturating, I8Wrapping).
             Instruction::IncrementValue => {
+                // Uses wrapping_add(1) for overflow: 255 + 1 = 0
                 state.memory[state.pointer.get()] =
                     state.memory[state.pointer.get()].wrapping_add(1);
             }
             Instruction::DecrementValue => {
+                // Uses wrapping_sub(1) for underflow: 0 - 1 = 255
                 state.memory[state.pointer.get()] =
                     state.memory[state.pointer.get()].wrapping_sub(1);
             }
@@ -588,5 +603,237 @@ mod tests {
         assert_eq!(output.as_bytes(), &[8]); // 5 + 3 = 8
         assert_eq!(stats.bytes_read, 2);
         assert_eq!(stats.bytes_written, 1);
+    }
+
+    // ===================================================================
+    // CRITICAL CORRECTNESS TESTS: [+] Pattern with u8 Wrapping
+    // ===================================================================
+    //
+    // These tests prove that [+] is NOT infinite with u8 wrapping arithmetic,
+    // contrary to what the validator previously claimed!
+    //
+    // Background: The validator used to warn that [+] creates an "infinite loop"
+    // because "incrementing never reaches zero". This is WRONG with u8 wrapping!
+    //
+    // Reality: With u8 wrapping (255 + 1 = 0), the loop wraps and exits.
+    // See PRD/CELL_MODEL.md for full analysis.
+
+    #[test]
+    fn test_plus_loop_terminates_from_one() {
+        // CRITICAL TEST: Proves [+] is NOT infinite with u8 wrapping
+        //
+        // Starting with cell value 1:
+        // Iteration 1: + -> 2
+        // Iteration 2: + -> 3
+        // ...
+        // Iteration 255: + -> 255
+        // Iteration 256: + -> 0 (WRAPS!)
+        // Loop exits because cell == 0
+        //
+        // Total iterations: 256 (1→2→...→255→0)
+
+        use crate::test_utils::run_bf;
+
+        let source = "+[+]"; // Start with 1, loop until wrap
+        let result = run_bf(source, "");
+
+        // Should succeed (not hit default step limit)
+        assert!(
+            result.is_ok(),
+            "Loop should terminate via wrapping, not be infinite!"
+        );
+
+        let (_, stats) = result.unwrap();
+
+        // Should take exactly 256 iterations (starting from 1)
+        // Each iteration executes the + instruction
+        // Plus 1 for initial +
+        // Total: 1 (initial +) + 256 (loop iterations) = 257 steps
+        assert!(
+            stats.total_steps < StepCount::new(270),
+            "Should take ~257 steps (1 + 256), got {}",
+            stats.total_steps
+        );
+        assert!(
+            stats.total_steps > StepCount::new(250),
+            "Should take ~257 steps, got {} (too few!)",
+            stats.total_steps
+        );
+    }
+
+    #[test]
+    fn test_plus_loop_terminates_from_255() {
+        // Edge case: Starting with cell value 255
+        // Iteration 1: + -> 0 (immediate wrap!)
+        // Loop exits immediately
+
+        use crate::test_utils::run_bf;
+
+        // Set cell to 255 (0 - 1 = 255 with wrapping)
+        let source = "-[+]"; // Start with 255, loop once
+        let result = run_bf(source, "");
+
+        assert!(result.is_ok(), "Loop should exit after 1 iteration");
+
+        let (_, stats) = result.unwrap();
+
+        // Should take very few steps (just 1 increment to wrap to 0)
+        assert!(
+            stats.total_steps < StepCount::new(10),
+            "Should exit almost immediately, got {} steps",
+            stats.total_steps
+        );
+    }
+
+    #[test]
+    fn test_plus_loop_terminates_from_128() {
+        // Middle case: Starting with cell value 128
+        // Will take exactly 128 iterations to wrap to 0
+
+        use crate::test_utils::run_bf;
+
+        // Set cell to 128 using multiple additions
+        let source = format!("{}[+]", "+".repeat(128));
+        let result = run_bf(&source, "");
+
+        assert!(
+            result.is_ok(),
+            "Loop should terminate after ~128 iterations"
+        );
+
+        let (_, stats) = result.unwrap();
+
+        // 128 initial + operations, then ~128 loop iterations
+        // Total: 128 (initial +s) + 128 (loop iterations) + 1 (final check) = 257 steps
+        assert!(
+            stats.total_steps < StepCount::new(270),
+            "Should take ~257 steps, got {}",
+            stats.total_steps
+        );
+        assert!(
+            stats.total_steps > StepCount::new(250),
+            "Should take ~257 steps, got {} (too few!)",
+            stats.total_steps
+        );
+    }
+
+    #[test]
+    fn test_double_plus_loop_is_infinite_from_odd() {
+        // IMPORTANT MATHEMATICAL INSIGHT: [++] does NOT always terminate!
+        //
+        // Starting from 1 (odd):
+        // Iteration 1: 1 + 2 = 3
+        // Iteration 2: 3 + 2 = 5
+        // ...
+        // Iteration N: 255 + 2 = 257 → wraps to 1 (257 % 256 = 1)
+        //
+        // Result: Cycles through ODD numbers only (1→3→5→...→255→1)
+        // NEVER hits 0 (which is even)!
+        //
+        // This is actually INFINITE, unlike [+]!
+
+        use crate::test_utils::configs;
+        use crate::test_utils::run_bf_with_config;
+
+        let source = "+[++]"; // Start with 1 (odd), increment by 2
+
+        // Should hit step limit (is actually infinite)
+        let result = run_bf_with_config(source, "", configs::with_step_limit(1000));
+
+        assert!(
+            result.is_err(),
+            "[++] from odd starting value should be infinite (never hits 0)!"
+        );
+        assert!(
+            matches!(result, Err(BfError::StepLimitExceeded { .. })),
+            "Should hit step limit, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_double_plus_loop_terminates_from_even() {
+        // [++] DOES terminate if starting from an even number!
+        //
+        // Starting from 2 (even):
+        // Iteration 1: 2 + 2 = 4
+        // Iteration 2: 4 + 2 = 6
+        // ...
+        // Eventually: 254 + 2 = 256 → wraps to 0
+        //
+        // Cycles through EVEN numbers (2→4→6→...→254→0)
+
+        use crate::test_utils::run_bf;
+
+        let source = "++[++]"; // Start with 2 (even), increment by 2
+        let result = run_bf(source, "");
+
+        assert!(
+            result.is_ok(),
+            "[++] from even starting value should terminate at 0"
+        );
+
+        let (_, stats) = result.unwrap();
+
+        // Should take ~128 iterations (2→4→...→254→256→0)
+        // Total: 2 (initial ++) + 255 (loop increments) = 257 steps
+        // (128 iterations * 2 steps per iteration, but one less due to wrapping)
+        assert!(
+            stats.total_steps < StepCount::new(270),
+            "Should take ~257 steps, got {}",
+            stats.total_steps
+        );
+        assert!(
+            stats.total_steps > StepCount::new(250),
+            "Should take ~257 steps, got {} (too few!)",
+            stats.total_steps
+        );
+    }
+
+    #[test]
+    fn test_plus_loop_with_step_limit_proves_termination() {
+        // This test uses a generous step limit to prove [+] terminates
+        // If [+] were truly infinite, it would hit the limit
+        // Since it doesn't, we prove it terminates
+
+        use crate::test_utils::configs;
+        use crate::test_utils::run_bf_with_config;
+
+        let source = "+[+]";
+
+        // Set limit to 1000 steps (way more than needed for ~513 steps)
+        let result = run_bf_with_config(source, "", configs::with_step_limit(1000));
+
+        // Should succeed WITHOUT hitting step limit
+        assert!(
+            result.is_ok(),
+            "Loop should terminate naturally, not hit step limit. \
+             If this fails, [+] is actually infinite!"
+        );
+    }
+
+    #[test]
+    fn test_plus_loop_hits_step_limit_if_too_low() {
+        // Complementary test: If we set limit too low, we CAN make it fail
+        // This proves our termination tests above aren't trivially passing
+
+        use crate::test_utils::configs;
+        use crate::test_utils::run_bf_with_config;
+
+        let source = "+[+]"; // Needs ~513 steps
+
+        // Set limit too low (only 100 steps)
+        let result = run_bf_with_config(source, "", configs::with_step_limit(100));
+
+        // Should FAIL with step limit exceeded
+        assert!(
+            result.is_err(),
+            "Should hit step limit with only 100 steps allowed"
+        );
+        assert!(
+            matches!(result, Err(BfError::StepLimitExceeded { .. })),
+            "Should fail with StepLimitExceeded, got {:?}",
+            result
+        );
     }
 }

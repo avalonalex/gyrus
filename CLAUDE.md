@@ -89,6 +89,134 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 - **Safety**: Multiple layers of protection (step limits, timeouts, bounds checks)
 - **Configuration**: Builder pattern for `ExecutionConfig` (fluent API)
 
+## Overflow Behaviors and Cell Arithmetic
+
+FerrousCortex currently has **hardcoded** cell arithmetic behavior with **configurable** pointer movement behavior. Understanding these distinctions is critical for understanding validation warnings and execution semantics.
+
+### Cell Arithmetic (Currently Hardcoded)
+
+**Current Implementation** (`interpreter.rs:195-200`):
+- **Cell type**: `u8` (unsigned 8-bit integer, range 0-255)
+- **Increment overflow**: `255 + 1 = 0` (wraps to zero via `wrapping_add(1)`)
+- **Decrement underflow**: `0 - 1 = 255` (wraps to 255 via `wrapping_sub(1)`)
+
+**Code location**:
+```rust
+// interpreter.rs
+Instruction::IncrementValue => {
+    state.memory[state.pointer.get()] =
+        state.memory[state.pointer.get()].wrapping_add(1);  // Hardcoded!
+}
+Instruction::DecrementValue => {
+    state.memory[state.pointer.get()] =
+        state.memory[state.pointer.get()].wrapping_sub(1);  // Hardcoded!
+}
+```
+
+**Implications**:
+- Programs that rely on wrapping behavior work correctly (e.g., `[-]` clears a cell)
+- Programs that assume checked arithmetic will silently wrap instead of erroring
+- Cell values are always 0-255, never negative
+
+### Pointer Movement (Configurable via MemoryModel)
+
+**MemoryModel** controls how pointer movement behaves at boundaries:
+
+1. **Fixed** (default):
+   - Memory size: Configurable (default 30,000 bytes)
+   - Overflow behavior: **ERROR** - moving beyond bounds raises `BfError::MemoryOutOfBounds`
+   - Use case: Strict BF compliance, catching bugs
+
+2. **Wrapping**:
+   - Memory size: Configurable
+   - Overflow behavior: **WRAP** - pointer wraps to opposite end (modulo arithmetic)
+   - Example: With 1000 cells, pointer 999 + 1 = 0, pointer 0 - 1 = 999
+   - Use case: Circular buffer programs
+
+3. **Unbounded**:
+   - Initial size: Configurable (default 30,000)
+   - Maximum size: Configurable (default 1,000,000)
+   - Overflow behavior: **GROW** - memory expands dynamically up to max limit
+   - Negative movement: Still errors (no negative indices)
+   - Use case: Programs with dynamic memory needs
+
+**Code location**: `config.rs` defines `MemoryModel` enum and `MemoryBehavior` trait
+
+### Validation Assumptions (Cell Arithmetic)
+
+The validator (`validator.rs`) makes **specific assumptions** about cell arithmetic when detecting patterns:
+
+**Pattern**: `[+]` (inefficient increment loop)
+- **Assumption**: Cells use u8 wrapping arithmetic
+- **Logic**: Incrementing wraps at 255 (255+1=0), so loop eventually reaches 0 and exits
+- **Iterations**: ~256 iterations (actual count depends on starting value)
+- **Warning**: "Inefficient pattern: loops ~256 times... Use [-] to clear a cell."
+- **Correctness**: NOT infinite with u8 wrapping, just inefficient!
+
+**Pattern**: `[-]` (cell clear)
+- **Assumption**: Cells use u8 wrapping arithmetic
+- **Logic**: Decrementing until zero terminates (works with wrapping)
+- **Warning**: None - this is idiomatic BF
+- **Correctness**: Valid with wrapping arithmetic
+
+**Pattern**: `[--]` (inefficient clear)
+- **Assumption**: Cells use u8 wrapping arithmetic
+- **Logic**: Multiple decrements per iteration still reaches zero, but slower
+- **Warning**: "Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell."
+- **Correctness**: Valid but suboptimal with wrapping
+
+**Pattern**: `[>]` or `[<]` (pointer seeking)
+- **Assumption**: Memory model independent
+- **Logic**: Seeking non-zero cells is idiomatic BF
+- **Warning**: None - standard pattern
+- **Note**: Termination depends on memory contents and pointer overflow behavior
+
+### Separation of Concerns
+
+**Important**: MemoryModel and CellModel are orthogonal concepts:
+
+- **MemoryModel** = How pointer movement behaves (Fixed/Wrapping/Unbounded)
+- **CellModel** (future) = How cell arithmetic behaves (u8/i8/checked/saturating)
+
+Currently only MemoryModel is configurable; CellModel is hardcoded to u8 wrapping.
+
+### Future: Configurable Cell Arithmetic
+
+When cell arithmetic becomes configurable (e.g., via `CellModel` enum), validation will need to become **model-aware**:
+
+**Proposed CellModel variants**:
+- **U8Wrapping** (current): 255 + 1 = 0, 0 - 1 = 255
+- **U8Checked**: Overflow/underflow raises error
+- **U8Saturating**: 255 + 1 = 255 (clamps at bounds)
+- **I8Wrapping**: Signed 8-bit (-128 to 127), wrapping arithmetic
+- **U16Wrapping**: 16-bit cells (0-65535)
+
+**Validation impact**:
+- **U8Wrapping**: `[+]` → inefficient (~256 iterations), not infinite (current behavior)
+- **U8Checked**: `[+]` → will error on overflow (255+1 panics)
+- **U8Saturating**: `[+]` → TRULY infinite (stuck at 255, never reaches 0)
+- **I8Wrapping**: Similar to u8 (~256 iterations via wrapping)
+
+See `validator.rs` module documentation for detailed examples.
+
+### Where This Matters
+
+**For library users**:
+- Programs written for wrapping arithmetic work correctly (current default)
+- Programs written for checked arithmetic will silently wrap (may cause bugs)
+- Pointer overflow behavior can be configured via `ExecutionConfig`
+
+**For contributors**:
+- Cell arithmetic is in `interpreter.rs:195-200` (wrapping_add/wrapping_sub)
+- Pointer movement is in `config.rs` (MemoryBehavior trait implementations)
+- Validation logic is in `validator.rs` (assumes u8 wrapping)
+- Changing cell arithmetic requires updating validation assumptions
+
+**For BrainFuck programs**:
+- `[-]` and `[>]` patterns are safe and idiomatic
+- `[+]` is inefficient (~256 iterations to clear cell) - use `[-]` instead
+- Memory access patterns depend on chosen MemoryModel
+
 ## Workspace Structure
 
 This is a Cargo workspace with the following crates:
@@ -217,7 +345,7 @@ The validation system performs static analysis on parsed instructions:
 
 Warnings detected:
 1. **Empty loops** `[]` - No-op that can be removed
-2. **Infinite increment loops** `[+]`, `[++]` - Cell never reaches zero
+2. **Inefficient increment loops** `[+]`, `[++]` - Loop many times (~256, ~128 iterations)
 3. **Extreme nesting** - Depth > 10 levels (performance impact)
 4. **Inefficient patterns** - `[--]` instead of `[-]`
 

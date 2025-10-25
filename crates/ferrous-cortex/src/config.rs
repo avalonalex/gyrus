@@ -1,3 +1,63 @@
+//! Execution configuration and memory models
+//!
+//! # Important: MemoryModel vs Cell Arithmetic
+//!
+//! **MemoryModel controls POINTER MOVEMENT only, not cell values!**
+//!
+//! ## What MemoryModel Controls (Pointer Overflow)
+//!
+//! - **Fixed**: Pointer moving beyond bounds → ERROR
+//! - **Wrapping**: Pointer wraps around at boundaries (circular buffer)
+//! - **Unbounded**: Memory grows dynamically up to max limit
+//!
+//! ## What MemoryModel Does NOT Control (Cell Arithmetic)
+//!
+//! Cell arithmetic is **hardcoded** in `interpreter.rs` as:
+//! - **Cell type**: `u8` (unsigned 8-bit, range 0-255)
+//! - **Increment overflow**: `255 + 1 = 0` (via `wrapping_add(1)`)
+//! - **Decrement underflow**: `0 - 1 = 255` (via `wrapping_sub(1)`)
+//!
+//! This means:
+//! - MemoryModel affects `>` and `<` instructions (pointer movement)
+//! - Cell arithmetic (`+` and `-`) always uses u8 wrapping, regardless of MemoryModel
+//!
+//! ## Examples
+//!
+//! **Fixed memory with pointer overflow**:
+//! ```text
+//! Memory: [0][1][2]...[29999]  (30,000 cells)
+//! Pointer at 29999, execute `>` → ERROR (out of bounds)
+//! Cell value 255, execute `+` → wraps to 0 (cell arithmetic, always wraps)
+//! ```
+//!
+//! **Wrapping memory with pointer overflow**:
+//! ```text
+//! Memory: [0][1][2]...[29999]  (30,000 cells, circular)
+//! Pointer at 29999, execute `>` → wraps to 0 (pointer wraps)
+//! Cell value 255, execute `+` → wraps to 0 (cell arithmetic, always wraps)
+//! ```
+//!
+//! **Unbounded memory**:
+//! ```text
+//! Memory: [0][1]...[N]  (grows as needed up to max)
+//! Pointer at N, execute `>` → grows memory to N+1 (if under max)
+//! Cell value 255, execute `+` → wraps to 0 (cell arithmetic, always wraps)
+//! ```
+//!
+//! ## Future: Configurable Cell Arithmetic
+//!
+//! When cell arithmetic becomes configurable (via future `CellModel`), we will have:
+//! - **MemoryModel**: Controls pointer movement (Fixed/Wrapping/Unbounded)
+//! - **CellModel**: Controls cell arithmetic (U8Wrapping/U8Checked/U8Saturating/I8Wrapping/...)
+//!
+//! These are orthogonal concepts and can be mixed independently:
+//! - Fixed memory + U8Wrapping cells (current default)
+//! - Wrapping memory + U8Checked cells (possible future config)
+//! - Unbounded memory + I8Wrapping cells (possible future config)
+//!
+//! See `interpreter.rs:195-200` for current cell arithmetic implementation.
+//! See `validator.rs` module docs for how validation assumes u8 wrapping cells.
+
 use crate::error::{BfError, MemoryDump, Result};
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::fmt;
@@ -26,8 +86,15 @@ pub enum EofBehavior {
 
 /// Trait defining memory behavior operations
 ///
+/// **Important**: This trait controls POINTER MOVEMENT only, not cell arithmetic!
+///
 /// Each memory model implements this trait to provide its own
-/// pointer increment/decrement logic.
+/// pointer increment/decrement logic:
+/// - `try_increment_pointer()`: Handles `>` instruction (move pointer right)
+/// - `try_decrement_pointer()`: Handles `<` instruction (move pointer left)
+///
+/// Cell arithmetic (`+` and `-` instructions) is NOT part of this trait.
+/// Cell values are always `u8` with wrapping arithmetic (see `interpreter.rs:195-200`).
 pub trait MemoryBehavior {
     /// Try to increment the pointer by 1
     ///
@@ -287,16 +354,42 @@ impl fmt::Display for UnboundedMemory {
 }
 
 /// Memory model for interpreter execution
+///
+/// **Important**: This controls POINTER MOVEMENT (>,<) only, not cell arithmetic (+,-)!
+///
+/// # Pointer Overflow Behaviors
+///
+/// - **Fixed**: Out-of-bounds pointer access → Error
+/// - **Wrapping**: Pointer wraps at boundaries (circular buffer)
+/// - **Unbounded**: Memory grows dynamically up to max limit
+///
+/// # Cell Arithmetic (NOT controlled by this enum)
+///
+/// Cell arithmetic is hardcoded as `u8` wrapping regardless of MemoryModel:
+/// - Cell values: 0-255 (unsigned 8-bit)
+/// - Increment overflow: `255 + 1 = 0`
+/// - Decrement underflow: `0 - 1 = 255`
+///
+/// See module-level documentation for detailed examples and future plans.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryModel {
     /// Fixed-size memory array
+    ///
+    /// Pointer movement beyond bounds raises `BfError::MemoryOutOfBounds`.
+    /// Use this for strict BrainFuck compliance and catching bugs.
     Fixed(FixedMemory),
 
     /// Wrapping memory: pointer wraps around at boundaries
+    ///
+    /// Pointer acts like a circular buffer (e.g., pointer N-1 + 1 = 0).
+    /// Use this for programs that rely on circular buffer semantics.
     Wrapping(WrappingMemory),
 
     /// Unbounded memory: grows as needed up to a maximum limit
+    ///
+    /// Memory expands dynamically when accessed beyond current size.
+    /// Use this for programs with dynamic memory needs.
     Unbounded(UnboundedMemory),
 }
 
