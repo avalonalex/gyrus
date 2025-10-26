@@ -60,7 +60,9 @@ Call stack (nested loops):
 
 ## Status (Updated: October 2025)
 
-**Overall Status**: ❌ NOT STARTED - Debug symbols not yet implemented
+**Overall Status**: ✅ **Phase 1 COMPLETE** - Basic debug symbols implemented!
+
+See `internal/debug-symbols-design.md` for complete implementation details and walkthrough.
 
 ## Current State
 
@@ -71,22 +73,23 @@ Call stack (nested loops):
 - ✅ Instruction parsing to IR (clean AST representation)
 - ✅ Multiple bracket error reporting (shows all errors at once)
 - ✅ Rich error types with detailed formatting
+- ✅ **Runtime warnings with source context (Phase 1)**
+- ✅ **Flat index mapping (O(1) lookup from StepCount → SourceLocation)**
+- ✅ **parse_with_debug() API for collecting debug symbols**
+- ✅ **CLI integration showing Rust-style error messages**
 
-### What We're Missing ❌ (This PRD)
-- ❌ Mapping from runtime instruction index → source location
-- ❌ Loop call stack tracking (nested loop trace)
-- ❌ Runtime error messages with source context (errors during execution)
-- ❌ Execution tracing capability (--trace flag)
-- ❌ Debug info attached to instructions
-- ❌ CLI flags: --debug, --trace, --trace-memory
+### What We're Missing ❌ (Future Phases)
+- ❌ Loop call stack tracking (nested loop trace) - **Phase 2**
+- ❌ Execution tracing capability (--trace flag) - **Phase 3**
+- ❌ Interactive debugger with breakpoints - **Phase 4**
 
 ### Implementation Status by Phase
 
-**Phase 1: Instruction-to-Source Mapping** ❌ NOT STARTED
+**Phase 1: Instruction-to-Source Mapping** ✅ **COMPLETE** (October 2025)
 **Phase 2: Loop Call Stack Tracking** ❌ NOT STARTED
 **Phase 3: Execution Tracing** ❌ NOT STARTED
-**Phase 4: CLI Integration** ❌ NOT STARTED
-**Phase 5: Performance Considerations** ❌ NOT STARTED
+**Phase 4: CLI Integration** ✅ **COMPLETE** (included in Phase 1)
+**Phase 5: Performance Considerations** ✅ **COMPLETE** (O(1) lookup, optional overhead)
 
 ## Detailed Design
 

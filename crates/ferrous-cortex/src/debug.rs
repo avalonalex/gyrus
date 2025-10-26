@@ -6,62 +6,76 @@
 //!
 //! # Design
 //!
-//! Debug symbols are tracked using "instruction paths" - a sequence of indices
-//! that uniquely identify each instruction in the nested instruction tree.
+//! Debug symbols use a **flat index approach**: during parsing, we assign sequential
+//! indices to instructions in execution order (depth-first traversal). This matches
+//! the interpreter's StepCount, allowing direct lookup at runtime.
 //!
 //! For example, given this code:
 //! ```brainfuck
 //! +[>+<]-.
 //! ```
 //!
-//! The instruction paths would be:
-//! - `[0]` → first `+`
-//! - `[1]` → the loop
-//! - `[1, 0]` → `>` inside the loop
-//! - `[1, 1]` → `+` inside the loop
-//! - `[1, 2]` → `<` inside the loop
-//! - `[2]` → `-` after the loop
-//! - `[3]` → `.` at the end
+//! The flat indices in execution order would be:
+//! - `0` → first `+`
+//! - `1` → `[` loop start
+//! - `2` → `>` inside loop (first instruction in loop body)
+//! - `3` → `+` inside loop
+//! - `4` → `<` inside loop
+//! (back to index 1 if cell != 0, else continue)
+//! - `5` → `-` after loop
+//! - `6` → `.` at the end
 //!
-//! This path-based approach handles nested loops correctly and doesn't require
-//! modifying the `Instruction` enum.
+//! At runtime, the interpreter's StepCount increments as 0, 1, 2, 3, 4, 5, 6...
+//! which matches our flat indices, enabling O(1) lookup of source locations.
 
 use crate::location::SourceLocation;
 use std::collections::HashMap;
 
-/// Instruction path - uniquely identifies an instruction in the nested tree
-///
-/// Example: `[0, 2, 1]` means:
-/// - 0th instruction in the root
-/// - 2nd instruction in that loop
-/// - 1st instruction in that nested loop
-pub type InstructionPath = Vec<usize>;
-
-/// Debug information mapping instruction paths to source locations
+/// Debug information mapping instruction indices to source locations
 ///
 /// This is collected during parsing and used during execution to provide
 /// meaningful error messages and warnings with source context.
+///
+/// The key design is that instruction indices match the interpreter's StepCount,
+/// allowing direct O(1) lookup at runtime.
 #[derive(Debug, Clone, Default)]
 pub struct DebugInfo {
-    locations: HashMap<InstructionPath, SourceLocation>,
+    /// Original source code (used for displaying context)
+    source: String,
+    /// Map from step index (execution order) to source location
+    locations: HashMap<usize, SourceLocation>,
 }
 
 impl DebugInfo {
     /// Create a new empty DebugInfo
     pub fn new() -> Self {
         Self {
+            source: String::new(),
             locations: HashMap::new(),
         }
     }
 
-    /// Record the source location for an instruction path
-    pub fn record(&mut self, path: InstructionPath, location: SourceLocation) {
-        self.locations.insert(path, location);
+    /// Create DebugInfo with source code
+    pub fn with_source(source: String) -> Self {
+        Self {
+            source,
+            locations: HashMap::new(),
+        }
     }
 
-    /// Look up the source location for an instruction path
-    pub fn lookup(&self, path: &[usize]) -> Option<SourceLocation> {
-        self.locations.get(path).copied()
+    /// Get the original source code
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Record the source location for a step index
+    pub fn record(&mut self, step_index: usize, location: SourceLocation) {
+        self.locations.insert(step_index, location);
+    }
+
+    /// Look up the source location for a step index
+    pub fn lookup(&self, step_index: usize) -> Option<SourceLocation> {
+        self.locations.get(&step_index).copied()
     }
 
     /// Get the number of recorded locations
@@ -84,15 +98,12 @@ mod tests {
         let mut debug_info = DebugInfo::new();
         let loc = SourceLocation::new(1, 5, 4);
 
-        debug_info.record(vec![0], loc);
-        debug_info.record(vec![1, 2], SourceLocation::new(2, 3, 10));
+        debug_info.record(0, loc);
+        debug_info.record(2, SourceLocation::new(2, 3, 10));
 
-        assert_eq!(debug_info.lookup(&[0]), Some(loc));
-        assert_eq!(
-            debug_info.lookup(&[1, 2]),
-            Some(SourceLocation::new(2, 3, 10))
-        );
-        assert_eq!(debug_info.lookup(&[999]), None);
+        assert_eq!(debug_info.lookup(0), Some(loc));
+        assert_eq!(debug_info.lookup(2), Some(SourceLocation::new(2, 3, 10)));
+        assert_eq!(debug_info.lookup(999), None);
     }
 
     #[test]
@@ -101,8 +112,15 @@ mod tests {
         assert_eq!(debug_info.len(), 0);
         assert!(debug_info.is_empty());
 
-        debug_info.record(vec![0], SourceLocation::start());
+        debug_info.record(0, SourceLocation::start());
         assert_eq!(debug_info.len(), 1);
         assert!(!debug_info.is_empty());
+    }
+
+    #[test]
+    fn test_debug_info_with_source() {
+        let source = "+++[>+<]-.";
+        let debug_info = DebugInfo::with_source(source.to_string());
+        assert_eq!(debug_info.source(), source);
     }
 }

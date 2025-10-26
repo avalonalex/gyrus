@@ -275,12 +275,16 @@ impl fmt::Display for BfWarning {
 /// during runtime, such as cell overflow/underflow or memory expansion.
 /// Unlike validation warnings (which are static analysis), these capture
 /// actual runtime events.
+///
+/// When debug symbols are available, warnings include source locations
+/// showing exactly where in the code the event occurred.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeWarning {
     /// Cell value wrapped from 255 to 0 (overflow in wrapping mode)
     CellOverflow {
         instruction_index: InstructionIndex,
+        source_location: Option<SourceLocation>,
         #[doc(hidden)]
         _reserved: (),
     },
@@ -288,6 +292,7 @@ pub enum RuntimeWarning {
     /// Cell value wrapped from 0 to 255 (underflow in wrapping mode)
     CellUnderflow {
         instruction_index: InstructionIndex,
+        source_location: Option<SourceLocation>,
         #[doc(hidden)]
         _reserved: (),
     },
@@ -297,43 +302,139 @@ pub enum RuntimeWarning {
         instruction_index: InstructionIndex,
         from_size: MemorySize,
         to_size: MemorySize,
+        source_location: Option<SourceLocation>,
         #[doc(hidden)]
         _reserved: (),
     },
+}
+
+impl RuntimeWarning {
+    /// Format warning with source context if available
+    pub fn format_with_source(&self, source: &str) -> String {
+        match self {
+            RuntimeWarning::CellOverflow {
+                instruction_index,
+                source_location,
+                ..
+            } => {
+                if let Some(loc) = source_location {
+                    format!(
+                        "Runtime warning: Cell overflow (wrapped 255→0) at {}\n{}",
+                        loc,
+                        extract_source_context(source, *loc)
+                    )
+                } else {
+                    format!(
+                        "Runtime warning at instruction {}: Cell overflow (wrapped 255→0)",
+                        instruction_index
+                    )
+                }
+            }
+            RuntimeWarning::CellUnderflow {
+                instruction_index,
+                source_location,
+                ..
+            } => {
+                if let Some(loc) = source_location {
+                    format!(
+                        "Runtime warning: Cell underflow (wrapped 0→255) at {}\n{}",
+                        loc,
+                        extract_source_context(source, *loc)
+                    )
+                } else {
+                    format!(
+                        "Runtime warning at instruction {}: Cell underflow (wrapped 0→255)",
+                        instruction_index
+                    )
+                }
+            }
+            RuntimeWarning::MemoryExpanded {
+                instruction_index,
+                from_size,
+                to_size,
+                source_location,
+                ..
+            } => {
+                if let Some(loc) = source_location {
+                    format!(
+                        "Runtime warning: Memory expanded from {} to {} bytes at {}\n{}",
+                        from_size,
+                        to_size,
+                        loc,
+                        extract_source_context(source, *loc)
+                    )
+                } else {
+                    format!(
+                        "Runtime warning at instruction {}: Memory expanded from {} to {} bytes",
+                        instruction_index, from_size, to_size
+                    )
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for RuntimeWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RuntimeWarning::CellOverflow {
-                instruction_index, ..
+                instruction_index,
+                source_location,
+                ..
             } => {
-                write!(
-                    f,
-                    "Runtime warning at instruction {}: Cell overflow (wrapped 255→0)",
-                    instruction_index
-                )
+                if let Some(loc) = source_location {
+                    write!(
+                        f,
+                        "Runtime warning: Cell overflow (wrapped 255→0) at {}",
+                        loc
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Runtime warning at instruction {}: Cell overflow (wrapped 255→0)",
+                        instruction_index
+                    )
+                }
             }
             RuntimeWarning::CellUnderflow {
-                instruction_index, ..
+                instruction_index,
+                source_location,
+                ..
             } => {
-                write!(
-                    f,
-                    "Runtime warning at instruction {}: Cell underflow (wrapped 0→255)",
-                    instruction_index
-                )
+                if let Some(loc) = source_location {
+                    write!(
+                        f,
+                        "Runtime warning: Cell underflow (wrapped 0→255) at {}",
+                        loc
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Runtime warning at instruction {}: Cell underflow (wrapped 0→255)",
+                        instruction_index
+                    )
+                }
             }
             RuntimeWarning::MemoryExpanded {
                 instruction_index,
                 from_size,
                 to_size,
+                source_location,
                 ..
             } => {
-                write!(
-                    f,
-                    "Runtime warning at instruction {}: Memory expanded from {} to {} bytes",
-                    instruction_index, from_size, to_size
-                )
+                if let Some(loc) = source_location {
+                    write!(
+                        f,
+                        "Runtime warning: Memory expanded from {} to {} bytes at {}",
+                        from_size, to_size, loc
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Runtime warning at instruction {}: Memory expanded from {} to {} bytes",
+                        instruction_index, from_size, to_size
+                    )
+                }
             }
         }
     }

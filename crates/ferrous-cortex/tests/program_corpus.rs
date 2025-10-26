@@ -38,7 +38,7 @@ fn run_program_bytes(
     let mut input_io = StringIo::new(input);
     let mut output_io = StringIo::empty();
 
-    interpret_with_io(&instructions, config, &mut input_io, &mut output_io)
+    interpret_with_io(&instructions, config, &mut input_io, &mut output_io, None)
         .map_err(|e| format!("Runtime error: {}", e))?;
 
     Ok(output_io.output_bytes().to_vec())
@@ -131,6 +131,7 @@ fn test_rot13() {
             .build(),
         &mut input_io,
         &mut output_io,
+        None,
     );
 
     // Should fail with step limit (like Ctrl-C), but output should be correct
@@ -172,6 +173,7 @@ fn test_fibonacci() {
             .build(),
         &mut input_io,
         &mut output_io,
+        None,
     );
 
     // Should fail with step limit (like Ctrl-C), but output should be correct

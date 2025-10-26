@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use ferrous_cortex::{
     BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
-    interpret_with_config, minify, parse, validate,
+    interpret_with_io,
+    io::{StdInput, StdOutput},
+    minify, parse_with_debug, validate,
 };
 
 #[derive(Parser)]
@@ -89,9 +91,9 @@ fn run() -> Result<(), BfError> {
         ),
     })?;
 
-    // Parse the program
-    let instructions = match parse(&source) {
-        Ok(instr) => instr,
+    // Parse the program (with debug symbols)
+    let (instructions, debug_info) = match parse_with_debug(&source) {
+        Ok(result) => result,
         Err(BfError::MultipleBracketErrors { .. }) => {
             // Errors already reported to stderr, just exit with error code
             std::process::exit(1);
@@ -248,17 +250,24 @@ fn run() -> Result<(), BfError> {
         eprintln!();
     }
 
-    // Execute the program
-    let stats = interpret_with_config(&instructions, config)?;
+    // Execute the program (with debug symbols)
+    let mut input = StdInput;
+    let mut output = StdOutput;
+    let stats = interpret_with_io(
+        &instructions,
+        config,
+        &mut input,
+        &mut output,
+        Some(&debug_info),
+    )?;
 
     // Display runtime warnings (unless --quiet)
     if !cli.quiet && !stats.warnings.is_empty() {
         eprintln!("\n=== Runtime Warnings ===");
         eprintln!("Detected {} runtime event(s):\n", stats.warnings.len());
         for warning in &stats.warnings {
-            eprintln!("{}", warning);
+            eprintln!("{}\n", warning.format_with_source(&source));
         }
-        eprintln!();
     }
 
     // Display statistics in verbose mode (unless --quiet)

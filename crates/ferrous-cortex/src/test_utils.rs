@@ -28,7 +28,7 @@ pub fn run_bf(source: &str, input: &str) -> Result<(String, ExecutionStats), BfE
     let mut input_io = StringIo::new(input);
     let mut output_io = StringIo::empty();
 
-    let stats = interpret_with_io(&instructions, config, &mut input_io, &mut output_io)?;
+    let stats = interpret_with_io(&instructions, config, &mut input_io, &mut output_io, None)?;
     Ok((output_io.output_string(), stats))
 }
 
@@ -55,7 +55,7 @@ pub fn run_bf_with_config(
     let mut input_io = StringIo::new(input);
     let mut output_io = StringIo::empty();
 
-    let stats = interpret_with_io(&instructions, config, &mut input_io, &mut output_io)?;
+    let stats = interpret_with_io(&instructions, config, &mut input_io, &mut output_io, None)?;
     Ok((output_io.output_string(), stats))
 }
 

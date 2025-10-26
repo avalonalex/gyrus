@@ -129,6 +129,7 @@ fn main() -> Result<(), BfError> {
         ExecutionConfig::default(),
         &mut input,
         &mut output,
+        None,
     )?;
 
     println!("Output: {}", output.get_output());
@@ -148,6 +149,7 @@ fn main() -> Result<(), BfError> {
         ExecutionConfig::default(),
         &mut input,
         &mut output,
+        None,
     )?;
 
     println!("Original input: Hello");
@@ -168,6 +170,7 @@ fn main() -> Result<(), BfError> {
         ExecutionConfig::default(),
         &mut input,
         &mut output,
+        None,
     )?;
 
     println!("\nFinal output: {:?}", output.get_output().as_bytes());
