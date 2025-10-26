@@ -456,9 +456,10 @@ impl RuntimeWarning {
             } => {
                 if let Some(loc) = source_location {
                     format!(
-                        "Runtime warning: Cell overflow (wrapped 255→0) at {}\n{}",
-                        loc,
-                        extract_source_context(source, *loc)
+                        "Runtime warning: Cell overflow (wrapped 255→0)\n\nAt line {}, column {}:\n{}",
+                        loc.line,
+                        loc.column,
+                        extract_source_context_highlighted(source, *loc)
                     )
                 } else {
                     format!(
@@ -474,9 +475,10 @@ impl RuntimeWarning {
             } => {
                 if let Some(loc) = source_location {
                     format!(
-                        "Runtime warning: Cell underflow (wrapped 0→255) at {}\n{}",
-                        loc,
-                        extract_source_context(source, *loc)
+                        "Runtime warning: Cell underflow (wrapped 0→255)\n\nAt line {}, column {}:\n{}",
+                        loc.line,
+                        loc.column,
+                        extract_source_context_highlighted(source, *loc)
                     )
                 } else {
                     format!(
@@ -494,11 +496,12 @@ impl RuntimeWarning {
             } => {
                 if let Some(loc) = source_location {
                     format!(
-                        "Runtime warning: Memory expanded from {} to {} bytes at {}\n{}",
+                        "Runtime warning: Memory expanded from {} to {} bytes\n\nAt line {}, column {}:\n{}",
                         from_size,
                         to_size,
-                        loc,
-                        extract_source_context(source, *loc)
+                        loc.line,
+                        loc.column,
+                        extract_source_context_highlighted(source, *loc)
                     )
                 } else {
                     format!(

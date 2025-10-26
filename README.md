@@ -6,10 +6,12 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 
 - Fast and efficient BrainFuck interpreter
 - **Rich error handling** with source location tracking and context
-  - Line and column numbers for parse errors
-  - Visual error context with caret (^) pointing to issues
+  - Line and column numbers for parse errors and runtime errors
+  - **Syntax-highlighted error and warning messages** with color-coded BrainFuck commands
+  - Visual error context with caret (^) pointing to exact instruction
   - **Multiple bracket error reporting** - shows ALL errors at once
   - Detailed error messages for debugging
+  - Runtime warnings with source location (cell overflow/underflow, memory expansion)
 - Support for all 8 BrainFuck commands: `><+-.,[]`
 - **Line comments** using `*` - makes documentation safe and easy
 - Nested loop support
@@ -301,15 +303,50 @@ This comprehensive error reporting helps you fix all bracket issues in one go in
 
 Runtime errors include:
 - **Memory out of bounds**: Attempting to access memory outside valid range
+- **Cell overflow/underflow** (in checked mode): Cell arithmetic exceeds boundaries
 - **Step limit exceeded**: Program exceeded maximum allowed instructions
 - **Execution timeout**: Program took too long to execute
 - **I/O errors**: Problems reading input or writing output
 
-Example:
+All runtime errors now include **syntax-highlighted source code** showing exactly where the error occurred:
+
 ```
-Error: Memory pointer out of bounds at instruction 30001
-Attempted to access cell 30000, valid range: 0-29999
+Error: Cell overflow
+
+At line 6, column 16:
+   4 │ ++++++++++++++++++++++++++++++++++++++++++++++
+   5 │ ++++++++++++++++++++++++++++++++++++++++++++++
+   6 │ +++++++++++++++
+       ^
+
+Attempted to increment cell with value 255, but checked arithmetic prevents overflow.
 ```
+
+**Syntax highlighting features:**
+- Commands color-coded by type (pointer movement in cyan, cell operations in green)
+- Line numbers shown in gray
+- Red caret (^) points at exact instruction that caused the error
+- Comments rendered in gray
+- Loop brackets color-coded by nesting depth
+
+### Runtime Warnings
+
+When using permissive modes (wrapping cells, unbounded memory), the interpreter generates **warnings** instead of errors:
+
+```
+Runtime warning: Cell underflow (wrapped 0→255)
+
+At line 1, column 1:
+   1 │ -
+       ^
+```
+
+**Warning types:**
+- **Cell overflow**: Cell value wrapped from 255 to 0 (with wrapping cells)
+- **Cell underflow**: Cell value wrapped from 0 to 255 (with wrapping cells)
+- **Memory expansion**: Memory grew dynamically (with unbounded memory model)
+
+Use `--quiet` to suppress runtime warnings if desired.
 
 ### Preventing Infinite Loops
 
@@ -899,7 +936,8 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 
 ### Completed
 - [x] Rich error messages with source context
-- [x] Source location tracking (line/column numbers)
+- [x] Source location tracking (line/column numbers for parse and runtime errors)
+- [x] **Syntax-highlighted error and warning messages** with color-coded BrainFuck commands
 - [x] Execution limits (step count, timeout)
 - [x] Configurable memory size
 - [x] Verbose mode for diagnostics
@@ -912,9 +950,10 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 - [x] Configurable cell arithmetic (wrapping, checked)
 - [x] Cell-model-aware validation
 - [x] Execution statistics tracking
+- [x] Runtime warnings with source location (cell overflow/underflow, memory expansion)
 - [x] Advanced I/O error handling (EOF behavior)
 - [x] I/O abstraction for library usage and testing
-- [x] Comprehensive testing infrastructure (137 tests)
+- [x] Comprehensive testing infrastructure (118 library tests + integration tests)
 - [x] Property-based testing with proptest
 - [x] Performance benchmarking with criterion
 

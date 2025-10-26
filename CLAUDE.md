@@ -59,7 +59,13 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
    - Public API: `minify(instructions: &[Instruction]) -> String`
 
 **Supporting Modules:**
-- **error** (`error.rs`): `BfError`, `BfWarning` types with rich formatting
+- **error** (`error.rs`): `BfError`, `BfWarning` types with rich formatting and syntax highlighting
+  - `extract_source_context_highlighted()`: Generates syntax-highlighted error/warning messages with ANSI colors
+  - Caret positioning formula: `column + 6` (7-char line prefix, column is 1-indexed)
+  - All runtime errors and warnings include source location and highlighted code
+- **syntax** (`syntax.rs`): Syntax highlighting for BrainFuck source code
+  - Color scheme: cyan for pointer ops, green for cell ops, orange for loops, gray for comments
+  - Line numbers and loop nesting depth visualization
 - **config** (`config.rs`): `ExecutionConfig`, `MemoryModel`, `CellModel`, `EofBehavior`
 - **instruction** (`instruction.rs`): AST node definition `Instruction` enum
 - **location** (`location.rs`): Source position tracking `SourceLocation`
@@ -347,15 +353,23 @@ Run with: `cargo run --example basic_usage`
 
 ## Error Handling Architecture
 
-The error system is comprehensive and production-ready:
+The error system is comprehensive and production-ready with **syntax-highlighted output**:
 
 - **SourceLocation**: Tracks line, column, offset for every parse position
-- **extract_source_context()**: Generates visual error messages with surrounding code
+- **extract_source_context_highlighted()**: Generates syntax-highlighted error messages with ANSI colors
+  - Uses 24-bit RGB colors for terminal output
+  - Color scheme: cyan (pointer ops), green (cell ops), orange (loops), gray (comments/line numbers)
+  - Caret positioning: `column + 6` spaces (accounts for 7-char line prefix "   N │ ")
+- **extract_source_context()**: Plain text version (for non-terminal output)
 - **validate_brackets()**: Pre-parse validation that finds ALL bracket errors in one pass
 - **BfError variants**: Structured errors with relevant context
-  - Parse errors: Include location and source context
-  - Runtime errors: Include instruction index and attempted values
+  - Parse errors: Include location and syntax-highlighted source context
+  - Runtime errors: Include instruction index, source location, and syntax-highlighted context
   - Limit errors: Include the limit that was exceeded
+- **RuntimeWarning variants**: All warnings include source location and syntax highlighting
+  - CellOverflow: Shows instruction that caused 255→0 wrap
+  - CellUnderflow: Shows instruction that caused 0→255 wrap
+  - MemoryExpanded: Shows instruction that triggered memory growth
 
 Example bracket validation flow:
 1. `parse()` calls `validate_brackets()` before parsing
@@ -364,12 +378,19 @@ Example bracket validation flow:
 4. If multiple errors found, reports all to stderr then returns first
 5. This saves time by showing all bracket issues at once
 
-Example single error flow:
-1. Parser detects unmatched `[` at position
-2. Creates `SourceLocation` with line/column
-3. Calls `extract_source_context()` to get surrounding lines
-4. Returns `BfError::UnmatchedOpenBracket { location, context }`
-5. Error Display shows formatted message with visual caret
+Example runtime error flow:
+1. Interpreter detects cell overflow at instruction N
+2. Looks up source location using debug_info (if available)
+3. Calls `extract_source_context_highlighted()` with source and location
+4. Returns `BfError::CellOverflow { location, ... }`
+5. Error Display shows formatted message with syntax-highlighted code and red caret
+
+Example runtime warning flow (wrapping mode):
+1. Cell value is 255, about to increment
+2. Looks up source location: `debug_info.lookup(step_count - 1)`
+3. Creates `RuntimeWarning::CellOverflow { source_location, ... }`
+4. Warning added to stats.warnings vector
+5. CLI displays warning with `warning.format_with_source(&source)` (syntax-highlighted)
 
 ## Validation Architecture
 
@@ -422,15 +443,26 @@ The test suite covers:
 - **Bracket matching tests**: Multiple errors, single errors, location tracking (9 tests)
 - **Memory model tests**: Fixed, unbounded behaviors (4 tests)
 - **Statistics tests**: Step counting, loop iterations, I/O tracking, memory tracking (6 tests)
-- **Total**: 50 tests
+- **Error formatting tests**: Syntax highlighting, source location, caret positioning (8 tests, NEW)
+  - `test_error_formatting_with_source_location`: Multiline program with memory overflow
+  - `test_source_location_column_1`: Single character error at column 1
+  - `test_source_location_multiline_program`: Cell underflow on line 3
+  - `test_source_location_in_nested_loop`: Error inside nested loop structure
+  - `test_source_location_with_comments`: Source location with line comments
+  - `test_error_without_debug_info`: Backward compatibility (no debug info)
+  - `test_memory_overflow_formatting`: Full formatted output with memory dump
+  - `test_cell_overflow_formatting`: Full formatted output with syntax highlighting
+- **Total**: 118 library tests
 
 To add new tests:
-1. Test parsing with `parse(source).unwrap()`
-2. Test execution with `interpret_with_config(&instructions, config)`
+1. Test parsing with `parse(source).unwrap()` or `parse_with_debug(source).unwrap()`
+2. Test execution with `interpret_with_config(&instructions, config, Some(&debug_info))`
 3. Test validation with `validate(&instructions)`
 4. Use `matches!` macro for error/warning pattern matching
 5. Check error details (location, context, values)
 6. For bracket errors, test both single and multiple error scenarios
+7. For runtime errors, test both with and without debug info
+8. For error formatting, use `format!("{}", error)` to get full output
 
 ## Future Architecture Notes
 
@@ -446,11 +478,21 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 
 **Completed (Phase 1, 2.1, 2.2, 3.1, 3.2, 4.1 from PRD + Community features)**:
 - ✅ Source location tracking (Phase 1)
+  - Parse errors include line/column
+  - Runtime errors include source location via debug symbols
+  - Runtime warnings include source location
 - ✅ Rich error messages with context (Phase 1)
+  - **Syntax-highlighted error and warning messages** (NEW)
+  - ANSI 24-bit RGB color support
+  - Color-coded BrainFuck commands by type
+  - Red caret pointing at exact instruction
+  - Line numbers and loop nesting visualization
 - ✅ Execution limits (step count, timeout) (Phase 3.1)
 - ✅ Configurable memory size (Phase 3.1)
 - ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (137 tests)
+- ✅ Comprehensive test suite (118 library tests + integration tests)
+  - Added 8 comprehensive tests for error formatting and source location tracking
+  - Tests cover single-char programs, multiline, nested loops, comments
 - ✅ Validation pass with warnings (Phase 2.1)
 - ✅ Line comments using `*` (Community feature)
 - ✅ Code minification (Phase 4.1)
@@ -462,7 +504,7 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 - ✅ Execution statistics tracking (Community feature)
   - Steps, loop iterations, memory usage
   - I/O tracking
-  - `--stats` CLI flag
+  - `--verbose` flag shows stats
 - ✅ Advanced I/O error handling (Phase 3.3)
   - EOF behavior configuration (SetZero, SetNegOne, NoChange, Error)
   - `--eof-behavior` CLI flag
@@ -473,6 +515,11 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
   - Cell-model-aware validation
   - `--cell-model` CLI flag
   - Fully orthogonal with MemoryModel (any combination supported)
+- ✅ Runtime warnings with source location (NEW)
+  - CellOverflow: Shows 255→0 wrap with syntax highlighting
+  - CellUnderflow: Shows 0→255 wrap with syntax highlighting
+  - MemoryExpanded: Shows memory growth with syntax highlighting
+  - All warnings formatted consistently with errors
 
 **Remaining (from PRD)**:
 - ⏳ Debug symbols and runtime diagnostics (Phase 4.2)
