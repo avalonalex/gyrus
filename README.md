@@ -193,6 +193,12 @@ ferrous-cortex-tool debug-info program.bf
 
 # Output debug info as JSON
 ferrous-cortex-tool debug-info program.bf --format json
+
+# View program with syntax highlighting
+ferrous-cortex-tool view program.bf --line-numbers
+
+# Plain output (no colors)
+ferrous-cortex-tool view program.bf --plain
 ```
 
 **Available Commands:**
@@ -202,6 +208,7 @@ ferrous-cortex-tool debug-info program.bf --format json
 | `minify` | Strip comments and whitespace from BF programs |
 | `validate` | Validate programs and show static analysis warnings |
 | `debug-info` | Inspect debug symbols and source location mappings |
+| `view` | Display BF programs with syntax highlighting |
 
 ## BrainFuck Language Reference
 

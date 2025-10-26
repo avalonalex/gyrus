@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use ferrous_cortex::{
     BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells, minify, parse_with_debug,
+    syntax::{ColorTheme, SyntaxHighlighter},
     validate,
 };
 
@@ -66,6 +67,25 @@ enum Commands {
         #[arg(long)]
         show_source: bool,
     },
+
+    /// Display BF program with syntax highlighting
+    View {
+        /// BrainFuck source file to view
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Show line numbers
+        #[arg(short = 'n', long)]
+        line_numbers: bool,
+
+        /// Theme: dark, light
+        #[arg(long, default_value = "dark")]
+        theme: String,
+
+        /// Plain output (no colors)
+        #[arg(long)]
+        plain: bool,
+    },
 }
 
 fn main() {
@@ -95,6 +115,12 @@ fn run() -> Result<(), BfError> {
             format,
             show_source,
         } => run_debug_info(file, format, show_source),
+        Commands::View {
+            file,
+            line_numbers,
+            theme,
+            plain,
+        } => run_view(file, line_numbers, theme, plain),
     }
 }
 
@@ -249,6 +275,51 @@ fn run_debug_info(file: PathBuf, format: String, show_source: bool) -> Result<()
             );
             std::process::exit(1);
         }
+    }
+
+    Ok(())
+}
+
+fn run_view(
+    file: PathBuf,
+    line_numbers: bool,
+    theme: String,
+    plain: bool,
+) -> Result<(), BfError> {
+    // Read source file
+    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
+        path: file.clone(),
+        source: source_err,
+        hint: format!(
+            "Make sure the file exists and you have permission to read it. Current path: {}",
+            file.display()
+        ),
+    })?;
+
+    // Select theme
+    let color_theme = match theme.to_lowercase().as_str() {
+        "dark" => ColorTheme::dark(),
+        "light" => ColorTheme::light(),
+        other => {
+            eprintln!(
+                "Error: Invalid theme '{}'. Valid options: dark, light",
+                other
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Create highlighter
+    let highlighter = SyntaxHighlighter::with_theme(color_theme).show_line_numbers(line_numbers);
+
+    // Highlight the code
+    let highlighted = highlighter.highlight(&source);
+
+    // Output
+    if plain {
+        print!("{}", highlighted.to_plain());
+    } else {
+        print!("{}", highlighted.to_ansi());
     }
 
     Ok(())

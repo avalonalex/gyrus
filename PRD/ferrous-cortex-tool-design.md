@@ -175,7 +175,43 @@ ferrous-cortex-tool debug-info hello.bf --show-source
 
 ---
 
-### 4. `format` Command (FUTURE)
+### 4. `view` Command ✅ IMPLEMENTED
+
+**Purpose**: Display BF programs with syntax highlighting
+
+**Usage**:
+```bash
+ferrous-cortex-tool view <FILE> [OPTIONS]
+
+OPTIONS:
+    -n, --line-numbers     Show line numbers
+    --theme <THEME>        Theme: dark, light [default: dark]
+    --plain                Plain output (no colors)
+```
+
+**Example**:
+```bash
+# Basic syntax highlighting
+ferrous-cortex-tool view hello_world.bf
+
+# With line numbers
+ferrous-cortex-tool view program.bf --line-numbers
+
+# Plain output (for piping or non-color terminals)
+ferrous-cortex-tool view program.bf --plain
+```
+
+**Features**:
+- Color-coded instruction categories (movement, arithmetic, I/O, loops)
+- Comments shown in gray
+- Loop brackets in bold magenta
+- Optional line numbers
+- Dark and light themes
+- Plain text output option
+
+**Implementation**: Uses `ferrous_cortex::syntax` module for reusable highlighting.
+
+### 5. `format` Command (FUTURE)
 
 **Purpose**: Pretty-print BF programs with indentation
 
@@ -268,24 +304,31 @@ ferrous-cortex-tool stats hello.bf
 3. Set up basic CLI structure with `clap` subcommands
 4. Add to workspace
 
-### Phase 2: Move Existing Features ✅
+### Phase 2: Move Existing Features ✅ COMPLETED
 
-1. **Move `minify` command**:
+1. **Move `minify` command** ✅:
    - Copy minify logic from main CLI
    - Implement subcommand structure
    - Add output file handling
    - Add verbose statistics
 
-2. **Move `validate` command**:
+2. **Move `validate` command** ✅:
    - Copy validation logic from main CLI
    - Add cell-model selection
    - Add strict mode
    - Improve warning formatting
 
-3. **Move `debug-info` command**:
+3. **Move `debug-info` command** ✅:
    - Copy debug symbol inspection from main CLI
    - Add format options (table, JSON, CSV)
    - Add source context display
+
+4. **Add `view` command** ✅ (NEW):
+   - Implement syntax highlighter in library (`syntax` module)
+   - Support ANSI terminal colors
+   - Add line numbers option
+   - Support plain text output
+   - Add theme support (dark/light)
 
 ### Phase 3: Update Main CLI ✅
 
