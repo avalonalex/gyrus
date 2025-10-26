@@ -168,9 +168,7 @@ impl SyntaxHighlighter {
                         }
                         ']' => {
                             // Prevent underflow if brackets are unmatched
-                            if nesting_depth > 0 {
-                                nesting_depth -= 1;
-                            }
+                            nesting_depth = nesting_depth.saturating_sub(1);
                             SpanStyle::LoopEnd(nesting_depth)
                         }
                         '*' => {
