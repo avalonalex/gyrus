@@ -215,7 +215,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
             // See config.rs module docs for CellModel and MemoryModel orthogonality.
             // See validator.rs module docs for cell-model-aware validation.
             Instruction::IncrementValue => {
-                config.cell_model().try_increment(
+                config.cell_model().behavior().try_increment(
                     &mut state.memory[state.pointer.get()],
                     state.step_count,
                     &mut state.stats.warnings,
@@ -223,7 +223,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 )?;
             }
             Instruction::DecrementValue => {
-                config.cell_model().try_decrement(
+                config.cell_model().behavior().try_decrement(
                     &mut state.memory[state.pointer.get()],
                     state.step_count,
                     &mut state.stats.warnings,

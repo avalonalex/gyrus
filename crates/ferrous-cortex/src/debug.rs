@@ -20,8 +20,7 @@
 //! - `1` → `[` loop start
 //! - `2` → `>` inside loop (first instruction in loop body)
 //! - `3` → `+` inside loop
-//! - `4` → `<` inside loop
-//! (back to index 1 if cell != 0, else continue)
+//! - `4` → `<` inside loop (back to index 1 if cell != 0, else continue)
 //! - `5` → `-` after loop
 //! - `6` → `.` at the end
 //!

@@ -81,6 +81,20 @@ fn main() {
     }
 }
 
+/// Helper function to parse an enum-like CLI argument or exit with error
+fn parse_or_exit<T, F>(value: &str, parser: F, param_name: &str, valid_options: &str) -> T
+where
+    F: FnOnce(&str) -> Option<T>,
+{
+    parser(value).unwrap_or_else(|| {
+        eprintln!(
+            "Error: Invalid {} '{}'. Valid options: {}",
+            param_name, value, valid_options
+        );
+        std::process::exit(1);
+    })
+}
+
 fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
@@ -142,17 +156,16 @@ fn run() -> Result<(), BfError> {
     }
 
     // Parse cell model for validation
-    let cell_model = match cli.cell_model.to_lowercase().as_str() {
-        "wrapping" | "wrap" | "u8-wrapping" => CellModel::U8Wrapping(U8WrappingCells),
-        "checked" | "check" | "u8-checked" => CellModel::U8Checked(U8CheckedCells),
-        other => {
-            eprintln!(
-                "Error: Invalid cell model '{}'. Valid options: wrapping, checked",
-                other
-            );
-            std::process::exit(1);
-        }
-    };
+    let cell_model = parse_or_exit(
+        &cli.cell_model,
+        |s| match s.to_lowercase().as_str() {
+            "wrapping" | "wrap" | "u8-wrapping" => Some(CellModel::U8Wrapping(U8WrappingCells)),
+            "checked" | "check" | "u8-checked" => Some(CellModel::U8Checked(U8CheckedCells)),
+            _ => None,
+        },
+        "cell model",
+        "wrapping, checked",
+    );
 
     // Validate if requested (always assumes u8 wrapping - production target)
     if cli.validate {
@@ -200,19 +213,19 @@ fn run() -> Result<(), BfError> {
     let builder = builder.with_cell_model(cell_model);
 
     // Set EOF behavior
-    let builder = match cli.eof_behavior.to_lowercase().as_str() {
-        "zero" => builder.with_eof_behavior(EofBehavior::SetZero),
-        "neg-one" | "negone" | "-1" | "255" => builder.with_eof_behavior(EofBehavior::SetNegOne),
-        "no-change" | "nochange" | "unchanged" => builder.with_eof_behavior(EofBehavior::NoChange),
-        "error" => builder.with_eof_behavior(EofBehavior::Error),
-        other => {
-            eprintln!(
-                "Error: Invalid EOF behavior '{}'. Valid options: zero, neg-one, no-change, error",
-                other
-            );
-            std::process::exit(1);
-        }
-    };
+    let eof_behavior = parse_or_exit(
+        &cli.eof_behavior,
+        |s| match s.to_lowercase().as_str() {
+            "zero" => Some(EofBehavior::SetZero),
+            "neg-one" | "negone" | "-1" | "255" => Some(EofBehavior::SetNegOne),
+            "no-change" | "nochange" | "unchanged" => Some(EofBehavior::NoChange),
+            "error" => Some(EofBehavior::Error),
+            _ => None,
+        },
+        "EOF behavior",
+        "zero, neg-one, no-change, error",
+    );
+    let builder = builder.with_eof_behavior(eof_behavior);
 
     // Set optional parameters
     let builder = if cli.max_steps > 0 {
