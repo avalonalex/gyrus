@@ -15,6 +15,7 @@ fn bench_simple_arithmetic(c: &mut Criterion) {
                 black_box(config.clone()),
                 &mut input,
                 &mut output,
+                None,
             )
             .unwrap();
         });
@@ -35,6 +36,7 @@ fn bench_nested_loops(c: &mut Criterion) {
                 black_box(config.clone()),
                 &mut input,
                 &mut output,
+                None,
             )
             .unwrap();
         });
@@ -55,6 +57,7 @@ fn bench_pointer_movement(c: &mut Criterion) {
                 black_box(config.clone()),
                 &mut input,
                 &mut output,
+                None,
             )
             .unwrap();
         });
@@ -76,6 +79,7 @@ fn bench_io_operations(c: &mut Criterion) {
                 black_box(config.clone()),
                 &mut input,
                 &mut output,
+                None,
             )
             .unwrap();
         });
@@ -97,6 +101,7 @@ fn bench_hello_world(c: &mut Criterion) {
                 black_box(config.clone()),
                 &mut input,
                 &mut output,
+                None,
             )
             .unwrap();
         });
