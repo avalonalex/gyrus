@@ -489,6 +489,87 @@ pub fn parse_with_debug(source: &str)
 
 ---
 
+## Debug Symbol Inspection Tool
+
+### CLI Integration: `--inspect-debug`
+
+A built-in inspection tool is available to visualize the debug symbol table:
+
+```bash
+$ cargo run -- program.bf --inspect-debug
+```
+
+**Output format:**
+```
+=== Debug Symbol Table ===
+
+Source code (81 bytes):
+"Simple test: Print 'A' (ASCII 65)\n++++++++++[>+++++++>++++++++++>+++>+<<<<-]>++.\n"
+
+Symbol table (45 entries):
+Step Index   Character       Line     Column   Offset
+=================================================================
+0            '+'             2        1        34
+1            '+'             2        2        35
+2            '+'             2        3        36
+...
+10           '['             2        11       44
+11           '>'             2        12       45
+12           '+'             2        13       46
+...
+
+=== Summary ===
+Total instructions: 45
+Source bytes: 81
+Compression ratio: 55.6%
+```
+
+### Use Cases
+
+**1. Understanding DFS Traversal**
+```bash
+$ echo "+++[>++[<.>-]<-]" > nested.bf
+$ cargo run -- nested.bf --inspect-debug
+
+# Shows:
+# Step 0-2: +++ (before outer loop)
+# Step 3: [ (outer loop start)
+# Step 4-6: >++ (before inner loop)
+# Step 7: [ (inner loop start)
+# Step 8-11: <.>- (inner loop body)
+# Step 12-13: <-> (outer loop body)
+```
+
+**2. Debugging Source Location Issues**
+
+When runtime warnings show incorrect locations, use `--inspect-debug` to verify:
+- Check if step indices are sequential
+- Verify line/column numbers match source
+- Ensure loop bodies are in correct DFS order
+
+**3. Performance Analysis**
+
+The summary shows compression ratio (instructions / source bytes):
+- High ratio (~80%+): Mostly BF commands, few comments
+- Low ratio (~20-30%): Heavily commented, educational code
+- Medium ratio (~50-60%): Typical production code
+
+### Implementation
+
+**Location**: `crates/ferrous-cortex-cli/src/main.rs`
+
+**Key functions:**
+- `display_debug_symbols()`: Formats and prints symbol table
+- `get_char_at_location()`: Retrieves character at source location
+
+**Design decisions:**
+- Exits after display (doesn't execute program)
+- Shows all entries in execution order
+- Displays special characters escaped (`\n`, `\t`, etc.)
+- Includes summary statistics
+
+---
+
 ## Future Work
 
 ### Phase 2: Loop Call Stack (Not Yet Implemented)

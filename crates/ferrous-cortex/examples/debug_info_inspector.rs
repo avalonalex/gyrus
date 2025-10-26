@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo run --example debug_info_inspector
 
-use ferrous_cortex::{parse_with_debug, BfError};
+use ferrous_cortex::{BfError, parse_with_debug};
 
 fn main() -> Result<(), BfError> {
     println!("=== Debug Info Inspector ===\n");
@@ -51,7 +51,10 @@ fn inspect_debug_info(source: &str) -> Result<(), BfError> {
 
     // Show the mapping
     println!("Step Index → Source Location:");
-    println!("{:<12} {:<15} {:<8} {:<8}", "Index", "Instruction", "Line", "Column");
+    println!(
+        "{:<12} {:<15} {:<8} {:<8}",
+        "Index", "Instruction", "Line", "Column"
+    );
     println!("{}", "-".repeat(50));
 
     // Collect all indices
