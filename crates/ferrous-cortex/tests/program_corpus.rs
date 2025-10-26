@@ -360,7 +360,7 @@ fn test_eof_neg_one() {
 
 #[test]
 fn test_eof_no_change() {
-    let output = run_program(
+    let output = run_program_bytes(
         "tests/test_eof_nochange.bf",
         "",
         ExecutionConfigBuilder::new()
@@ -370,8 +370,9 @@ fn test_eof_no_change() {
     )
     .expect("EOF no change test should succeed");
 
-    // This test expects NoChange behavior
-    assert!(!output.is_empty());
+    // Program sets cell to 5, reads EOF (no change), outputs cell
+    // With NoChange behavior, cell should remain 5
+    assert_eq!(output, vec![5]);
 }
 
 // ============================================================================
