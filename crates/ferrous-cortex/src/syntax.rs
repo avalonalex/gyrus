@@ -104,8 +104,8 @@ pub enum SpanStyle {
     Movement,
     Arithmetic,
     Io,
-    LoopStart,
-    LoopEnd,
+    LoopStart(usize), // Nesting depth (0 = outermost)
+    LoopEnd(usize),   // Nesting depth (0 = outermost)
     Comment,
     Whitespace,
 }
@@ -136,6 +136,7 @@ impl SyntaxHighlighter {
     /// Highlight source code.
     pub fn highlight(&self, source: &str) -> HighlightedCode {
         let mut lines = Vec::new();
+        let mut nesting_depth = 0;
 
         for (line_num, line) in source.lines().enumerate() {
             let mut spans = Vec::new();
@@ -153,8 +154,18 @@ impl SyntaxHighlighter {
                         '>' | '<' => SpanStyle::Movement,
                         '+' | '-' => SpanStyle::Arithmetic,
                         ',' | '.' => SpanStyle::Io,
-                        '[' => SpanStyle::LoopStart,
-                        ']' => SpanStyle::LoopEnd,
+                        '[' => {
+                            let depth = nesting_depth;
+                            nesting_depth += 1;
+                            SpanStyle::LoopStart(depth)
+                        }
+                        ']' => {
+                            // Prevent underflow if brackets are unmatched
+                            if nesting_depth > 0 {
+                                nesting_depth -= 1;
+                            }
+                            SpanStyle::LoopEnd(nesting_depth)
+                        }
                         '*' => {
                             in_line_comment = true;
                             SpanStyle::Comment
@@ -210,6 +221,20 @@ impl HighlightedCode {
         String::from_utf8(buffer).unwrap()
     }
 
+    /// Get color for a specific nesting depth.
+    fn color_for_depth(depth: usize) -> (u8, u8, u8) {
+        // Cycle through colors for different nesting levels
+        match depth % 6 {
+            0 => (255, 0, 255),   // Magenta - depth 0
+            1 => (0, 255, 255),   // Cyan - depth 1
+            2 => (255, 128, 0),   // Orange - depth 2
+            3 => (255, 0, 128),   // Pink - depth 3
+            4 => (128, 255, 0),   // Lime - depth 4
+            5 => (128, 128, 255), // Light blue - depth 5
+            _ => (255, 0, 255),   // Fallback to magenta
+        }
+    }
+
     /// Write ANSI-colored output to a writer.
     pub fn write_ansi<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         let theme = ColorTheme::default();
@@ -226,27 +251,34 @@ impl HighlightedCode {
                     SpanStyle::Movement => Some(theme.movement),
                     SpanStyle::Arithmetic => Some(theme.arithmetic),
                     SpanStyle::Io => Some(theme.io),
-                    SpanStyle::LoopStart | SpanStyle::LoopEnd => Some(theme.loops),
+                    SpanStyle::LoopStart(_) | SpanStyle::LoopEnd(_) => Some(theme.loops),
                     SpanStyle::Comment => Some(theme.comments),
                     SpanStyle::Whitespace => None,
                 };
 
                 if let Some(color) = color {
-                    let (r, g, b) = match color {
-                        Color::Black => (0, 0, 0),
-                        Color::Blue => (0, 150, 255),
-                        Color::Green => (0, 200, 0),
-                        Color::Red => (255, 0, 0),
-                        Color::Cyan => (0, 255, 255),
-                        Color::Magenta => (255, 0, 255),
-                        Color::Yellow => (255, 255, 0),
-                        Color::White => (255, 255, 255),
-                        Color::Rgb(r, g, b) => (r, g, b),
-                        _ => (200, 200, 200),
+                    let (r, g, b) = match span.style {
+                        // Use depth-based colors for loops
+                        SpanStyle::LoopStart(depth) | SpanStyle::LoopEnd(depth) => {
+                            Self::color_for_depth(depth)
+                        }
+                        // Use theme colors for other instructions
+                        _ => match color {
+                            Color::Black => (0, 0, 0),
+                            Color::Blue => (0, 150, 255),
+                            Color::Green => (0, 200, 0),
+                            Color::Red => (255, 0, 0),
+                            Color::Cyan => (0, 255, 255),
+                            Color::Magenta => (255, 0, 255),
+                            Color::Yellow => (255, 255, 0),
+                            Color::White => (255, 255, 255),
+                            Color::Rgb(r, g, b) => (r, g, b),
+                            _ => (200, 200, 200),
+                        },
                     };
 
                     // Special styling for loops (bold)
-                    if matches!(span.style, SpanStyle::LoopStart | SpanStyle::LoopEnd) {
+                    if matches!(span.style, SpanStyle::LoopStart(_) | SpanStyle::LoopEnd(_)) {
                         write!(writer, "\x1b[1;38;2;{};{};{}m", r, g, b)?;
                     } else {
                         write!(writer, "\x1b[38;2;{};{};{}m", r, g, b)?;
@@ -306,8 +338,8 @@ mod tests {
         assert_eq!(spans[3].style, SpanStyle::Movement); // >
         assert_eq!(spans[4].style, SpanStyle::Io); // .
         assert_eq!(spans[5].style, SpanStyle::Io); // ,
-        assert_eq!(spans[6].style, SpanStyle::LoopStart); // [
-        assert_eq!(spans[7].style, SpanStyle::LoopEnd); // ]
+        assert_eq!(spans[6].style, SpanStyle::LoopStart(0)); // [ - depth 0
+        assert_eq!(spans[7].style, SpanStyle::LoopEnd(0)); // ] - depth 0
     }
 
     #[test]
@@ -384,5 +416,80 @@ mod tests {
         assert_eq!(code.lines[0].spans.len(), 3);
         assert_eq!(code.lines[1].spans.len(), 3);
         assert_eq!(code.lines[2].spans.len(), 3);
+    }
+
+    #[test]
+    fn test_loop_nesting_depth() {
+        let highlighter = SyntaxHighlighter::new();
+        // Test nested loops: depth 0, 1, 2
+        let code = highlighter.highlight("[+[>[-]<]>]");
+
+        let spans = &code.lines[0].spans;
+
+        // [ at depth 0
+        assert_eq!(spans[0].style, SpanStyle::LoopStart(0));
+        // +
+        assert_eq!(spans[1].style, SpanStyle::Arithmetic);
+        // [ at depth 1
+        assert_eq!(spans[2].style, SpanStyle::LoopStart(1));
+        // >
+        assert_eq!(spans[3].style, SpanStyle::Movement);
+        // [ at depth 2
+        assert_eq!(spans[4].style, SpanStyle::LoopStart(2));
+        // -
+        assert_eq!(spans[5].style, SpanStyle::Arithmetic);
+        // ] at depth 2 (closes depth 2, returns to depth 2)
+        assert_eq!(spans[6].style, SpanStyle::LoopEnd(2));
+        // <
+        assert_eq!(spans[7].style, SpanStyle::Movement);
+        // ] at depth 1 (closes depth 1, returns to depth 1)
+        assert_eq!(spans[8].style, SpanStyle::LoopEnd(1));
+        // >
+        assert_eq!(spans[9].style, SpanStyle::Movement);
+        // ] at depth 0 (closes depth 0, returns to depth 0)
+        assert_eq!(spans[10].style, SpanStyle::LoopEnd(0));
+    }
+
+    #[test]
+    fn test_loop_nesting_across_lines() {
+        let highlighter = SyntaxHighlighter::new();
+        // Test nested loops across multiple lines
+        let source = "[\n  [\n    +\n  ]\n]";
+        let code = highlighter.highlight(source);
+
+        // Line 0: [
+        assert_eq!(code.lines[0].spans[0].style, SpanStyle::LoopStart(0));
+
+        // Line 1: whitespace + [
+        assert_eq!(code.lines[1].spans[2].style, SpanStyle::LoopStart(1));
+
+        // Line 2: whitespace + +
+        assert_eq!(code.lines[2].spans[4].style, SpanStyle::Arithmetic);
+
+        // Line 3: whitespace + ]
+        assert_eq!(code.lines[3].spans[2].style, SpanStyle::LoopEnd(1));
+
+        // Line 4: ]
+        assert_eq!(code.lines[4].spans[0].style, SpanStyle::LoopEnd(0));
+    }
+
+    #[test]
+    fn test_unmatched_brackets_nesting() {
+        let highlighter = SyntaxHighlighter::new();
+        // Test that unmatched ] doesn't cause underflow
+        let code = highlighter.highlight("]][+]");
+
+        let spans = &code.lines[0].spans;
+
+        // First ] at depth 0 (underflow prevented)
+        assert_eq!(spans[0].style, SpanStyle::LoopEnd(0));
+        // Second ] at depth 0 (still at 0)
+        assert_eq!(spans[1].style, SpanStyle::LoopEnd(0));
+        // [ at depth 0
+        assert_eq!(spans[2].style, SpanStyle::LoopStart(0));
+        // +
+        assert_eq!(spans[3].style, SpanStyle::Arithmetic);
+        // ] at depth 0 (closes the [)
+        assert_eq!(spans[4].style, SpanStyle::LoopEnd(0));
     }
 }

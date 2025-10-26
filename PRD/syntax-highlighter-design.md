@@ -190,13 +190,20 @@ With `--show-nesting`:
 3. Add command-line options
 4. Test with various programs
 
-### Phase 3: Enhanced Features (Optional)
+### Phase 3: Enhanced Features
 
-1. HTML output format
-2. Custom themes
-3. Nesting depth visualization
-4. Context-aware display
-5. Integration with TUI debugger
+1. **Nesting depth visualization** ✅ - Loop brackets colored by depth (6-color cycle)
+   - Depth 0: Magenta
+   - Depth 1: Cyan
+   - Depth 2: Orange
+   - Depth 3: Pink
+   - Depth 4: Lime
+   - Depth 5: Light blue
+   - Cycles back to magenta for deeper nesting
+2. HTML output format (future)
+3. Custom themes expansion (future)
+4. Context-aware display (future)
+5. Integration with TUI debugger (future)
 
 ## Benefits
 
@@ -301,13 +308,14 @@ Instead of `view`, consider:
 
 ## Success Criteria
 
-- ✅ Syntax module in library compiles and passes tests
+- ✅ Syntax module in library compiles and passes tests (10 tests passing)
 - ✅ View command works with all example programs
 - ✅ Colors display correctly on common terminals
 - ✅ Plain output option works for piping
 - ✅ Line numbers align properly
 - ✅ Comments are visually distinct
-- ✅ Loop nesting is clear
+- ✅ Loop nesting is clear with depth-based coloring
+- ✅ Nesting depth tracking works across lines and handles unmatched brackets
 - ✅ Performance is acceptable (< 100ms for 10KB file)
 
 ## Example Output Showcase

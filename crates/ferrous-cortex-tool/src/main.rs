@@ -280,12 +280,7 @@ fn run_debug_info(file: PathBuf, format: String, show_source: bool) -> Result<()
     Ok(())
 }
 
-fn run_view(
-    file: PathBuf,
-    line_numbers: bool,
-    theme: String,
-    plain: bool,
-) -> Result<(), BfError> {
+fn run_view(file: PathBuf, line_numbers: bool, theme: String, plain: bool) -> Result<(), BfError> {
     // Read source file
     let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
         path: file.clone(),
