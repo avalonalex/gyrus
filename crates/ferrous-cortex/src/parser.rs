@@ -69,11 +69,10 @@ use crate::location::SourceLocation;
 
 /// Validate bracket matching before parsing
 /// Returns all bracket errors found in the source
-fn validate_brackets(source: &str) -> Vec<BfError> {
+fn validate_brackets(source: &str, chars: &[char]) -> Vec<BfError> {
     let mut errors = Vec::new();
     let mut stack: Vec<SourceLocation> = Vec::new();
     let mut location = SourceLocation::start();
-    let chars: Vec<char> = source.chars().collect();
 
     let mut i = 0;
     while i < chars.len() {
@@ -82,16 +81,16 @@ fn validate_brackets(source: &str) -> Vec<BfError> {
         match ch {
             '*' => {
                 // Skip line comments
+                advance_location(&mut location, ch);
                 i += 1;
                 while i < chars.len() && chars[i] != '\n' {
+                    advance_location(&mut location, chars[i]);
                     i += 1;
                 }
                 continue;
             }
             '\n' => {
-                location.line += 1;
-                location.column = 1;
-                location.offset += 1;
+                advance_location(&mut location, ch);
                 i += 1;
                 continue;
             }
@@ -115,10 +114,7 @@ fn validate_brackets(source: &str) -> Vec<BfError> {
         }
 
         // Advance location
-        if ch != '\n' {
-            location.column += 1;
-        }
-        location.offset += 1;
+        advance_location(&mut location, ch);
         i += 1;
     }
 
@@ -152,8 +148,11 @@ pub fn parse(source: impl AsRef<str>) -> Result<Vec<Instruction>> {
 pub fn parse_with_debug(source: impl AsRef<str>) -> Result<(Vec<Instruction>, DebugInfo)> {
     let source = source.as_ref();
 
+    // Collect chars once for both validation and parsing (performance optimization)
+    let chars: Vec<char> = source.chars().collect();
+
     // First validate brackets and report all errors at once
-    let bracket_errors = validate_brackets(source);
+    let bracket_errors = validate_brackets(source, &chars);
     if !bracket_errors.is_empty() {
         if bracket_errors.len() == 1 {
             // Single error - return it directly
@@ -175,6 +174,7 @@ pub fn parse_with_debug(source: impl AsRef<str>) -> Result<(Vec<Instruction>, De
     let mut step_index = 0;
     let instructions = parse_block_with_debug(
         source,
+        &chars,
         &mut location,
         None,
         &mut debug_info,
@@ -185,13 +185,13 @@ pub fn parse_with_debug(source: impl AsRef<str>) -> Result<(Vec<Instruction>, De
 
 fn parse_block_with_debug(
     source: &str,
+    chars: &[char],
     location: &mut SourceLocation,
     loop_start: Option<SourceLocation>,
     debug_info: &mut DebugInfo,
     step_index: &mut usize,
 ) -> Result<Vec<Instruction>> {
     let mut instructions = Vec::new();
-    let chars: Vec<char> = source.chars().collect();
 
     while location.offset < chars.len() {
         let ch = chars[location.offset];
@@ -239,6 +239,7 @@ fn parse_block_with_debug(
                 // Recursively parse the loop body (this will increment step_index for each instruction in the body)
                 let loop_body = parse_block_with_debug(
                     source,
+                    chars,
                     location,
                     Some(loop_location),
                     debug_info,
@@ -263,18 +264,15 @@ fn parse_block_with_debug(
             }
             '*' => {
                 // Line comment: skip everything until newline
-                location.offset += 1;
+                advance_location(location, ch);
                 while location.offset < chars.len() && chars[location.offset] != '\n' {
-                    location.column += 1;
-                    location.offset += 1;
+                    advance_location(location, chars[location.offset]);
                 }
                 // Don't skip the newline itself - let it be processed normally
                 continue;
             }
             '\n' => {
-                location.line += 1;
-                location.column = 1;
-                location.offset += 1;
+                advance_location(location, ch);
                 continue;
             }
             _ => {
