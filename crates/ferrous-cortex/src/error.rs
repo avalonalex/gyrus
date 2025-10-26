@@ -91,13 +91,19 @@ impl fmt::Display for MemoryDump {
     }
 }
 
+/// Calculate the line range for context extraction (2 lines before, 2 lines after)
+#[inline]
+fn context_line_range(line_idx: usize, total_lines: usize) -> (usize, usize) {
+    let start_line = line_idx.saturating_sub(2);
+    let end_line = (line_idx + 3).min(total_lines);
+    (start_line, end_line)
+}
+
 /// Extract source context around a location for error messages
 pub(crate) fn extract_source_context(source: &str, location: SourceLocation) -> String {
     let lines: Vec<&str> = source.lines().collect();
     let line_idx = location.line.saturating_sub(1);
-
-    let start_line = line_idx.saturating_sub(2);
-    let end_line = (line_idx + 3).min(lines.len());
+    let (start_line, end_line) = context_line_range(line_idx, lines.len());
 
     let mut context = String::new();
     for line_num in start_line..end_line {
@@ -123,8 +129,7 @@ pub(crate) fn extract_source_context_highlighted(source: &str, location: SourceL
     let highlighted = highlighter.highlight(source);
 
     let line_idx = location.line.saturating_sub(1);
-    let start_line = line_idx.saturating_sub(2);
-    let end_line = (line_idx + 3).min(highlighted.lines().len());
+    let (start_line, end_line) = context_line_range(line_idx, highlighted.lines().len());
 
     // Build the context with the caret inserted right after the error line
     let mut buffer = Vec::new();
