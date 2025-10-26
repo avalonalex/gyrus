@@ -1052,6 +1052,245 @@ mod tests {
     }
 
     #[test]
+    fn test_error_formatting_with_source_location() {
+        // Test that error messages include properly formatted source context
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = ">>>>>\n>>>>>\n>>>>>"; // Multiline program (15 moves right)
+        let (instructions, debug_info) = parse_with_debug(source).unwrap();
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(5).build();
+
+        // This will try to access cell 5, but memory size is only 5 (max index 4)
+        let result = interpret_with_config(&instructions, config, Some(&debug_info));
+
+        assert!(result.is_err());
+        if let Err(error) = result {
+            let formatted = error.format_with_source(source);
+
+            // Verify the formatted error contains key elements
+            assert!(
+                formatted.contains("Error: Memory pointer out of bounds"),
+                "Error message should contain error type"
+            );
+            assert!(
+                formatted.contains("At line"),
+                "Error message should indicate line number"
+            );
+            assert!(
+                formatted.contains("│"),
+                "Error message should contain line number separator"
+            );
+            assert!(
+                formatted.contains("^"),
+                "Error message should contain caret pointer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_source_location_column_1() {
+        // Test caret positioning for error at column 1
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = "-"; // Error at first character
+        let (instructions, debug_info) = parse_with_debug(source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        match interpret_with_config(&instructions, config, Some(&debug_info)) {
+            Err(BfError::CellUnderflow {
+                source_location, ..
+            }) => {
+                assert!(source_location.is_some());
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 1);
+                assert_eq!(loc.column, 1);
+            }
+            other => panic!("Expected CellUnderflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_source_location_multiline_program() {
+        // Test source location for errors in multiline programs
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = format!("+++\n+++\n{}", "-".repeat(260)); // Error on line 3
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        match interpret_with_config(&instructions, config, Some(&debug_info)) {
+            Err(BfError::CellUnderflow {
+                source_location, ..
+            }) => {
+                assert!(source_location.is_some());
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 3, "Error should be on line 3");
+                // Cell value is 6 after lines 1-2, so underflow happens at 7th decrement
+                assert_eq!(
+                    loc.column, 7,
+                    "Error should be at column 7 on line 3 (7th - command)"
+                );
+            }
+            other => panic!("Expected CellUnderflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_source_location_in_nested_loop() {
+        // Test that source location works correctly inside nested loops
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        // Simple nested structure: outer loop contains overflow trigger
+        // Structure: ++[>{256 +'s}] - loops twice, on first iteration moves right and overflows
+        let source = format!("++[>{}<]", "+".repeat(256));
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        match interpret_with_config(&instructions, config, Some(&debug_info)) {
+            Err(BfError::CellOverflow {
+                source_location, ..
+            }) => {
+                assert!(source_location.is_some());
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 1);
+                // Error at: 2 (++) + 1 ([) + 1 (>) + 256 (+'s) = column 260
+                assert_eq!(loc.column, 260, "Error should be at 256th + inside loop");
+            }
+            other => panic!("Expected CellOverflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_source_location_with_comments() {
+        // Test that source location accounts for comments correctly
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = format!("+++++ * this is a comment\n+++++\n{}", "+".repeat(256));
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        match interpret_with_config(&instructions, config, Some(&debug_info)) {
+            Err(BfError::CellOverflow {
+                source_location, ..
+            }) => {
+                assert!(source_location.is_some());
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 3, "Error should be on line 3");
+                assert_eq!(
+                    loc.column, 246,
+                    "Comments are ignored, so position is on line 3"
+                );
+            }
+            other => panic!("Expected CellOverflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_error_without_debug_info() {
+        // Test that errors still work when debug_info is None
+        use crate::config::ExecutionConfigBuilder;
+
+        let source = "-";
+        let instructions = parse(source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        match interpret_with_config(&instructions, config, None) {
+            Err(BfError::CellUnderflow {
+                source_location, ..
+            }) => {
+                assert!(
+                    source_location.is_none(),
+                    "Source location should be None when debug_info is not provided"
+                );
+            }
+            other => panic!("Expected CellUnderflow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_memory_overflow_formatting() {
+        // Test memory overflow error formatting with source context
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = ">".repeat(101);
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+
+        if let Err(error) = interpret_with_config(&instructions, config, Some(&debug_info)) {
+            let formatted = error.format_with_source(&source);
+
+            // Should include line/column info
+            assert!(formatted.contains("At line 1, column 100"));
+            // Should show nearby cells in memory dump
+            assert!(formatted.contains("Nearby cells:"));
+            // Should have the caret pointer
+            assert!(formatted.contains("^"));
+        } else {
+            panic!("Expected error");
+        }
+    }
+
+    #[test]
+    fn test_cell_overflow_formatting() {
+        // Test cell overflow error formatting with source context
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = "+".repeat(256);
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        if let Err(error) = interpret_with_config(&instructions, config, Some(&debug_info)) {
+            let formatted = error.format_with_source(&source);
+
+            // Should include error type
+            assert!(formatted.contains("Cell overflow"));
+            // Should include line/column
+            assert!(formatted.contains("At line 1, column 256"));
+            // Should mention the value
+            assert!(formatted.contains("value 255"));
+            // Should have syntax highlighting (ANSI codes)
+            assert!(formatted.contains("\x1b["));
+            // Should have caret
+            assert!(formatted.contains("^"));
+        } else {
+            panic!("Expected error");
+        }
+    }
+
+    #[test]
     fn test_cell_model_independence_from_memory_model() {
         // Test that CellModel and MemoryModel are orthogonal
         // Use Wrapping memory + Checked cells
