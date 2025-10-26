@@ -1668,4 +1668,383 @@ mod tests {
             "Should be MemoryOutOfBounds error"
         );
     }
+
+    // ===================================================================
+    // EDGE CASE TESTS - Critical scenarios and boundary conditions
+    // ===================================================================
+
+    #[test]
+    fn test_eof_behavior_combinations() {
+        // Test all EOF behavior modes with actual EOF
+        // NOTE: We use StringIo directly to access raw bytes since EOF values like 255
+        // are not valid UTF-8 and would be replaced by String::from_utf8_lossy()
+        use crate::config::{EofBehavior, ExecutionConfigBuilder};
+        use crate::io::StringIo;
+
+        let source = ",.,.,."; // Read 3 bytes, but we'll only provide 1
+        let instructions = parse(source).unwrap();
+
+        // SetZero: Should set cell to 0 on EOF
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(10)
+            .with_eof_behavior(EofBehavior::SetZero)
+            .build();
+
+        let mut input = StringIo::new("A");
+        let mut output = StringIo::empty();
+        let result = interpret_with_io(&instructions, config, &mut input, &mut output, None);
+        assert!(result.is_ok());
+        let out_bytes = output.output_bytes();
+        assert_eq!(out_bytes.len(), 3); // Should output 3 bytes
+        assert_eq!(out_bytes[0], b'A'); // First read succeeds
+        assert_eq!(out_bytes[1], 0); // Second read EOF → 0
+        assert_eq!(out_bytes[2], 0); // Third read EOF → 0
+
+        // SetNegOne: Should set cell to 255 on EOF
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(10)
+            .with_eof_behavior(EofBehavior::SetNegOne)
+            .build();
+
+        let mut input = StringIo::new("B");
+        let mut output = StringIo::empty();
+        let result = interpret_with_io(&instructions, config, &mut input, &mut output, None);
+        assert!(result.is_ok());
+        let out_bytes = output.output_bytes();
+        assert_eq!(out_bytes[0], b'B');
+        assert_eq!(out_bytes[1], 255); // EOF → 255 (-1 as u8)
+        assert_eq!(out_bytes[2], 255);
+
+        // NoChange: Should leave cell unchanged on EOF
+        let source2 = "++,.,"; // Set cell to 2, then read (EOF), then output
+        let instructions2 = parse(source2).unwrap();
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(10)
+            .with_eof_behavior(EofBehavior::NoChange)
+            .build();
+
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        let result = interpret_with_io(&instructions2, config, &mut input, &mut output, None);
+        assert!(result.is_ok());
+        let out_bytes = output.output_bytes();
+        assert_eq!(out_bytes.len(), 1);
+        assert_eq!(out_bytes[0], 2); // Cell unchanged, stays at 2
+
+        // Error: Should error on EOF
+        let source3 = ",";
+        let instructions3 = parse(source3).unwrap();
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(10)
+            .with_eof_behavior(EofBehavior::Error)
+            .build();
+
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        let result = interpret_with_io(&instructions3, config, &mut input, &mut output, None);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(BfError::IoError { .. })));
+    }
+
+    #[test]
+    fn test_unbounded_memory_growth_limits() {
+        // Test that unbounded memory respects max_size limit
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        // Program that tries to allocate beyond max
+        // Start with initial_size=10, max_size=20
+        let source = ">".repeat(25); // Try to move 25 positions right
+
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(10, 20)
+            .expect("valid unbounded config")
+            .build();
+
+        let result = run_bf_with_config(&source, "", config);
+
+        // Should error when trying to exceed max_size
+        assert!(
+            result.is_err(),
+            "Should error when exceeding unbounded max_size"
+        );
+        assert!(
+            matches!(result, Err(BfError::MemoryOutOfBounds { .. })),
+            "Should be MemoryOutOfBounds error"
+        );
+    }
+
+    #[test]
+    fn test_unbounded_memory_growth_success() {
+        // Test that unbounded memory successfully grows within limits
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        // Program that allocates within max_size
+        let source = ">>>>>+++++."; // Move 5 right (initial=3, max=10, this is ok)
+
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(3, 10)
+            .expect("valid unbounded config")
+            .build();
+
+        let result = run_bf_with_config(&source, "", config);
+
+        assert!(result.is_ok(), "Should succeed within unbounded limits");
+        let (_, stats) = result.unwrap();
+
+        // Should have grown memory
+        assert!(
+            stats.peak_memory_used.get() > 3,
+            "Memory should have grown beyond initial size"
+        );
+    }
+
+    #[test]
+    fn test_very_deep_nesting() {
+        // Test extremely deep loop nesting (100 levels)
+        use crate::test_utils::run_bf;
+
+        // Generate deeply nested loops: +[[[[...[[+]]...]]]]
+        let depth = 100;
+        let mut source = String::from("+"); // Set cell to 1
+        for _ in 0..depth {
+            source.push('[');
+        }
+        source.push('+'); // Increment in innermost loop
+        for _ in 0..depth {
+            source.push(']');
+        }
+
+        let result = run_bf(&source, "");
+
+        // Should execute successfully (might be slow, but should work)
+        assert!(
+            result.is_ok(),
+            "Should handle 100 levels of nesting"
+        );
+
+        let (_, stats) = result.unwrap();
+
+        // Loop iterations calculation:
+        // - Outer 99 loops are each entered once = 99 iterations
+        // - Innermost loop (containing '+') runs until cell wraps to 0
+        //   Cell starts at 1, increments to 255, then wraps to 0 = 255 iterations
+        // - Total = 99 + 255 = 354
+        assert_eq!(stats.loop_iterations, 354,
+            "Expected {} outer loops + 255 innermost = 354 total", depth - 1);
+    }
+
+    #[test]
+    fn test_empty_program() {
+        // Test that an empty program executes successfully
+        use crate::test_utils::run_bf;
+
+        let result = run_bf("", "");
+        assert!(result.is_ok(), "Empty program should execute successfully");
+
+        let (output, stats) = result.unwrap();
+        assert_eq!(output.len(), 0);
+        assert_eq!(stats.total_steps.get(), 0);
+    }
+
+    #[test]
+    fn test_program_with_only_comments() {
+        // Test program with only comments (no actual BF commands)
+        use crate::test_utils::run_bf;
+
+        let source = "* This is a comment\n   * Another comment\n\n* Third comment";
+        let result = run_bf(source, "");
+
+        assert!(result.is_ok(), "Comment-only program should succeed");
+
+        let (output, stats) = result.unwrap();
+        assert_eq!(output.len(), 0);
+        assert_eq!(stats.total_steps.get(), 0);
+    }
+
+    #[test]
+    fn test_max_steps_exactly_at_limit() {
+        // Test that programs execute correctly when hitting step limit exactly
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        let source = "+++++"; // Exactly 5 steps
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(10)
+            .with_max_steps(5) // Set limit to exactly 5
+            .build();
+
+        let result = run_bf_with_config(source, "", config);
+
+        // Should succeed (5 steps <= 5 limit)
+        assert!(result.is_ok(), "Should succeed at exact step limit");
+
+        // Now test with 6 steps and limit of 5 - should fail
+        let source = "++++++"; // 6 steps
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(10)
+            .with_max_steps(5)
+            .build();
+
+        let result = run_bf_with_config(source, "", config);
+
+        assert!(result.is_err(), "Should fail when exceeding step limit by 1");
+        assert!(
+            matches!(result, Err(BfError::StepLimitExceeded { .. })),
+            "Should be StepLimitExceeded error"
+        );
+    }
+
+    // ===================================================================
+    // PROPERTY-BASED TESTS - Generative testing for memory and cell models
+    // ===================================================================
+
+    #[cfg(test)]
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        // Property: Cell wrapping behaves correctly for any sequence of increments
+        proptest! {
+            #[test]
+            fn cell_wrapping_modulo_256(increments in 0u32..1000) {
+                // Generate a program with N increments
+                let source = "+".repeat(increments as usize);
+                let instructions = parse(&source).unwrap();
+
+                let config = ExecutionConfigBuilder::new()
+                    .with_memory_size(10)
+                    .with_wrapping_cells()
+                    .build();
+
+                let result = interpret_with_config(&instructions, config, None);
+                prop_assert!(result.is_ok(), "Wrapping cells should never error on overflow");
+
+                // The final cell value should be increments % 256
+                // We can't easily verify the actual cell value without exposing internals,
+                // but we can verify no error occurred
+            }
+        }
+
+        // Property: Cell checked arithmetic errors on overflow/underflow
+        proptest! {
+            #[test]
+            fn cell_checked_errors_on_overflow(increments in 256u32..512) {
+                // Generate a program that will overflow (more than 255 increments)
+                let source = "+".repeat(increments as usize);
+                let instructions = parse(&source).unwrap();
+
+                let config = ExecutionConfigBuilder::new()
+                    .with_memory_size(10)
+                    .with_checked_cells()
+                    .build();
+
+                let result = interpret_with_config(&instructions, config, None);
+                prop_assert!(result.is_err(), "Checked cells should error on overflow");
+                prop_assert!(
+                    matches!(result, Err(BfError::CellOverflow { .. })),
+                    "Should be CellOverflow error"
+                );
+            }
+        }
+
+        // Property: Fixed memory model errors when pointer exceeds bounds
+        proptest! {
+            #[test]
+            fn fixed_memory_bounds_enforcement(memory_size in 10usize..100, moves in 0usize..200) {
+                // Generate a program that moves right beyond memory bounds
+                if moves <= memory_size {
+                    return Ok(()); // Skip if within bounds
+                }
+
+                let source = ">".repeat(moves);
+                let instructions = parse(&source).unwrap();
+
+                let config = ExecutionConfigBuilder::new()
+                    .with_memory_size(memory_size)
+                    .build();
+
+                let result = interpret_with_config(&instructions, config, None);
+                prop_assert!(result.is_err(), "Fixed memory should error when exceeding bounds");
+                prop_assert!(
+                    matches!(result, Err(BfError::MemoryOutOfBounds { .. })),
+                    "Should be MemoryOutOfBounds error"
+                );
+            }
+        }
+
+        // Property: Unbounded memory grows correctly within max_size
+        proptest! {
+            #[test]
+            fn unbounded_memory_growth_within_limits(
+                initial_size in 5usize..20,
+                max_size in 30usize..100,
+                moves in 0usize..25
+            ) {
+                // Ensure initial < max
+                if initial_size >= max_size {
+                    return Ok(());
+                }
+
+                // Generate a program that moves within max_size
+                if moves >= max_size {
+                    return Ok(()); // Skip if beyond max
+                }
+
+                let source = format!("{}+", ">".repeat(moves));
+                let instructions = parse(&source).unwrap();
+
+                let config = ExecutionConfigBuilder::new()
+                    .with_unbounded_memory(initial_size, max_size)?
+                    .build();
+
+                let result = interpret_with_config(&instructions, config, None);
+
+                // Should succeed if moves < max_size
+                if moves < max_size {
+                    prop_assert!(result.is_ok(),
+                        "Unbounded memory should grow from {} to {} (moved {})",
+                        initial_size, max_size, moves);
+                } else {
+                    prop_assert!(result.is_err(),
+                        "Unbounded memory should error beyond max_size");
+                }
+            }
+        }
+
+        // Property: Unbounded memory respects max_size limit
+        proptest! {
+            #[test]
+            fn unbounded_memory_max_size_enforced(
+                initial_size in 5usize..20,
+                max_size in 20usize..50
+            ) {
+                // Ensure initial < max
+                if initial_size >= max_size {
+                    return Ok(());
+                }
+
+                // Generate a program that tries to exceed max_size
+                let moves = max_size + 10;
+                let source = ">".repeat(moves);
+                let instructions = parse(&source).unwrap();
+
+                let config = ExecutionConfigBuilder::new()
+                    .with_unbounded_memory(initial_size, max_size)?
+                    .build();
+
+                let result = interpret_with_config(&instructions, config, None);
+                prop_assert!(result.is_err(),
+                    "Unbounded memory should error when exceeding max_size {} (tried {})",
+                    max_size, moves);
+                prop_assert!(
+                    matches!(result, Err(BfError::MemoryOutOfBounds { .. })),
+                    "Should be MemoryOutOfBounds error"
+                );
+            }
+        }
+    }
 }
