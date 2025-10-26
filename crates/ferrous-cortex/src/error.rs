@@ -109,7 +109,7 @@ pub(crate) fn extract_source_context_highlighted(source: &str, location: SourceL
     // Point at the instruction before the error (the last successful one)
     // Column is 1-indexed: (column-2) for prev char + 8 for prefix = column + 6
     let spaces = " ".repeat(location.column + 6);
-    write!(buffer, "{}\x1b[1;31m^\x1b[0m\n", spaces).expect("write to Vec should not fail");
+    writeln!(buffer, "{}\x1b[1;31m^\x1b[0m", spaces).expect("write to Vec should not fail");
 
     // Write remaining lines after the error line
     if line_idx + 1 < end_line {

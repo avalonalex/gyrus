@@ -399,7 +399,7 @@ fn display_debug_csv(debug_info: &DebugInfo) {
     println!("step,instruction,line,column,offset");
     for idx in 0..debug_info.len() {
         if let Some(loc) = debug_info.lookup(idx) {
-            println!("{},{},{},{},{}", idx, "?", loc.line, loc.column, loc.offset);
+            println!("{},?,{},{},{}", idx, loc.line, loc.column, loc.offset);
         }
     }
 }
