@@ -116,6 +116,8 @@ ferrous-cortex programs/warnings/cell_overflow.bf --quiet
 
 This is useful when you want only the program output without diagnostic information.
 
+**Note**: `--quiet` is designed for **permissive modes** (wrapping cells, unbounded memory) where warnings are informational. Using `--quiet` with `--cell-model checked` doesn't make much sense, since checked mode produces errors (not warnings) that stop execution.
+
 ## Understanding the Warnings
 
 Each warning includes the **instruction index** where the event occurred. This helps you locate the exact instruction in your code that triggered the warning.

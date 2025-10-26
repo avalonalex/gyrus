@@ -27,7 +27,7 @@ fn main() -> Result<(), BfError> {
     let mut input = StringIo::empty();
     let mut output = StringIo::empty();
 
-    match interpret_with_io(&instructions, config, &mut input, &mut output) {
+    match interpret_with_io(&instructions, config, &mut input, &mut output, None) {
         Ok(stats) => {
             println!("✓ Success!");
             println!("  Peak memory: {} cells", stats.peak_memory_used);
@@ -48,7 +48,7 @@ fn main() -> Result<(), BfError> {
     let mut input = StringIo::empty();
     let mut output = StringIo::empty();
 
-    match interpret_with_io(&instructions, config, &mut input, &mut output) {
+    match interpret_with_io(&instructions, config, &mut input, &mut output, None) {
         Ok(_) => println!("Unexpectedly succeeded!"),
         Err(e) => {
             println!("✓ Caught error as expected:");
@@ -72,7 +72,7 @@ fn main() -> Result<(), BfError> {
     let mut input = StringIo::empty();
     let mut output = StringIo::empty();
 
-    let stats = interpret_with_io(&instructions, config, &mut input, &mut output)?;
+    let stats = interpret_with_io(&instructions, config, &mut input, &mut output, None)?;
 
     println!("✓ Success with unbounded memory!");
     println!("  Initial size: 100 bytes");
@@ -95,7 +95,7 @@ fn main() -> Result<(), BfError> {
     let mut input = StringIo::empty();
     let mut output = StringIo::empty();
 
-    match interpret_with_io(&instructions, config, &mut input, &mut output) {
+    match interpret_with_io(&instructions, config, &mut input, &mut output, None) {
         Ok(_) => println!("Unexpectedly succeeded!"),
         Err(e) => {
             println!("✓ Caught error when exceeding max size:");

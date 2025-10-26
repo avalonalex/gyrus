@@ -1,3 +1,4 @@
+use crate::debug::DebugInfo;
 use crate::error::{BfError, Result, extract_source_context};
 use crate::instruction::Instruction;
 use crate::location::SourceLocation;
@@ -72,6 +73,19 @@ fn validate_brackets(source: &str) -> Vec<BfError> {
 ///
 /// Accepts any string-like type (`&str`, `String`, `Cow<str>`, etc.)
 pub fn parse(source: impl AsRef<str>) -> Result<Vec<Instruction>> {
+    let (instructions, _debug_info) = parse_with_debug(source)?;
+    Ok(instructions)
+}
+
+/// Parse BrainFuck source code with debug symbol collection
+///
+/// Returns both the parsed instructions and debug information mapping
+/// step indices to source locations. This enables runtime warnings
+/// to show source context.
+///
+/// The step indices match the interpreter's execution order (StepCount),
+/// allowing O(1) lookup of source locations at runtime.
+pub fn parse_with_debug(source: impl AsRef<str>) -> Result<(Vec<Instruction>, DebugInfo)> {
     let source = source.as_ref();
 
     // First validate brackets and report all errors at once
@@ -93,33 +107,80 @@ pub fn parse(source: impl AsRef<str>) -> Result<Vec<Instruction>> {
     }
 
     let mut location = SourceLocation::start();
-    parse_block(source, &mut location, None)
+    let mut debug_info = DebugInfo::with_source(source.to_string());
+    let mut step_index = 0;
+    let instructions = parse_block_with_debug(
+        source,
+        &mut location,
+        None,
+        &mut debug_info,
+        &mut step_index,
+    )?;
+    Ok((instructions, debug_info))
 }
 
-fn parse_block(
+fn parse_block_with_debug(
     source: &str,
     location: &mut SourceLocation,
     loop_start: Option<SourceLocation>,
+    debug_info: &mut DebugInfo,
+    step_index: &mut usize,
 ) -> Result<Vec<Instruction>> {
     let mut instructions = Vec::new();
     let chars: Vec<char> = source.chars().collect();
 
     while location.offset < chars.len() {
         let ch = chars[location.offset];
+        let instruction_location = *location;
 
         match ch {
-            '>' => instructions.push(Instruction::IncrementPointer),
-            '<' => instructions.push(Instruction::DecrementPointer),
-            '+' => instructions.push(Instruction::IncrementValue),
-            '-' => instructions.push(Instruction::DecrementValue),
-            '.' => instructions.push(Instruction::Output),
-            ',' => instructions.push(Instruction::Input),
+            '>' => {
+                debug_info.record(*step_index, instruction_location);
+                *step_index += 1;
+                instructions.push(Instruction::IncrementPointer);
+            }
+            '<' => {
+                debug_info.record(*step_index, instruction_location);
+                *step_index += 1;
+                instructions.push(Instruction::DecrementPointer);
+            }
+            '+' => {
+                debug_info.record(*step_index, instruction_location);
+                *step_index += 1;
+                instructions.push(Instruction::IncrementValue);
+            }
+            '-' => {
+                debug_info.record(*step_index, instruction_location);
+                *step_index += 1;
+                instructions.push(Instruction::DecrementValue);
+            }
+            '.' => {
+                debug_info.record(*step_index, instruction_location);
+                *step_index += 1;
+                instructions.push(Instruction::Output);
+            }
+            ',' => {
+                debug_info.record(*step_index, instruction_location);
+                *step_index += 1;
+                instructions.push(Instruction::Input);
+            }
             '[' => {
                 let loop_location = *location;
                 advance_location(location, ch);
 
-                // Recursively parse the loop body
-                let loop_body = parse_block(source, location, Some(loop_location))?;
+                // Record loop start location
+                debug_info.record(*step_index, loop_location);
+                *step_index += 1;
+
+                // Recursively parse the loop body (this will increment step_index for each instruction in the body)
+                let loop_body = parse_block_with_debug(
+                    source,
+                    location,
+                    Some(loop_location),
+                    debug_info,
+                    step_index,
+                )?;
+
                 instructions.push(Instruction::Loop(loop_body));
                 continue; // Don't advance again, parse_block already did
             }

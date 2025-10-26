@@ -26,6 +26,7 @@ fn main() -> Result<(), BfError> {
         ExecutionConfig::default(),
         &mut input,
         &mut output,
+        None,
     )?;
 
     println!("Output: {}", output.output_string());
@@ -45,6 +46,7 @@ fn main() -> Result<(), BfError> {
         ExecutionConfig::default(),
         &mut input,
         &mut output,
+        None,
     )?;
 
     println!("Input:  Hello, FerrousCortex!");
@@ -66,6 +68,7 @@ fn main() -> Result<(), BfError> {
         ExecutionConfig::default(),
         &mut input,
         &mut output,
+        None,
     )?;
 
     println!("Result: {} (ASCII code)", output.output_bytes()[0]);

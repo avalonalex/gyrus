@@ -58,6 +58,7 @@
 //! See `interpreter.rs:195-200` for current cell arithmetic implementation.
 //! See `validator.rs` module docs for how validation assumes u8 wrapping cells.
 
+use crate::debug::DebugInfo;
 use crate::error::{BfError, MemoryDump, Result, RuntimeWarning};
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::fmt;
@@ -125,6 +126,7 @@ pub trait CellBehavior {
         value: &mut u8,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()>;
 
     /// Try to decrement the cell value by 1
@@ -138,6 +140,7 @@ pub trait CellBehavior {
         value: &mut u8,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()>;
 
     /// Check if the cell value represents zero
@@ -169,11 +172,16 @@ impl CellBehavior for U8WrappingCells {
         value: &mut u8,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         // Detect overflow: 255 + 1 = 0
         if *value == 255 {
+            // step_count has already been incremented, so subtract 1 for lookup
+            let source_location =
+                debug_info.and_then(|d| d.lookup((step_count.get() - 1) as usize));
             warnings.push(RuntimeWarning::CellOverflow {
                 instruction_index: step_count.into(),
+                source_location,
                 _reserved: (),
             });
         }
@@ -187,11 +195,16 @@ impl CellBehavior for U8WrappingCells {
         value: &mut u8,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         // Detect underflow: 0 - 1 = 255
         if *value == 0 {
+            // step_count has already been incremented, so subtract 1 for lookup
+            let source_location =
+                debug_info.and_then(|d| d.lookup((step_count.get() - 1) as usize));
             warnings.push(RuntimeWarning::CellUnderflow {
                 instruction_index: step_count.into(),
+                source_location,
                 _reserved: (),
             });
         }
@@ -223,6 +236,7 @@ impl CellBehavior for U8CheckedCells {
         value: &mut u8,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         *value = value.checked_add(1).ok_or_else(|| BfError::CellOverflow {
             instruction_index: step_count.into(),
@@ -239,6 +253,7 @@ impl CellBehavior for U8CheckedCells {
         value: &mut u8,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         *value = value.checked_sub(1).ok_or_else(|| BfError::CellUnderflow {
             instruction_index: step_count.into(),
@@ -327,10 +342,11 @@ impl CellModel {
         value: &mut u8,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         match self {
-            CellModel::U8Wrapping(m) => m.try_increment(value, step_count, warnings),
-            CellModel::U8Checked(m) => m.try_increment(value, step_count, warnings),
+            CellModel::U8Wrapping(m) => m.try_increment(value, step_count, warnings, debug_info),
+            CellModel::U8Checked(m) => m.try_increment(value, step_count, warnings, debug_info),
         }
     }
 
@@ -341,10 +357,11 @@ impl CellModel {
         value: &mut u8,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         match self {
-            CellModel::U8Wrapping(m) => m.try_decrement(value, step_count, warnings),
-            CellModel::U8Checked(m) => m.try_decrement(value, step_count, warnings),
+            CellModel::U8Wrapping(m) => m.try_decrement(value, step_count, warnings, debug_info),
+            CellModel::U8Checked(m) => m.try_decrement(value, step_count, warnings, debug_info),
         }
     }
 
@@ -391,6 +408,7 @@ pub trait MemoryBehavior {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()>;
 
     /// Try to decrement the pointer by 1
@@ -403,6 +421,7 @@ pub trait MemoryBehavior {
         allow_negative: bool,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()>;
 
     /// Get the initial memory size for this model
@@ -431,6 +450,7 @@ impl MemoryBehavior for FixedMemory {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         pointer.increment();
 
@@ -461,6 +481,7 @@ impl MemoryBehavior for FixedMemory {
         allow_negative: bool,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
@@ -521,6 +542,7 @@ impl MemoryBehavior for UnboundedMemory {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         pointer.increment();
 
@@ -546,10 +568,14 @@ impl MemoryBehavior for UnboundedMemory {
             memory.resize(new_size, 0);
 
             // Warn about memory expansion
+            // step_count has already been incremented, so subtract 1 for lookup
+            let source_location =
+                debug_info.and_then(|d| d.lookup((step_count.get() - 1) as usize));
             warnings.push(RuntimeWarning::MemoryExpanded {
                 instruction_index: step_count.into(),
                 from_size: MemorySize::new(old_size),
                 to_size: MemorySize::new(new_size),
+                source_location,
                 _reserved: (),
             });
         }
@@ -564,6 +590,7 @@ impl MemoryBehavior for UnboundedMemory {
         allow_negative: bool,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
@@ -651,11 +678,14 @@ impl MemoryModel {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         match self {
-            MemoryModel::Fixed(m) => m.try_increment_pointer(pointer, memory, step_count, warnings),
+            MemoryModel::Fixed(m) => {
+                m.try_increment_pointer(pointer, memory, step_count, warnings, debug_info)
+            }
             MemoryModel::Unbounded(m) => {
-                m.try_increment_pointer(pointer, memory, step_count, warnings)
+                m.try_increment_pointer(pointer, memory, step_count, warnings, debug_info)
             }
         }
     }
@@ -671,14 +701,25 @@ impl MemoryModel {
         allow_negative: bool,
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         match self {
-            MemoryModel::Fixed(m) => {
-                m.try_decrement_pointer(pointer, memory, allow_negative, step_count, warnings)
-            }
-            MemoryModel::Unbounded(m) => {
-                m.try_decrement_pointer(pointer, memory, allow_negative, step_count, warnings)
-            }
+            MemoryModel::Fixed(m) => m.try_decrement_pointer(
+                pointer,
+                memory,
+                allow_negative,
+                step_count,
+                warnings,
+                debug_info,
+            ),
+            MemoryModel::Unbounded(m) => m.try_decrement_pointer(
+                pointer,
+                memory,
+                allow_negative,
+                step_count,
+                warnings,
+                debug_info,
+            ),
         }
     }
 }

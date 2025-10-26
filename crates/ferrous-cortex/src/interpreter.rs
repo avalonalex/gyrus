@@ -1,4 +1,5 @@
 use crate::config::{EofBehavior, ExecutionConfig};
+use crate::debug::DebugInfo;
 use crate::error::{BfError, Result};
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
@@ -9,7 +10,7 @@ use std::io;
 use crate::config::MemoryModel;
 
 /// Virtual machine state for BrainFuck execution
-struct VmState {
+struct VmState<'a> {
     /// Memory tape (array of cells)
     memory: Vec<u8>,
     /// Current memory pointer position
@@ -22,11 +23,17 @@ struct VmState {
     start_time: Option<std::time::Instant>,
     /// Memory model that dictates how memory operations behave
     memory_model: MemoryModel,
+    /// Debug information for mapping step indices to source locations
+    debug_info: Option<&'a DebugInfo>,
 }
 
-impl VmState {
+impl<'a> VmState<'a> {
     /// Create a new VM state with the given memory model and optional start time
-    fn new(memory_model: MemoryModel, start_time: Option<std::time::Instant>) -> Self {
+    fn new(
+        memory_model: MemoryModel,
+        start_time: Option<std::time::Instant>,
+        debug_info: Option<&'a DebugInfo>,
+    ) -> Self {
         let memory_size = memory_model.initial_size().get();
         Self {
             memory: vec![0u8; memory_size],
@@ -35,6 +42,7 @@ impl VmState {
             stats: ExecutionStats::new(),
             start_time,
             memory_model,
+            debug_info,
         }
     }
 }
@@ -62,7 +70,7 @@ pub fn interpret(instructions: &[Instruction]) -> Result<()> {
 /// let instructions = parse(",[.,]")?;
 /// let mut input = StringIo::new("Hi");
 /// let mut output = StringIo::empty();
-/// let stats = interpret_with_io(&instructions, ExecutionConfig::default(), &mut input, &mut output)?;
+/// let stats = interpret_with_io(&instructions, ExecutionConfig::default(), &mut input, &mut output, None)?;
 /// assert_eq!(output.output_string(), "Hi");
 /// # Ok::<(), ferrous_cortex::BfError>(())
 /// ```
@@ -71,11 +79,12 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     config: ExecutionConfig,
     input: &mut I,
     output: &mut O,
+    debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
     use std::time::Instant;
 
     let start_time = config.timeout_ms().map(|_| Instant::now());
-    let mut state = VmState::new(*config.memory_model(), start_time);
+    let mut state = VmState::new(*config.memory_model(), start_time, debug_info);
 
     execute_block(instructions, &mut state, &config, input, output)?;
 
@@ -109,7 +118,7 @@ pub fn interpret_with_config(
 ) -> Result<ExecutionStats> {
     let mut input = StdInput;
     let mut output = StdOutput;
-    interpret_with_io(instructions, config, &mut input, &mut output)
+    interpret_with_io(instructions, config, &mut input, &mut output, None)
 }
 
 /// Handle pointer increment based on memory model
@@ -120,6 +129,7 @@ fn increment_pointer(state: &mut VmState) -> Result<()> {
         &mut state.memory,
         state.step_count,
         &mut state.stats.warnings,
+        state.debug_info,
     )
 }
 
@@ -132,6 +142,7 @@ fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Resul
         allow_negative_pointer,
         state.step_count,
         &mut state.stats.warnings,
+        state.debug_info,
     )
 }
 
@@ -208,6 +219,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     &mut state.memory[state.pointer.get()],
                     state.step_count,
                     &mut state.stats.warnings,
+                    state.debug_info,
                 )?;
             }
             Instruction::DecrementValue => {
@@ -215,6 +227,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     &mut state.memory[state.pointer.get()],
                     state.step_count,
                     &mut state.stats.warnings,
+                    state.debug_info,
                 )?;
             }
             Instruction::Output => {
@@ -816,7 +829,7 @@ mod tests {
 
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
-        let result = interpret_with_io(&instructions, config, &mut input, &mut output);
+        let result = interpret_with_io(&instructions, config, &mut input, &mut output, None);
 
         assert!(result.is_ok(), "Wrapping should not error on overflow");
         assert_eq!(output.output_bytes()[0], 0, "Should wrap to 0");
@@ -839,7 +852,7 @@ mod tests {
 
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
-        let result = interpret_with_io(&instructions, config, &mut input, &mut output);
+        let result = interpret_with_io(&instructions, config, &mut input, &mut output, None);
 
         assert!(result.is_ok(), "Wrapping should not error on underflow");
         assert_eq!(output.output_bytes()[0], 255, "Should wrap to 255");
