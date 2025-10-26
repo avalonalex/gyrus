@@ -1,3 +1,67 @@
+//! BrainFuck source code parser.
+//!
+//! Parses BrainFuck source code into an Abstract Syntax Tree (AST) of [`Instruction`]
+//! nodes. The parser validates bracket matching, tracks source locations for error
+//! reporting, and supports line comments using the `*` character.
+//!
+//! # Features
+//!
+//! - **Recursive descent parsing**: Converts source text into a nested tree structure
+//! - **Location tracking**: Maintains line, column, and offset for every position
+//! - **Bracket validation**: Pre-parse phase validates ALL bracket matching errors at once
+//! - **Line comments**: `*` starts a line comment (everything after `*` is ignored)
+//! - **Implicit comments**: Non-BF characters are ignored
+//! - **Rich error messages**: Shows source context with 2 lines before/after
+//! - **Debug symbols**: Optional source location mapping for runtime diagnostics
+//!
+//! # Parsing Process
+//!
+//! 1. **Bracket validation**: Pre-scan to find all bracket errors
+//! 2. **Recursive descent**: Parse instructions into AST
+//! 3. **Location tracking**: Record source position for each instruction
+//! 4. **Debug info** (optional): Build index for runtime location lookup
+//!
+//! # Examples
+//!
+//! ## Basic parsing
+//!
+//! ```rust
+//! use ferrous_cortex::parse;
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let instructions = parse("++[>++<-]")?;
+//! println!("Parsed {} instructions", instructions.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Parsing with debug info
+//!
+//! ```rust
+//! use ferrous_cortex::parse_with_debug;
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let (instructions, debug_info) = parse_with_debug("++[>++<-]")?;
+//! // debug_info can be used to map runtime step count to source location
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Line comments
+//!
+//! ```rust
+//! use ferrous_cortex::parse;
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let source = r#"
+//!     * This is a line comment
+//!     +++  * Increment three times
+//! "#;
+//! let instructions = parse(source)?;
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::debug::DebugInfo;
 use crate::error::{BfError, Result, extract_source_context};
 use crate::instruction::Instruction;

@@ -1,3 +1,21 @@
+//! Source code location tracking.
+//!
+//! This module provides [`SourceLocation`] for tracking line/column positions
+//! in source code for error reporting and debugging. Used by the parser to
+//! track positions during parsing and by the interpreter for runtime error
+//! messages.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use ferrous_cortex::SourceLocation;
+//!
+//! let location = SourceLocation::start();
+//! assert_eq!(location.line, 1);
+//! assert_eq!(location.column, 1);
+//! println!("{}", location);  // "line 1, column 1"
+//! ```
+
 use std::fmt;
 
 /// Represents a location in the source code

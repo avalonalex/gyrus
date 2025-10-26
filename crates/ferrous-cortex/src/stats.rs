@@ -1,3 +1,27 @@
+//! Execution statistics and performance metrics.
+//!
+//! This module provides [`ExecutionStats`] for tracking interpreter execution metrics
+//! such as step count, memory usage, I/O operations, and runtime warnings.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use ferrous_cortex::{parse, interpret_with_config, ExecutionConfigBuilder};
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let instructions = parse("+++++[>+<-]")?;
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_memory_size(1000)
+//!     .build();
+//!
+//! let stats = interpret_with_config(&instructions, config, None)?;
+//! println!("Total steps: {}", stats.total_steps);
+//! println!("Loop iterations: {}", stats.loop_iterations);
+//! println!("Peak memory used: {} cells", stats.peak_memory_used);
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::error::RuntimeWarning;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 

@@ -1,3 +1,33 @@
+//! Error types and error handling utilities.
+//!
+//! This module defines [`BfError`] for runtime errors, [`BfWarning`] for validation
+//! warnings, and [`RuntimeWarning`] for warnings collected during execution.
+//! Errors include rich context like memory dumps, actionable hints, source location
+//! tracking, and syntax-highlighted error messages with ANSI color support.
+//!
+//! # Error Reporting Features
+//!
+//! - **Syntax highlighting**: Error messages include syntax-highlighted source context
+//! - **Source location tracking**: Precise line/column information for all errors
+//! - **Memory dumps**: Show memory state when errors occur
+//! - **Actionable hints**: Suggestions for fixing common problems
+//! - **Error chaining**: Track causal relationships between errors
+//!
+//! # Examples
+//!
+//! ```rust
+//! use ferrous_cortex::{parse, BfError};
+//!
+//! // Parse errors include source location and context
+//! match parse("++[>++") {
+//!     Ok(instructions) => println!("Parsed successfully"),
+//!     Err(e) => {
+//!         eprintln!("Error: {}", e);
+//!         // Errors automatically include syntax-highlighted source context
+//!     }
+//! }
+//! ```
+
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
