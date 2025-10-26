@@ -268,19 +268,26 @@ This is a Cargo workspace with the following crates:
   - Can be used as a library by other Rust projects
   - Ready for publication to crates.io
 
-- **`ferrous-cortex-cli`** (binary): Command-line interface
+- **`ferrous-cortex-cli`** (binary): Command-line interpreter
   - Location: `crates/ferrous-cortex-cli/`
-  - Thin wrapper around the library
-  - Handles argument parsing and output formatting
+  - Focused on **program execution** only
+  - Handles runtime configuration (memory models, limits, timeouts)
   - Binary name: `ferrous-cortex`
 
+- **`ferrous-cortex-tool`** (binary): Development and analysis tools
+  - Location: `crates/ferrous-cortex-tool/`
+  - Focused on **development workflows**
+  - Subcommand-based CLI (minify, validate, debug-info)
+  - Binary name: `ferrous-cortex-tool`
+
 **Benefits of workspace structure**:
-- ✅ Clear separation between library and CLI
-- ✅ Easy to add new binaries (debugger, REPL, etc.)
+- ✅ Clear separation between library, execution CLI, and development tools
+- ✅ Easy to add new binaries (debugger, REPL, JIT compiler)
 - ✅ Library can be published to crates.io independently
 - ✅ Each crate can have its own version
 - ✅ Faster incremental compilation
 - ✅ Clean module boundaries prevent coupling
+- ✅ Tool features don't clutter the execution CLI
 
 ## Common Commands
 
@@ -288,12 +295,19 @@ This is a Cargo workspace with the following crates:
 ```bash
 cargo build                           # Build entire workspace
 cargo build --release                 # Optimized build
-cargo run -- <file.bf>                # Run CLI (auto-detects binary)
-cargo run -- programs/basic/hello_world.bf  # Run example
+
+# Run interpreter
+cargo run -p ferrous-cortex-cli -- programs/basic/hello_world.bf
+
+# Run development tools
+cargo run -p ferrous-cortex-tool -- minify programs/basic/hello_world.bf
+cargo run -p ferrous-cortex-tool -- validate programs/tests/warnings_test.bf
+cargo run -p ferrous-cortex-tool -- debug-info programs/basic/simple.bf
 
 # Build specific crate
 cargo build -p ferrous-cortex         # Build library only
-cargo build -p ferrous-cortex-cli     # Build CLI only
+cargo build -p ferrous-cortex-cli     # Build interpreter only
+cargo build -p ferrous-cortex-tool    # Build tool only
 ```
 
 ### Testing

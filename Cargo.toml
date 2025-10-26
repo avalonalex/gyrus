@@ -2,6 +2,7 @@
 members = [
     "crates/ferrous-cortex",
     "crates/ferrous-cortex-cli",
+    "crates/ferrous-cortex-tool",
 ]
 resolver = "2"
 

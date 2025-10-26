@@ -3,15 +3,18 @@ use std::fs;
 use std::path::PathBuf;
 
 use ferrous_cortex::{
-    BfError, CellModel, DebugInfo, EofBehavior, ExecutionConfigBuilder, U8CheckedCells,
-    U8WrappingCells, interpret_with_io,
+    BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
+    interpret_with_io,
     io::{StdInput, StdOutput},
-    minify, parse_with_debug, validate,
+    parse_with_debug,
 };
 
 #[derive(Parser)]
 #[command(name = "ferrous-cortex")]
-#[command(about = "A BrainFuck interpreter and debugger", long_about = None)]
+#[command(about = "A BrainFuck interpreter", long_about = None)]
+#[command(
+    after_help = "For development tools (minify, validate, debug-info), use 'ferrous-cortex-tool'"
+)]
 struct Cli {
     /// BrainFuck source file to execute
     #[arg(value_name = "FILE")]
@@ -56,22 +59,6 @@ struct Cli {
     /// EOF behavior: zero, neg-one, no-change, or error
     #[arg(long, default_value = "zero")]
     eof_behavior: String,
-
-    /// Validate program and show warnings (does not execute)
-    #[arg(long)]
-    validate: bool,
-
-    /// Minify the program (strip all comments and output only BF commands)
-    #[arg(long)]
-    minify: bool,
-
-    /// Output file for minified code (stdout if not specified)
-    #[arg(short, long)]
-    output: Option<PathBuf>,
-
-    /// Inspect debug symbols (shows symbol table mapping step indices to source locations)
-    #[arg(long)]
-    inspect_debug: bool,
 }
 
 fn main() {
@@ -119,43 +106,7 @@ fn run() -> Result<(), BfError> {
         Err(e) => return Err(e),
     };
 
-    // Inspect debug symbols if requested (and exit without executing)
-    if cli.inspect_debug {
-        display_debug_symbols(&source, &debug_info);
-        return Ok(());
-    }
-
-    // Minify if requested (and exit without executing)
-    if cli.minify {
-        let minified = minify(&instructions);
-
-        if let Some(output_path) = &cli.output {
-            // Write to file
-            fs::write(output_path, &minified).map_err(|source| BfError::FileError {
-                path: output_path.clone(),
-                source,
-                hint: format!(
-                    "Make sure you have write permission for: {}",
-                    output_path.display()
-                ),
-            })?;
-            if cli.verbose {
-                eprintln!(
-                    "Minified {} bytes to {} bytes (saved to {})",
-                    source.len(),
-                    minified.len(),
-                    output_path.display()
-                );
-            }
-        } else {
-            // Write to stdout
-            println!("{}", minified);
-        }
-
-        return Ok(());
-    }
-
-    // Parse cell model for validation
+    // Parse cell model
     let cell_model = parse_or_exit(
         &cli.cell_model,
         |s| match s.to_lowercase().as_str() {
@@ -166,24 +117,6 @@ fn run() -> Result<(), BfError> {
         "cell model",
         "wrapping, checked",
     );
-
-    // Validate if requested (always assumes u8 wrapping - production target)
-    if cli.validate {
-        let warnings = validate(&instructions);
-
-        if !warnings.is_empty() {
-            eprintln!("Validation found {} warning(s):\n", warnings.len());
-            for warning in &warnings {
-                eprintln!("{}\n", warning);
-            }
-        } else {
-            // No warnings found
-            eprintln!("Validation: No warnings found");
-        }
-
-        // --validate mode: always exit without executing
-        return Ok(());
-    }
 
     // Build execution config using enhanced builder
     let builder = ExecutionConfigBuilder::new();
@@ -306,55 +239,4 @@ fn run() -> Result<(), BfError> {
     }
 
     Ok(())
-}
-
-/// Display debug symbol table in a formatted way
-fn display_debug_symbols(source: &str, debug_info: &DebugInfo) {
-    println!("=== Debug Symbol Table ===\n");
-    println!("Source code ({} bytes):", source.len());
-    println!("{:?}\n", source);
-
-    println!("Symbol table ({} entries):", debug_info.len());
-    println!(
-        "{:<12} {:<15} {:<8} {:<8} {:<10}",
-        "Step Index", "Character", "Line", "Column", "Offset"
-    );
-    println!("{}", "=".repeat(65));
-
-    // Display all entries in order
-    for idx in 0..debug_info.len() {
-        if let Some(loc) = debug_info.lookup(idx) {
-            // Get the character at this location
-            let char_at_loc = get_char_at_location(source, loc);
-            let char_display = match char_at_loc {
-                '\n' => "\\n".to_string(),
-                '\r' => "\\r".to_string(),
-                '\t' => "\\t".to_string(),
-                c if c.is_control() => format!("\\x{:02x}", c as u8),
-                c => c.to_string(),
-            };
-
-            println!(
-                "{:<12} {:<15} {:<8} {:<8} {:<10}",
-                idx,
-                format!("'{}'", char_display),
-                loc.line,
-                loc.column,
-                loc.offset
-            );
-        }
-    }
-
-    println!("\n=== Summary ===");
-    println!("Total instructions: {}", debug_info.len());
-    println!("Source bytes: {}", source.len());
-    println!(
-        "Compression ratio: {:.1}%",
-        (debug_info.len() as f64 / source.len() as f64) * 100.0
-    );
-}
-
-/// Get the character at a given source location
-fn get_char_at_location(source: &str, loc: ferrous_cortex::SourceLocation) -> char {
-    source.chars().nth(loc.offset).unwrap_or('\0')
 }

@@ -20,13 +20,10 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
   - Maximum step count to prevent infinite loops
   - Execution timeout in milliseconds
   - Customizable memory size
-- **Program validation** with static analysis
-  - Detects empty loops, infinite loops, extreme nesting
-  - Identifies suspicious patterns
-  - Always validates for production target (u8 wrapping)
-- **Code minification** - strip comments for compact programs
-  - 95%+ size reduction typical
-  - Preserves functionality
+- **Development tools** (`ferrous-cortex-tool`)
+  - Program validation with static analysis
+  - Code minification (95%+ size reduction)
+  - Debug symbol inspection with JSON/CSV/table output
 - **Verbose mode** with execution diagnostics
   - Configuration details (memory model, limits, timeout)
   - Execution statistics (step count, loop iterations, memory usage)
@@ -59,10 +56,15 @@ The compiled binary will be available at `target/release/ferrous-cortex`.
 
 ## Usage
 
+FerrousCortex provides two command-line tools:
+
+1. **`ferrous-cortex`** - BrainFuck interpreter for executing programs
+2. **`ferrous-cortex-tool`** - Development tools for analyzing and processing BF code
+
 ### Running a BrainFuck Program
 
 ```bash
-cargo run -- <path-to-bf-file>
+cargo run -p ferrous-cortex-cli -- <path-to-bf-file>
 
 # Or using the compiled binary
 ./target/release/ferrous-cortex <path-to-bf-file>
@@ -91,16 +93,13 @@ See the `programs/errors/` directory for comprehensive error handling demonstrat
 
 ```bash
 # Parse error with detailed context
-cargo run -- programs/errors/unmatched_bracket.bf
+cargo run -p ferrous-cortex-cli -- programs/errors/unmatched_bracket.bf
 
 # Memory bounds error
-cargo run -- programs/errors/memory_overflow.bf --memory-size 100
+cargo run -p ferrous-cortex-cli -- programs/errors/memory_overflow.bf --memory-size 100
 
 # Infinite loop with step limit
-cargo run -- programs/errors/infinite_loop.bf --max-steps 10000
-
-# Validation warnings
-cargo run -- programs/errors/validation_warnings.bf --validate
+cargo run -p ferrous-cortex-cli -- programs/errors/infinite_loop.bf --max-steps 10000
 ```
 
 See [`programs/errors/README.md`](programs/errors/README.md) for detailed error examples documentation.
@@ -130,6 +129,10 @@ See [`crates/ferrous-cortex/examples/README.md`](crates/ferrous-cortex/examples/
 
 ### Command-Line Options
 
+#### ferrous-cortex (Interpreter)
+
+Execute BrainFuck programs with configurable runtime options:
+
 ```bash
 # Show all available options
 ferrous-cortex --help
@@ -150,14 +153,12 @@ ferrous-cortex program.bf --memory-size 1000000
 ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 ```
 
-#### Available Flags
+**Available Options:**
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-v, --verbose` | Show detailed execution information and statistics | false |
-| `--validate` | Validate program and show warnings (does not execute) | false |
-| `--minify` | Strip all comments and output only BF commands | false |
-| `-o, --output <FILE>` | Output file for minified code (stdout if not specified) | - |
+| `-q, --quiet` | Suppress runtime warnings and non-program output | false |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
 | `--memory-size <BYTES>` | Memory size in bytes (for fixed model) | 30000 |
@@ -166,6 +167,41 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | `--unbounded-initial <BYTES>` | Initial size for unbounded memory model | 1000 |
 | `--unbounded-max <BYTES>` | Maximum size for unbounded memory model | 1000000 |
 | `--eof-behavior <BEHAVIOR>` | EOF behavior: zero, neg-one, no-change, or error | zero |
+
+#### ferrous-cortex-tool (Development Tools)
+
+Analyze, validate, and process BrainFuck programs:
+
+```bash
+# Show all available commands
+ferrous-cortex-tool --help
+
+# Minify a program (strip comments)
+ferrous-cortex-tool minify program.bf
+
+# Save minified output to file
+ferrous-cortex-tool minify program.bf -o program.min.bf --verbose
+
+# Validate a program and show warnings
+ferrous-cortex-tool validate program.bf
+
+# Validate in strict mode (exit with error if warnings found)
+ferrous-cortex-tool validate program.bf --strict
+
+# Inspect debug symbols
+ferrous-cortex-tool debug-info program.bf
+
+# Output debug info as JSON
+ferrous-cortex-tool debug-info program.bf --format json
+```
+
+**Available Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `minify` | Strip comments and whitespace from BF programs |
+| `validate` | Validate programs and show static analysis warnings |
+| `debug-info` | Inspect debug symbols and source location mappings |
 
 ## BrainFuck Language Reference
 
