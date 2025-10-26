@@ -955,6 +955,50 @@ criterion = "0.5"  # Phase 4
 3. **Should we add async I/O support?**
    - Recommendation: Defer to future PRD, current sync I/O is sufficient
 
+## Recent Updates
+
+### CLI Separation (October 2025) ✅ COMPLETED
+
+**Change**: Separated development tools from execution CLI into dedicated `ferrous-cortex-tool` binary.
+
+**Motivation**:
+- Main CLI (`ferrous-cortex`) was mixing execution and utility functions
+- Flags like `--minify`, `--validate`, `--inspect-debug` prevented execution
+- Growing tool features cluttered the execution interface
+- Users running programs didn't need development tools in their mental model
+
+**Implementation**:
+- Created new `crates/ferrous-cortex-tool/` crate with subcommand-based CLI
+- Moved three features from main CLI to tool:
+  - `minify` - Strip comments and whitespace
+  - `validate` - Static analysis and warnings
+  - `debug-info` - Inspect debug symbols with JSON/CSV/table output
+- Updated main CLI to focus only on execution
+- All tests continue to pass (136 tests)
+
+**Result**:
+```bash
+# Execution (ferrous-cortex)
+ferrous-cortex program.bf --max-steps 1000 --verbose
+
+# Development tools (ferrous-cortex-tool)
+ferrous-cortex-tool minify program.bf -o program.min.bf
+ferrous-cortex-tool validate program.bf --strict
+ferrous-cortex-tool debug-info program.bf --format json
+```
+
+**Benefits**:
+- ✅ Clearer separation of concerns (execution vs. development)
+- ✅ Subcommands more discoverable than flags (`--help` per command)
+- ✅ Tool features can grow without cluttering main CLI
+- ✅ Follows Rust ecosystem patterns (cargo/rustc, git CLI structure)
+- ✅ Each tool can have rich options without confusion
+
+**Documentation Updated**:
+- README.md - Added section documenting both CLIs
+- CLAUDE.md - Updated workspace structure section
+- PRD/ferrous-cortex-tool-design.md - Comprehensive design document
+
 ## Conclusion
 
 These architectural improvements address critical gaps in maintainability and extensibility:
@@ -964,5 +1008,6 @@ These architectural improvements address critical gaps in maintainability and ex
 3. **Code Examples** dramatically improve developer experience
 4. **Testing Infrastructure** increases confidence in changes
 5. **Execution Hooks** enable advanced debugging features
+6. **CLI Separation** provides clean UX for different workflows
 
 Phases 1-3 are **recommended before continuing with other PRD items**, especially Phase 2 (I/O Abstraction) which is blocking multiple features.
