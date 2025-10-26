@@ -268,3 +268,73 @@ impl fmt::Display for BfWarning {
         }
     }
 }
+
+/// Runtime warnings collected during program execution
+///
+/// These warnings indicate potentially problematic behavior that occurred
+/// during runtime, such as cell overflow/underflow or memory expansion.
+/// Unlike validation warnings (which are static analysis), these capture
+/// actual runtime events.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeWarning {
+    /// Cell value wrapped from 255 to 0 (overflow in wrapping mode)
+    CellOverflow {
+        instruction_index: InstructionIndex,
+        #[doc(hidden)]
+        _reserved: (),
+    },
+
+    /// Cell value wrapped from 0 to 255 (underflow in wrapping mode)
+    CellUnderflow {
+        instruction_index: InstructionIndex,
+        #[doc(hidden)]
+        _reserved: (),
+    },
+
+    /// Memory was expanded in unbounded mode
+    MemoryExpanded {
+        instruction_index: InstructionIndex,
+        from_size: MemorySize,
+        to_size: MemorySize,
+        #[doc(hidden)]
+        _reserved: (),
+    },
+}
+
+impl fmt::Display for RuntimeWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RuntimeWarning::CellOverflow {
+                instruction_index, ..
+            } => {
+                write!(
+                    f,
+                    "Runtime warning at instruction {}: Cell overflow (wrapped 255→0)",
+                    instruction_index
+                )
+            }
+            RuntimeWarning::CellUnderflow {
+                instruction_index, ..
+            } => {
+                write!(
+                    f,
+                    "Runtime warning at instruction {}: Cell underflow (wrapped 0→255)",
+                    instruction_index
+                )
+            }
+            RuntimeWarning::MemoryExpanded {
+                instruction_index,
+                from_size,
+                to_size,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Runtime warning at instruction {}: Memory expanded from {} to {} bytes",
+                    instruction_index, from_size, to_size
+                )
+            }
+        }
+    }
+}

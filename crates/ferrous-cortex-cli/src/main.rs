@@ -47,6 +47,10 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Suppress runtime warnings and non-program output (for permissive modes: wrapping cells, unbounded memory)
+    #[arg(short, long)]
+    quiet: bool,
+
     /// EOF behavior: zero, neg-one, no-change, or error
     #[arg(long, default_value = "zero")]
     eof_behavior: String,
@@ -214,7 +218,18 @@ fn run() -> Result<(), BfError> {
     // Build the final config
     let config = builder.build();
 
-    if cli.verbose {
+    // Warn if --quiet is used with checked mode (contradictory)
+    if cli.quiet && matches!(cell_model, CellModel::U8Checked(_)) {
+        eprintln!(
+            "Warning: --quiet suppresses runtime warnings, but --cell-model checked produces errors (not warnings)."
+        );
+        eprintln!(
+            "         Consider using --cell-model wrapping if you want warnings that can be suppressed."
+        );
+        eprintln!();
+    }
+
+    if cli.verbose && !cli.quiet {
         eprintln!("Configuration:");
         eprintln!("  Memory model: {}", config.memory_model());
         eprintln!("  Cell model: {}", config.cell_model());
@@ -236,9 +251,19 @@ fn run() -> Result<(), BfError> {
     // Execute the program
     let stats = interpret_with_config(&instructions, config)?;
 
-    // Display statistics in verbose mode
-    if cli.verbose {
-        eprintln!("\n=== Execution Statistics ===");
+    // Display runtime warnings (unless --quiet)
+    if !cli.quiet && !stats.warnings.is_empty() {
+        eprintln!("\n=== Runtime Warnings ===");
+        eprintln!("Detected {} runtime event(s):\n", stats.warnings.len());
+        for warning in &stats.warnings {
+            eprintln!("{}", warning);
+        }
+        eprintln!();
+    }
+
+    // Display statistics in verbose mode (unless --quiet)
+    if cli.verbose && !cli.quiet {
+        eprintln!("=== Execution Statistics ===");
         eprintln!("Total steps executed: {}", stats.total_steps);
         eprintln!("Loop iterations: {}", stats.loop_iterations);
         eprintln!("Peak memory used: {} cells", stats.peak_memory_used);
