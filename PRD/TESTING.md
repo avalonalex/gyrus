@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-Testing infrastructure has been significantly improved with **121 total tests** (81% increase from initial 67 tests) and a comprehensive program corpus of **33 BrainFuck programs**.
+Testing infrastructure has been significantly improved with **136 total tests** (103% increase from initial 67 tests) and a comprehensive program corpus of **33 BrainFuck programs**.
 
 **Current Status**: Production-ready foundation ✅
 **Next Priority**: CI Integration, Performance Baseline, Property Test Expansion
@@ -19,10 +19,10 @@ Testing infrastructure has been significantly improved with **121 total tests** 
 
 | Category | Count | Status |
 |----------|-------|--------|
-| Unit tests (library) | 84 | ✅ Passing |
+| Unit tests (library) | 96 | ✅ Passing |
 | Integration tests | 24 | ✅ Passing |
-| Doc tests | 13 | ✅ Passing |
-| **Total** | **121 tests** | ✅ All passing |
+| Doc tests | 16 | ✅ Passing |
+| **Total** | **136 tests** | ✅ All passing |
 | Benchmarks | 10 | ✅ Compiling |
 
 **Test execution time**: ~2 seconds (unit: 0.6s, integration: 1.2s, doc: 0.02s)
@@ -153,7 +153,7 @@ Testing infrastructure has been significantly improved with **121 total tests** 
 - ✅ Catch edge cases with property-based testing (proptest)
 - ✅ Performance tracking with benchmarks (criterion)
 - ✅ Real-world verification with integration tests (program corpus)
-- ✅ Better confidence in correctness (81% more tests)
+- ✅ Better confidence in correctness (103% more tests)
 - ✅ Foundation for future optimizations (baseline metrics)
 - ✅ Documented test expectations (test_manifest.toml)
 - ✅ Fast, deterministic testing with mock I/O (StringIo)
@@ -496,7 +496,7 @@ let mut input = StringIo::new("");
 ## Running Tests
 
 ```bash
-# All tests (121 total)
+# All tests (136 total)
 cargo test
 
 # Just integration tests
@@ -521,7 +521,7 @@ cargo tarpaulin --out Html
 
 ### Current Achievement
 
-- ✅ 121 total tests (goal: 100+)
+- ✅ 136 total tests (goal: 100+)
 - ✅ Fast execution (< 2 seconds)
 - ✅ Zero flaky tests
 - ✅ Property-based testing active
@@ -588,7 +588,7 @@ cargo tarpaulin --out Html
 
 The testing infrastructure is **production-ready** with:
 
-✅ **Comprehensive coverage**: 121 tests across unit/integration/property/doc
+✅ **Comprehensive coverage**: 136 tests across unit/integration/property/doc
 ✅ **Real-world validation**: 33 BrainFuck programs from simple to sophisticated
 ✅ **Performance tracking**: Benchmark infrastructure ready
 ✅ **Developer experience**: Test utilities reduce boilerplate by 54%

@@ -14,14 +14,14 @@ Enhance FerrousCortex's architecture to improve maintainability, extensibility, 
 - ✅ Clean code with zero technical debt markers
 - ✅ Idiomatic Rust patterns (builder, type-states, Result types)
 
-### Metrics (as of October 2025)
-- **Total LOC**: ~2,122 lines
-- **Modules**: 11 modules with clear responsibilities
-- **Public API items**: 52
-- **Tests**: 64 tests
-- **Examples**: 18+ BrainFuck example files
-- **Module-level docs**: 0 ⚠️
-- **Clippy warnings**: 0 (fixed)
+### Metrics (as of October 2025 - Updated)
+- **Total LOC**: ~4,800 lines (library + CLI combined)
+- **Modules**: 15 modules (11 core + 4 config submodules)
+- **Public API items**: 52+
+- **Tests**: 136 tests (96 unit + 24 integration + 16 doc)
+- **Examples**: 33+ BrainFuck programs across 5 categories
+- **Module-level docs**: 9/17 files (53%) ⚠️
+- **Clippy warnings**: 0 ✅
 
 ### ~~Critical Limitations~~ ✅ RESOLVED
 
@@ -58,19 +58,20 @@ Enhance FerrousCortex's architecture to improve maintainability, extensibility, 
 
 **Remaining Work**: Phase 1 of this PRD (add `//!` docs to all 11 modules)
 
-#### 3. Limited Testing Infrastructure ⏳ IN PROGRESS
+#### ~~3. Limited Testing Infrastructure~~ ✅ LARGELY COMPLETED
 **Problem**: No property-based testing, no benchmarks
-**Status**: ⏳ PARTIALLY COMPLETED
+**Status**: ✅ MOSTLY COMPLETED
 
 **Current State**:
-- ✅ 67 unit tests (good coverage of core functionality)
-- ✅ I/O abstraction enables better testing
-- ❌ No dev-dependencies for proptest/criterion
-- ❌ No benchmarks directory
-- ❌ No integration tests directory
-- ❌ No property-based tests
+- ✅ 136 total tests (96 unit + 24 integration + 16 doc)
+- ✅ Property-based testing with proptest (7 property tests)
+- ✅ Integration test suite (`tests/program_corpus.rs`)
+- ✅ Test utilities module (`test_utils.rs`)
+- ✅ Benchmarks with criterion (10 benchmarks)
+- ✅ 33+ BrainFuck test programs
+- ⚠️ Benchmarks compile but could use CI integration
 
-**Remaining Work**: Phase 4 of this PRD (add proptest, criterion)
+**Remaining Work**: CI integration, expand property tests
 
 #### 4. No Plugin/Hook Architecture
 **Problem**: Cannot extend with custom behavior or instrumentation
