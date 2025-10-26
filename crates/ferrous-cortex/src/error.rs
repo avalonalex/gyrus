@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -83,6 +84,43 @@ pub(crate) fn extract_source_context(source: &str, location: SourceLocation) -> 
     context
 }
 
+/// Extract source context with syntax highlighting
+pub(crate) fn extract_source_context_highlighted(source: &str, location: SourceLocation) -> String {
+    use crate::syntax::SyntaxHighlighter;
+
+    // Highlight the entire source
+    let highlighter = SyntaxHighlighter::new().show_line_numbers(true);
+    let highlighted = highlighter.highlight(source);
+
+    let line_idx = location.line.saturating_sub(1);
+    let start_line = line_idx.saturating_sub(2);
+    let end_line = (line_idx + 3).min(highlighted.lines().len());
+
+    // Build the context with the caret inserted right after the error line
+    let mut buffer = Vec::new();
+
+    // Write lines up to and including the error line
+    highlighted
+        .write_ansi_range(&mut buffer, start_line, line_idx + 1)
+        .expect("write to Vec should not fail");
+
+    // Add caret pointer right after the error line
+    // Line numbers are formatted as "   N │ " (4 digits + " │ " = 8 chars)
+    // Point at the instruction before the error (the last successful one)
+    // Column is 1-indexed: (column-2) for prev char + 8 for prefix = column + 6
+    let spaces = " ".repeat(location.column + 6);
+    write!(buffer, "{}\x1b[1;31m^\x1b[0m\n", spaces).expect("write to Vec should not fail");
+
+    // Write remaining lines after the error line
+    if line_idx + 1 < end_line {
+        highlighted
+            .write_ansi_range(&mut buffer, line_idx + 1, end_line)
+            .expect("write to Vec should not fail");
+    }
+
+    String::from_utf8(buffer).expect("UTF-8 conversion should not fail")
+}
+
 #[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum BfError {
@@ -107,6 +145,7 @@ pub enum BfError {
         attempted: isize,
         max: MemorySize,
         memory_dump: Option<MemoryDump>,
+        source_location: Option<SourceLocation>,
         hint: String,
     },
 
@@ -149,6 +188,7 @@ pub enum BfError {
     CellOverflow {
         instruction_index: InstructionIndex,
         current_value: u8,
+        source_location: Option<SourceLocation>,
         hint: String,
     },
 
@@ -158,6 +198,7 @@ pub enum BfError {
     CellUnderflow {
         instruction_index: InstructionIndex,
         current_value: u8,
+        source_location: Option<SourceLocation>,
         hint: String,
     },
 }
@@ -204,6 +245,102 @@ impl BfError {
         }
 
         output
+    }
+
+    /// Format error with source context if available
+    pub fn format_with_source(&self, source: &str) -> String {
+        match self {
+            BfError::MemoryOutOfBounds {
+                source_location,
+                attempted,
+                max,
+                memory_dump,
+                hint,
+                ..
+            } => {
+                let mut output = String::new();
+                if let Some(loc) = source_location {
+                    output.push_str(&format!(
+                        "Error: Memory pointer out of bounds\n\nAt line {}, column {}:\n",
+                        loc.line, loc.column
+                    ));
+                    output.push_str(&extract_source_context_highlighted(source, *loc));
+                    output.push_str(&format!(
+                        "Attempted to access cell {}, but memory size is {} cells.\n",
+                        attempted,
+                        max.get() + 1
+                    ));
+                } else {
+                    output.push_str("Error: Memory pointer out of bounds\n");
+                    output.push_str(&format!(
+                        "Attempted to access cell {}, but memory size is {} cells.\n",
+                        attempted,
+                        max.get() + 1
+                    ));
+                }
+                output.push_str(&format!("\nHint: {}", hint));
+                if let Some(dump) = memory_dump {
+                    output.push_str(&format!("\n\n{}", dump));
+                }
+                output
+            }
+            BfError::CellOverflow {
+                source_location,
+                current_value,
+                hint,
+                ..
+            } => {
+                let mut output = String::new();
+                if let Some(loc) = source_location {
+                    output.push_str(&format!(
+                        "Error: Cell overflow\n\nAt line {}, column {}:\n",
+                        loc.line, loc.column
+                    ));
+                    output.push_str(&extract_source_context_highlighted(source, *loc));
+                    output.push_str(&format!(
+                        "Attempted to increment cell with value {}.\n",
+                        current_value
+                    ));
+                } else {
+                    output.push_str("Error: Cell overflow\n");
+                    output.push_str(&format!(
+                        "Attempted to increment cell with value {}.\n",
+                        current_value
+                    ));
+                }
+                output.push_str(&format!("\nHint: {}", hint));
+                output
+            }
+            BfError::CellUnderflow {
+                source_location,
+                current_value,
+                hint,
+                ..
+            } => {
+                let mut output = String::new();
+                if let Some(loc) = source_location {
+                    output.push_str(&format!(
+                        "Error: Cell underflow\n\nAt line {}, column {}:\n",
+                        loc.line, loc.column
+                    ));
+                    output.push_str(&extract_source_context_highlighted(source, *loc));
+                    output.push_str(&format!(
+                        "Attempted to decrement cell with value {}.\n",
+                        current_value
+                    ));
+                } else {
+                    output.push_str("Error: Cell underflow\n");
+                    output.push_str(&format!(
+                        "Attempted to decrement cell with value {}.\n",
+                        current_value
+                    ));
+                }
+                output.push_str(&format!("\nHint: {}", hint));
+                output
+            }
+            // For other errors, use detailed format
+            _ => self.format_detailed(),
+        }
     }
 }
 

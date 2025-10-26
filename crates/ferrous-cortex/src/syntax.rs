@@ -89,6 +89,13 @@ pub struct HighlightedLine {
     spans: Vec<HighlightedSpan>,
 }
 
+impl HighlightedLine {
+    /// Get the spans in this line
+    pub fn spans(&self) -> &[HighlightedSpan] {
+        &self.spans
+    }
+}
+
 /// A span of text with associated style.
 #[derive(Debug, Clone)]
 pub struct HighlightedSpan {
@@ -221,6 +228,11 @@ impl HighlightedCode {
         String::from_utf8(buffer).unwrap()
     }
 
+    /// Write ANSI-colored output to a writer (all lines).
+    pub fn write_ansi<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.write_ansi_range(writer, 0, self.lines.len())
+    }
+
     /// Get color for a specific nesting depth.
     fn color_for_depth(depth: usize) -> (u8, u8, u8) {
         // Cycle through colors for different nesting levels
@@ -235,11 +247,19 @@ impl HighlightedCode {
         }
     }
 
-    /// Write ANSI-colored output to a writer.
-    pub fn write_ansi<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    /// Write ANSI-colored output for a range of lines to a writer.
+    pub fn write_ansi_range<W: Write>(
+        &self,
+        writer: &mut W,
+        start_line: usize,
+        end_line: usize,
+    ) -> std::io::Result<()> {
         let theme = ColorTheme::default();
 
-        for line in &self.lines {
+        for (idx, line) in self.lines.iter().enumerate() {
+            if idx < start_line || idx >= end_line {
+                continue;
+            }
             // Write line number if present
             if let Some(num) = line.number {
                 write!(writer, "\x1b[38;2;100;100;100m{:4} │\x1b[0m ", num)?;

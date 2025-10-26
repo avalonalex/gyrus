@@ -54,7 +54,7 @@ impl<'a> VmState<'a> {
 /// Discards execution statistics.
 #[allow(dead_code)]
 pub fn interpret(instructions: &[Instruction]) -> Result<()> {
-    interpret_with_config(instructions, ExecutionConfig::default()).map(|_| ())
+    interpret_with_config(instructions, ExecutionConfig::default(), None).map(|_| ())
 }
 
 /// Interpret and execute BrainFuck instructions with custom I/O.
@@ -108,17 +108,18 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
 /// use ferrous_cortex::{parse, interpret_with_config, ExecutionConfig};
 ///
 /// let instructions = parse("++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.")?;
-/// let stats = interpret_with_config(&instructions, ExecutionConfig::default())?;
+/// let stats = interpret_with_config(&instructions, ExecutionConfig::default(), None)?;
 /// println!("Executed {} steps", stats.total_steps);
 /// # Ok::<(), ferrous_cortex::BfError>(())
 /// ```
 pub fn interpret_with_config(
     instructions: &[Instruction],
     config: ExecutionConfig,
+    debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
     let mut input = StdInput;
     let mut output = StdOutput;
-    interpret_with_io(instructions, config, &mut input, &mut output, None)
+    interpret_with_io(instructions, config, &mut input, &mut output, debug_info)
 }
 
 /// Handle pointer increment based on memory model
@@ -307,7 +308,7 @@ mod tests {
         let source = ">".repeat(30001); // Try to go beyond memory
         let instructions = parse(&source).unwrap();
         let config = ExecutionConfig::default();
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
         assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
     }
 
@@ -316,7 +317,7 @@ mod tests {
         let source = "<"; // Try to go below 0
         let instructions = parse(source).unwrap();
         let config = ExecutionConfig::default();
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
         assert!(matches!(
             result,
             Err(BfError::MemoryOutOfBounds { attempted: -1, .. })
@@ -355,7 +356,7 @@ mod tests {
             .with_memory_size(1000)
             .with_timeout_ms(100)
             .build(); // Smaller memory to hit bounds faster
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
         // Should fail with either timeout or memory bounds
         assert!(result.is_err());
     }
@@ -367,7 +368,7 @@ mod tests {
         let instructions = parse(&source).unwrap();
 
         let config = ExecutionConfigBuilder::new().with_memory_size(50).build(); // Only 50 cells
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
 
         assert!(result.is_err());
         assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
@@ -384,7 +385,7 @@ mod tests {
             .unwrap()
             .build(); // Start small, allow growth
 
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
         assert!(result.is_ok());
     }
 
@@ -399,7 +400,7 @@ mod tests {
             .unwrap()
             .build(); // Max 100 cells
 
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
         assert!(result.is_err());
         assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
     }
@@ -411,7 +412,7 @@ mod tests {
         let instructions = parse(source).unwrap();
 
         let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
-        let result = interpret_with_config(&instructions, config);
+        let result = interpret_with_config(&instructions, config, None);
 
         assert!(result.is_err());
         assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
@@ -424,7 +425,7 @@ mod tests {
         let instructions = parse(source).unwrap();
 
         let config = ExecutionConfig::default();
-        let stats = interpret_with_config(&instructions, config).unwrap();
+        let stats = interpret_with_config(&instructions, config, None).unwrap();
 
         assert_eq!(stats.total_steps, StepCount::new(7));
         assert_eq!(stats.loop_iterations, 0);
@@ -438,7 +439,7 @@ mod tests {
         let instructions = parse(source).unwrap();
 
         let config = ExecutionConfig::default();
-        let stats = interpret_with_config(&instructions, config).unwrap();
+        let stats = interpret_with_config(&instructions, config, None).unwrap();
 
         assert_eq!(stats.loop_iterations, 3);
         assert!(stats.total_steps > StepCount::new(3)); // Should be more than just the setup
@@ -451,7 +452,7 @@ mod tests {
         let instructions = parse(source).unwrap();
 
         let config = ExecutionConfig::default();
-        let stats = interpret_with_config(&instructions, config).unwrap();
+        let stats = interpret_with_config(&instructions, config, None).unwrap();
 
         assert_eq!(stats.bytes_written, 2);
         assert_eq!(stats.bytes_read, 0);
@@ -464,7 +465,7 @@ mod tests {
         let instructions = parse(source).unwrap();
 
         let config = ExecutionConfig::default();
-        let stats = interpret_with_config(&instructions, config).unwrap();
+        let stats = interpret_with_config(&instructions, config, None).unwrap();
 
         assert_eq!(stats.cells_modified, 3); // 3 non-zero cells
         assert_eq!(stats.peak_memory_used, MemoryAddress::new(3)); // Highest cell accessed + 1
@@ -480,7 +481,7 @@ mod tests {
             .with_unbounded_memory(10, 100)
             .unwrap()
             .build();
-        let stats = interpret_with_config(&instructions, config).unwrap();
+        let stats = interpret_with_config(&instructions, config, None).unwrap();
 
         assert_eq!(stats.peak_memory_used, MemoryAddress::new(51)); // Cell 50 + 1
         assert_eq!(stats.memory_allocated, MemorySize::new(51)); // Should have grown to 51 cells
@@ -494,7 +495,7 @@ mod tests {
         let instructions = parse(source).unwrap();
 
         let config = ExecutionConfig::default();
-        let stats = interpret_with_config(&instructions, config).unwrap();
+        let stats = interpret_with_config(&instructions, config, None).unwrap();
 
         // Outer loop runs 3 times, inner loop runs 2 times per outer iteration = 6
         assert_eq!(stats.loop_iterations, 3 + 6); // 3 outer + 6 inner
@@ -902,6 +903,152 @@ mod tests {
             "Should fail with CellUnderflow, got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn test_cell_overflow_with_source_location() {
+        // Test that cell overflow errors include source location when debug_info is provided
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        // Create a program that overflows: 255 + 1
+        let source = "+".repeat(256); // 0 + 256 = overflow at 256th increment
+
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        let result = interpret_with_config(&instructions, config, Some(&debug_info));
+
+        assert!(result.is_err(), "Should error on overflow");
+        match result {
+            Err(BfError::CellOverflow {
+                source_location,
+                current_value,
+                ..
+            }) => {
+                assert_eq!(current_value, 255, "Should overflow at value 255");
+                assert!(
+                    source_location.is_some(),
+                    "Source location should be populated when debug_info is provided"
+                );
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 1, "Error should be on line 1");
+                assert_eq!(loc.column, 256, "Error should be at column 256");
+            }
+            other => panic!("Expected CellOverflow error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cell_underflow_with_source_location() {
+        // Test that cell underflow errors include source location when debug_info is provided
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        let source = "-"; // 0 - 1 = underflow
+
+        let (instructions, debug_info) = parse_with_debug(source).unwrap();
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+
+        let result = interpret_with_config(&instructions, config, Some(&debug_info));
+
+        assert!(result.is_err(), "Should error on underflow");
+        match result {
+            Err(BfError::CellUnderflow {
+                source_location,
+                current_value,
+                ..
+            }) => {
+                assert_eq!(current_value, 0, "Should underflow at value 0");
+                assert!(
+                    source_location.is_some(),
+                    "Source location should be populated when debug_info is provided"
+                );
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 1, "Error should be on line 1");
+                assert_eq!(loc.column, 1, "Error should be at column 1");
+            }
+            other => panic!("Expected CellUnderflow error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_memory_overflow_with_source_location() {
+        // Test that memory overflow errors include source location when debug_info is provided
+        use crate::config::ExecutionConfigBuilder;
+        use crate::parser::parse_with_debug;
+
+        // Create a program that goes beyond memory bounds
+        let source = ">".repeat(101); // Memory size is 100, so 101 moves will overflow
+
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+
+        let result = interpret_with_config(&instructions, config, Some(&debug_info));
+
+        assert!(result.is_err(), "Should error on memory overflow");
+        match result {
+            Err(BfError::MemoryOutOfBounds {
+                source_location,
+                attempted,
+                ..
+            }) => {
+                assert_eq!(attempted, 100, "Should attempt to access cell 100");
+                assert!(
+                    source_location.is_some(),
+                    "Source location should be populated when debug_info is provided"
+                );
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 1, "Error should be on line 1");
+                assert_eq!(
+                    loc.column, 100,
+                    "Error should be at column 100 (the 100th > character)"
+                );
+            }
+            other => panic!("Expected MemoryOutOfBounds error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_memory_underflow_with_source_location() {
+        // Test that memory underflow errors include source location when debug_info is provided
+        use crate::parser::parse_with_debug;
+
+        let source = "<"; // Try to go below 0
+
+        let (instructions, debug_info) = parse_with_debug(source).unwrap();
+
+        let config = ExecutionConfig::default();
+
+        let result = interpret_with_config(&instructions, config, Some(&debug_info));
+
+        assert!(result.is_err(), "Should error on memory underflow");
+        match result {
+            Err(BfError::MemoryOutOfBounds {
+                source_location,
+                attempted,
+                ..
+            }) => {
+                assert_eq!(attempted, -1, "Should attempt to access cell -1");
+                assert!(
+                    source_location.is_some(),
+                    "Source location should be populated when debug_info is provided"
+                );
+                let loc = source_location.unwrap();
+                assert_eq!(loc.line, 1, "Error should be on line 1");
+                assert_eq!(loc.column, 1, "Error should be at column 1");
+            }
+            other => panic!("Expected MemoryOutOfBounds error, got {:?}", other),
+        }
     }
 
     #[test]

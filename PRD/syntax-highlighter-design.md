@@ -225,6 +225,10 @@ With `--show-nesting`:
 - **IDE Plugins**: Export highlighting logic
 - **Web Tools**: Generate HTML for online interpreters
 
+### Current Integrations
+- **View Command** ✅: Pretty-print programs with colors
+- **Debug-Info Command** ✅: Source context display with syntax highlighting and nesting depth
+
 ## Testing Strategy
 
 ### Unit Tests (Library)

@@ -167,8 +167,9 @@ ferrous-cortex-tool debug-info hello.bf
 ferrous-cortex-tool debug-info hello.bf --format json
 # {"symbols": [{"step": 0, "instruction": "+", "line": 1, "column": 1}, ...]}
 
-# With source context
+# With source context (syntax highlighted with line numbers)
 ferrous-cortex-tool debug-info hello.bf --show-source
+# Shows color-coded source with loop nesting depth visualization
 ```
 
 **Implementation**: Already exists in main CLI as `--inspect-debug`, needs adaptation for subcommands.
@@ -322,6 +323,7 @@ ferrous-cortex-tool stats hello.bf
    - Copy debug symbol inspection from main CLI
    - Add format options (table, JSON, CSV)
    - Add source context display
+   - Integrated syntax highlighter for source display (with nesting depth visualization)
 
 4. **Add `view` command** ✅ (NEW):
    - Implement syntax highlighter in library (`syntax` module)

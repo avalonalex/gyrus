@@ -159,13 +159,18 @@ impl CellBehavior for U8CheckedCells {
         value: &mut u8,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
-        _debug_info: Option<&DebugInfo>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
+        let old_value = *value;
         *value = value.checked_add(1).ok_or_else(|| {
             use crate::error::BfError;
+            // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
+            let instruction_idx = step_count.get().saturating_sub(1) as usize;
+            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
             BfError::CellOverflow {
                 instruction_index: step_count.into(),
-                current_value: 255,
+                current_value: old_value,
+                source_location,
                 hint: "Cell value reached maximum (255) and cannot be incremented further with checked arithmetic. \
                        Use --cell-model wrapping to allow overflow, or modify your program.".to_string(),
             }
@@ -178,13 +183,18 @@ impl CellBehavior for U8CheckedCells {
         value: &mut u8,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
-        _debug_info: Option<&DebugInfo>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
+        let old_value = *value;
         *value = value.checked_sub(1).ok_or_else(|| {
             use crate::error::BfError;
+            // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
+            let instruction_idx = step_count.get().saturating_sub(1) as usize;
+            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
             BfError::CellUnderflow {
                 instruction_index: step_count.into(),
-                current_value: 0,
+                current_value: old_value,
+                source_location,
                 hint: "Cell value is at minimum (0) and cannot be decremented further with checked arithmetic. \
                        Use --cell-model wrapping to allow underflow, or modify your program.".to_string(),
             }

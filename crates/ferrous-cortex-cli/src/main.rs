@@ -209,13 +209,20 @@ fn run() -> Result<(), BfError> {
     // Execute the program (with debug symbols)
     let mut input = StdInput;
     let mut output = StdOutput;
-    let stats = interpret_with_io(
+    let stats = match interpret_with_io(
         &instructions,
         config,
         &mut input,
         &mut output,
         Some(&debug_info),
-    )?;
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            // For runtime errors, use format_with_source to show source location
+            eprintln!("{}", e.format_with_source(&source));
+            std::process::exit(1);
+        }
+    };
 
     // Display runtime warnings (unless --quiet)
     if !cli.quiet && !stats.warnings.is_empty() {
