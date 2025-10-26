@@ -2,6 +2,17 @@
 name = "ferrous-cortex"
 version.workspace = true
 edition.workspace = true
+description = "A production-grade BrainFuck interpreter and debugger with rich error messages, syntax highlighting, and configurable memory models"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/ferrous-cortex"
+documentation = "https://docs.rs/ferrous-cortex"
+readme = "../../README.md"
+keywords = ["brainfuck", "interpreter", "debugger", "esoteric"]
+categories = ["development-tools", "parser-implementations"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 thiserror.workspace = true

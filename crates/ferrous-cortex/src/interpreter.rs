@@ -1,3 +1,91 @@
+//! BrainFuck instruction execution engine.
+//!
+//! This module provides the core interpreter that executes BrainFuck instructions
+//! with configurable memory models, cell models, EOF behavior, and resource limits.
+//! It features a tree-walking interpreter with recursive execution for nested loops.
+//!
+//! # Features
+//!
+//! - **Multiple memory models**: Fixed, wrapping, and unbounded memory
+//! - **Multiple cell models**: Wrapping (standard BF) and checked (debugging)
+//! - **Configurable EOF behavior**: SetZero, SetNegOne, NoChange, or Error
+//! - **Execution limits**: Step counting and timeout support
+//! - **Statistics tracking**: Steps, memory usage, I/O operations
+//! - **Runtime warnings**: Cell overflow/underflow, memory expansion
+//! - **Custom I/O**: Support for string-based, file-based, or custom I/O
+//! - **Debug symbols**: Optional source location tracking for runtime diagnostics
+//!
+//! # Execution Model
+//!
+//! The interpreter uses a **tree-walking** approach with recursive execution:
+//! - Each instruction is executed directly from the AST
+//! - Loops are represented as `Instruction::Loop(Vec<Instruction>)`
+//! - Recursive `execute_block()` handles nested loop execution
+//! - Memory and pointer state are maintained in `VmState`
+//!
+//! # Examples
+//!
+//! ## Basic execution
+//!
+//! ```rust,no_run
+//! use ferrous_cortex::{parse, interpret_with_config, ExecutionConfigBuilder};
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let instructions = parse("+[>+]")?;
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_memory_size(1000)
+//!     .with_max_steps(100)
+//!     .build();
+//!
+//! // This will hit the step limit since the program is an infinite loop
+//! let stats = interpret_with_config(&instructions, config, None)?;
+//! println!("Executed {} steps", stats.total_steps);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Custom I/O
+//!
+//! ```rust
+//! use ferrous_cortex::{parse, interpret_with_io, io::StringIo, ExecutionConfigBuilder};
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let instructions = parse(",[.,]")?;  // Echo program
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_memory_size(100)
+//!     .build();
+//!
+//! let mut input = StringIo::new("Hello");
+//! let mut output = StringIo::empty();
+//! interpret_with_io(&instructions, config, &mut input, &mut output, None)?;
+//! assert_eq!(output.output_string(), "Hello");
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Different memory models
+//!
+//! ```rust
+//! use ferrous_cortex::{parse, interpret_with_config, ExecutionConfigBuilder};
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let instructions = parse("+>+>+")?;
+//!
+//! // Fixed memory (traditional, bounds-checked)
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_memory_size(30000)
+//!     .build();
+//! let stats = interpret_with_config(&instructions, config, None)?;
+//!
+//! // Unbounded memory (dynamic growth)
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_unbounded_memory(1000, 100000)?
+//!     .build();
+//! let stats = interpret_with_config(&instructions, config, None)?;
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::config::{EofBehavior, ExecutionConfig};
 use crate::debug::DebugInfo;
 use crate::error::{BfError, Result};

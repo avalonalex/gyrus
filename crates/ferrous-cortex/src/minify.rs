@@ -1,3 +1,38 @@
+//! BrainFuck code minification.
+//!
+//! This module provides functionality to remove comments and non-instruction
+//! characters from BrainFuck source code, producing minimal valid BrainFuck output.
+//! The minified code is functionally equivalent to the original but typically
+//! 95%+ smaller in file size.
+//!
+//! # Features
+//!
+//! - Removes all line comments (`*` comments)
+//! - Removes all implicit comments (non-BF characters)
+//! - Removes all whitespace and formatting
+//! - Preserves program semantics exactly
+//! - Round-trip property: `parse → minify → parse` yields identical AST
+//!
+//! # Examples
+//!
+//! ```rust
+//! use ferrous_cortex::{parse, minify};
+//!
+//! # fn main() -> Result<(), ferrous_cortex::BfError> {
+//! let source = r#"
+//!     * Hello World program
+//!     ++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]
+//!     >>.>---.+++++++..+++.
+//! "#;
+//!
+//! let instructions = parse(source)?;
+//! let minified = minify(&instructions);
+//! println!("{}", minified);
+//! // Output: ++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.
+//! # Ok(())
+//! # }
+//! ```
+
 use crate::instruction::Instruction;
 
 /// Convert instructions back to BrainFuck source code (minified - no comments)

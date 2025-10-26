@@ -1,7 +1,28 @@
-/// Newtype pattern for compile-time type safety
-///
-/// These types wrap primitive values to prevent accidental confusion between
-/// different logical concepts (e.g., memory addresses vs. memory sizes).
+//! Type-safe wrappers for interpreter primitives.
+//!
+//! This module provides newtype wrappers ([`MemoryAddress`], [`MemorySize`],
+//! [`StepCount`], [`InstructionIndex`]) that prevent mixing up logically
+//! distinct concepts at compile time.
+//!
+//! # Type Safety Benefits
+//!
+//! Using newtype wrappers instead of raw `usize` values prevents bugs like:
+//! - Passing a memory size where an address is expected
+//! - Using a step count as an instruction index
+//! - Confusing different numeric concepts
+//!
+//! # Examples
+//!
+//! ```rust
+//! use ferrous_cortex::{MemoryAddress, MemorySize};
+//!
+//! let address = MemoryAddress::new(100);
+//! let size = MemorySize::new(30000);
+//!
+//! // This would be a compile error (type mismatch):
+//! // let address: MemoryAddress = size;
+//! ```
+
 use std::fmt;
 use std::ops::AddAssign;
 
