@@ -12,6 +12,12 @@ Runtime warnings alert you to potentially problematic behavior during program ex
 
 These warnings help debug programs before compilation by showing exactly when and where wrapping or expansion occurs.
 
+**NEW in v0.2.1**: All runtime warnings now include **syntax-highlighted source code** with:
+- Exact line and column numbers
+- Color-coded BrainFuck commands
+- Red caret (^) pointing at the instruction that triggered the warning
+- Context lines for better readability
+
 ## Example Programs
 
 ### 1. Cell Overflow (`cell_overflow.bf`)
@@ -32,13 +38,26 @@ ferrous-cortex programs/warnings/cell_overflow.bf
 === Runtime Warnings ===
 Detected 6 runtime event(s):
 
-Runtime warning at instruction 1: Cell underflow (wrapped 0→255)
-Runtime warning at instruction 2: Cell overflow (wrapped 255→0)
-Runtime warning at instruction 47: Cell underflow (wrapped 0→255)
-Runtime warning at instruction 48: Cell overflow (wrapped 255→0)
-Runtime warning at instruction 93: Cell underflow (wrapped 0→255)
-Runtime warning at instruction 94: Cell overflow (wrapped 255→0)
+Runtime warning: Cell underflow (wrapped 0→255)
+
+At line 3, column 1:
+   1 │ * Cell Overflow Demonstration
+   2 │ * This program shows multiple cell overflow and underflow events
+   3 │ -
+       ^
+
+Runtime warning: Cell overflow (wrapped 255→0)
+
+At line 4, column 1:
+   2 │ * This program shows multiple cell overflow and underflow events
+   3 │ -
+   4 │ +
+       ^
+
+... (4 more warnings with source locations)
 ```
+
+*(Actual output includes syntax highlighting: commands are color-coded, line numbers in gray, caret in red)*
 
 ### 2. Cell Underflow (`cell_underflow.bf`)
 
@@ -55,10 +74,18 @@ ferrous-cortex programs/warnings/cell_underflow.bf
 === Runtime Warnings ===
 Detected 3 runtime event(s):
 
-Runtime warning at instruction 1: Cell underflow (wrapped 0→255)
-Runtime warning at instruction 4: Cell underflow (wrapped 0→255)
-Runtime warning at instruction 8: Cell underflow (wrapped 0→255)
+Runtime warning: Cell underflow (wrapped 0→255)
+
+At line 3, column 1:
+   1 │ * Cell Underflow Demonstration
+   2 │ * Decrementing from 0 to trigger underflow
+   3 │ -
+       ^
+
+... (2 more warnings with source locations)
 ```
+
+*(With syntax highlighting: `-` in green, comments in gray, caret in red)*
 
 ### 3. Memory Expansion (`memory_expansion.bf`)
 
@@ -78,12 +105,26 @@ ferrous-cortex programs/warnings/memory_expansion.bf \
 === Runtime Warnings ===
 Detected 10 runtime event(s):
 
-Runtime warning at instruction 5: Memory expanded from 5 to 6 bytes
-Runtime warning at instruction 6: Memory expanded from 6 to 7 bytes
-Runtime warning at instruction 10: Memory expanded from 7 to 11 bytes
-Runtime warning at instruction 14: Memory expanded from 11 to 15 bytes
-...
+Runtime warning: Memory expanded from 5 to 6 bytes
+
+At line 4, column 5:
+   2 │ * Demonstrates memory expansion in unbounded mode
+   3 │ * Start with small memory, trigger growth
+   4 │ >>>>>>>>>>
+               ^
+
+Runtime warning: Memory expanded from 6 to 7 bytes
+
+At line 4, column 6:
+   2 │ * Demonstrates memory expansion in unbounded mode
+   3 │ * Start with small memory, trigger growth
+   4 │ >>>>>>>>>>
+                ^
+
+... (8 more expansion warnings as memory grows)
 ```
+
+*(With syntax highlighting: `>` in cyan, comments in gray, caret in red)*
 
 ### 4. Mixed Warnings (`mixed_warnings.bf`)
 
@@ -120,7 +161,12 @@ This is useful when you want only the program output without diagnostic informat
 
 ## Understanding the Warnings
 
-Each warning includes the **instruction index** where the event occurred. This helps you locate the exact instruction in your code that triggered the warning.
+Each warning includes:
+- **Source location**: Exact line and column number
+- **Syntax-highlighted code**: The instruction and surrounding context
+- **Visual caret**: Points directly at the instruction that triggered the warning
+
+This rich formatting helps you quickly identify and fix issues in your BrainFuck code.
 
 ### Why These Warnings Matter
 
