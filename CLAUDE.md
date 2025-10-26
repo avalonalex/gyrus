@@ -303,6 +303,7 @@ cargo run -p ferrous-cortex-cli -- programs/basic/hello_world.bf
 cargo run -p ferrous-cortex-tool -- minify programs/basic/hello_world.bf
 cargo run -p ferrous-cortex-tool -- validate programs/tests/warnings_test.bf
 cargo run -p ferrous-cortex-tool -- debug-info programs/basic/simple.bf
+cargo run -p ferrous-cortex-tool -- view programs/basic/simple.bf --line-numbers
 
 # Build specific crate
 cargo build -p ferrous-cortex         # Build library only

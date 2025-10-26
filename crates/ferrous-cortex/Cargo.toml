@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+termcolor = "1.4"  # Cross-platform terminal colors
 
 [dev-dependencies]
 proptest = "1.5"  # Property-based testing

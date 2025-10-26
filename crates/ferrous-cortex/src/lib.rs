@@ -9,6 +9,7 @@ mod location;
 mod minify;
 mod parser;
 mod stats;
+pub mod syntax;
 #[cfg(test)]
 pub mod test_utils;
 mod types;
