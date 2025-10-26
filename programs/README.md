@@ -62,6 +62,24 @@ cargo run -- programs/utilities/brainfuck_print.bf
 
 **Source**: http://www.hevanet.com/cristofd/brainfuck/
 
+### `warnings/` - Runtime Warning Demonstrations
+
+Programs that demonstrate the runtime warning system for cell overflow/underflow and memory expansion.
+
+- **`cell_overflow.bf`** - Demonstrates cell overflow warnings (255 + 1 = 0)
+- **`cell_underflow.bf`** - Demonstrates cell underflow warnings (0 - 1 = 255)
+- **`memory_expansion.bf`** - Demonstrates memory expansion in unbounded mode
+- **`mixed_warnings.bf`** - Combines multiple warning types
+
+See `warnings/README.md` for detailed explanations and expected output.
+
+**Run examples:**
+```bash
+cargo run -- programs/warnings/cell_overflow.bf
+cargo run -- programs/warnings/memory_expansion.bf --memory-model unbounded --unbounded-initial 5 --unbounded-max 20
+cargo run -- programs/warnings/mixed_warnings.bf --quiet  # Suppress warnings
+```
+
 ### `tests/` - Feature Testing Programs
 
 Programs designed to test specific FerrousCortex features.

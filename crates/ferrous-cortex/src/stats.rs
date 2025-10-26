@@ -1,3 +1,4 @@
+use crate::error::RuntimeWarning;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 
 /// Statistics collected during program execution
@@ -23,6 +24,15 @@ pub struct ExecutionStats {
 
     /// Actual memory allocated (useful for unbounded model)
     pub memory_allocated: MemorySize,
+
+    /// Runtime warnings collected during execution
+    ///
+    /// These warnings indicate potentially problematic behavior such as:
+    /// - Cell overflow/underflow (wrapping in U8Wrapping mode)
+    /// - Memory expansion (in Unbounded mode)
+    ///
+    /// Warnings are deduplicated by instruction index to avoid spam.
+    pub warnings: Vec<RuntimeWarning>,
 }
 
 impl ExecutionStats {

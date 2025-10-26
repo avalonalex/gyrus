@@ -1,5 +1,6 @@
 // Module declarations
 mod config;
+mod debug;
 mod error;
 mod instruction;
 mod interpreter;
@@ -18,7 +19,8 @@ pub use config::{
     CellBehavior, CellModel, EofBehavior, ExecutionConfig, ExecutionConfigBuilder, MEMORY_SIZE,
     MemoryBehavior, MemoryModel, ReadyToBuild, U8CheckedCells, U8WrappingCells, Unbuilt,
 };
-pub use error::{BfError, BfWarning, MemoryDump, Result};
+pub use debug::{DebugInfo, InstructionPath};
+pub use error::{BfError, BfWarning, MemoryDump, Result, RuntimeWarning};
 pub use instruction::Instruction;
 pub use interpreter::{interpret, interpret_with_config, interpret_with_io};
 pub use location::SourceLocation;

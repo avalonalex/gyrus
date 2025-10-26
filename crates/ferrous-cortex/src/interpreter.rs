@@ -119,6 +119,7 @@ fn increment_pointer(state: &mut VmState) -> Result<()> {
         &mut state.pointer,
         &mut state.memory,
         state.step_count,
+        &mut state.stats.warnings,
     )
 }
 
@@ -130,6 +131,7 @@ fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Resul
         &state.memory,
         allow_negative_pointer,
         state.step_count,
+        &mut state.stats.warnings,
     )
 }
 
@@ -197,20 +199,23 @@ fn execute_block<I: BfInput, O: BfOutput>(
             // Different models provide different overflow/underflow behaviors:
             // - U8Wrapping: 255+1=0, 0-1=255 (default, most compatible)
             // - U8Checked: Overflow/underflow returns error
-            // - U8Saturating: 255+1=255, 0-1=0 (clamps at boundaries)
             //
             // This is INDEPENDENT of MemoryModel, which only controls pointer movement.
             // See config.rs module docs for CellModel and MemoryModel orthogonality.
             // See validator.rs module docs for cell-model-aware validation.
             Instruction::IncrementValue => {
-                config
-                    .cell_model()
-                    .try_increment(&mut state.memory[state.pointer.get()], state.step_count)?;
+                config.cell_model().try_increment(
+                    &mut state.memory[state.pointer.get()],
+                    state.step_count,
+                    &mut state.stats.warnings,
+                )?;
             }
             Instruction::DecrementValue => {
-                config
-                    .cell_model()
-                    .try_decrement(&mut state.memory[state.pointer.get()], state.step_count)?;
+                config.cell_model().try_decrement(
+                    &mut state.memory[state.pointer.get()],
+                    state.step_count,
+                    &mut state.stats.warnings,
+                )?;
             }
             Instruction::Output => {
                 output
