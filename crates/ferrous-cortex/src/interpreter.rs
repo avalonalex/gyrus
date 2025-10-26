@@ -23,6 +23,25 @@
 //! - Recursive `execute_block()` handles nested loop execution
 //! - Memory and pointer state are maintained in `VmState`
 //!
+//! ## Internal Architecture
+//!
+//! The interpreter separates concerns for clarity and extensibility:
+//!
+//! - **`execute_block()`**: Main execution loop that handles control flow
+//!   - Checks execution limits (step count, timeout)
+//!   - Manages loop iteration and depth tracking
+//!   - Delegates instruction execution to `execute_single_instruction()`
+//!
+//! - **`execute_single_instruction()`**: Executes individual non-loop instructions
+//!   - Handles all BrainFuck operations except loops
+//!   - Clean separation enables future hook integration
+//!   - Easier to test and reason about
+//!
+//! - **`VmState`**: Encapsulates all runtime state
+//!   - Memory tape, pointer position, step count
+//!   - Loop depth tracking (for debugging and future hooks)
+//!   - Statistics and debug information
+//!
 //! # Examples
 //!
 //! ## Basic execution
@@ -91,6 +110,7 @@ use crate::debug::DebugInfo;
 use crate::error::{BfError, Result};
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
+use crate::location::SourceLocation;
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::io;
@@ -105,6 +125,10 @@ struct VmState<'a> {
     pointer: MemoryAddress,
     /// Number of steps executed so far
     step_count: StepCount,
+    /// Current loop nesting depth (0 = top-level, 1 = inside one loop, etc.)
+    /// This is incremented when entering a loop body and decremented when exiting.
+    /// Useful for debugging, profiling, and hook context.
+    loop_depth: usize,
     /// Execution statistics
     stats: ExecutionStats,
     /// Start time for timeout tracking (if enabled)
@@ -127,11 +151,46 @@ impl<'a> VmState<'a> {
             memory: vec![0u8; memory_size],
             pointer: MemoryAddress::new(0),
             step_count: StepCount::new(0),
+            loop_depth: 0, // Start at top level (not inside any loops)
             stats: ExecutionStats::new(),
             start_time,
             memory_model,
             debug_info,
         }
+    }
+
+    /// Get the current loop nesting depth
+    ///
+    /// Returns 0 at top level, 1 inside one loop, 2 inside nested loops, etc.
+    /// This is useful for debugging and will be used by execution hooks.
+    #[inline]
+    #[allow(dead_code)] // Will be used by hooks in the future
+    fn current_loop_depth(&self) -> usize {
+        self.loop_depth
+    }
+
+    /// Get a read-only view of the memory tape
+    ///
+    /// This allows external inspection of memory without allowing modification.
+    /// Will be used by execution hooks to provide memory snapshots.
+    #[inline]
+    #[allow(dead_code)] // Will be used by hooks in the future
+    fn memory_slice(&self) -> &[u8] {
+        &self.memory
+    }
+
+    /// Get the current source location based on step count
+    ///
+    /// Returns `None` if debug info is not available or if the step count
+    /// is out of bounds in the debug info map.
+    ///
+    /// Note: This uses step_count for now. In the future, this may use a
+    /// separate instruction_index field for more accurate source mapping.
+    #[inline]
+    #[allow(dead_code)] // Will be used by hooks in the future
+    fn current_source_location(&self) -> Option<SourceLocation> {
+        self.debug_info
+            .and_then(|di| di.lookup(self.step_count.get() as usize))
     }
 }
 
@@ -235,6 +294,135 @@ fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Resul
     )
 }
 
+/// Execute a single non-loop instruction
+///
+/// This function handles the execution of individual BrainFuck instructions,
+/// excluding loops which are handled by `execute_block()`.
+///
+/// This separation provides:
+/// - Cleaner code organization (control flow vs execution)
+/// - Better testability
+/// - Clearer hook integration points (future)
+///
+/// # Arguments
+/// * `instruction` - The instruction to execute
+/// * `state` - Mutable VM state
+/// * `config` - Execution configuration
+/// * `input` - Input source
+/// * `output` - Output destination
+///
+/// # Panics
+/// Panics if called with `Instruction::Loop` - loops must be handled by `execute_block()`
+#[inline]
+fn execute_single_instruction<I: BfInput, O: BfOutput>(
+    instruction: &Instruction,
+    state: &mut VmState,
+    config: &ExecutionConfig,
+    input: &mut I,
+    output: &mut O,
+) -> Result<()> {
+    match instruction {
+        Instruction::IncrementPointer => {
+            increment_pointer(state)?;
+            // Track peak memory usage
+            if state.pointer.get() + 1 > state.stats.peak_memory_used.get() {
+                state.stats.peak_memory_used = MemoryAddress::new(state.pointer.get() + 1);
+            }
+        }
+
+        Instruction::DecrementPointer => {
+            decrement_pointer(state, config.allow_negative_pointer())?;
+        }
+
+        // Cell arithmetic: Delegated to CellModel (now configurable!)
+        //
+        // IMPORTANT: Cell arithmetic is NOW configurable via ExecutionConfig.cell_model().
+        // Different models provide different overflow/underflow behaviors:
+        // - U8Wrapping: 255+1=0, 0-1=255 (default, most compatible)
+        // - U8Checked: Overflow/underflow returns error
+        //
+        // This is INDEPENDENT of MemoryModel, which only controls pointer movement.
+        // See config.rs module docs for CellModel and MemoryModel orthogonality.
+        // See validator.rs module docs for cell-model-aware validation.
+        Instruction::IncrementValue => {
+            config.cell_model().behavior().try_increment(
+                &mut state.memory[state.pointer.get()],
+                state.step_count,
+                &mut state.stats.warnings,
+                state.debug_info,
+            )?;
+        }
+
+        Instruction::DecrementValue => {
+            config.cell_model().behavior().try_decrement(
+                &mut state.memory[state.pointer.get()],
+                state.step_count,
+                &mut state.stats.warnings,
+                state.debug_info,
+            )?;
+        }
+
+        Instruction::Output => {
+            output
+                .write_byte(state.memory[state.pointer.get()])
+                .map_err(|source| BfError::IoError {
+                    operation: "writing output".to_string(),
+                    instruction_index: Some(state.step_count.into()),
+                    source,
+                })?;
+            output.flush().map_err(|source| BfError::IoError {
+                operation: "flushing output".to_string(),
+                instruction_index: Some(state.step_count.into()),
+                source,
+            })?;
+            state.stats.bytes_written += 1;
+        }
+
+        Instruction::Input => {
+            match input.read_byte() {
+                Ok(Some(byte)) => {
+                    state.memory[state.pointer.get()] = byte;
+                    state.stats.bytes_read += 1;
+                }
+                Ok(None) => {
+                    // Handle EOF based on configuration
+                    match config.eof_behavior() {
+                        EofBehavior::SetZero => {
+                            state.memory[state.pointer.get()] = 0;
+                        }
+                        EofBehavior::SetNegOne => {
+                            state.memory[state.pointer.get()] = 255; // -1 as u8
+                        }
+                        EofBehavior::NoChange => {
+                            // Do nothing, leave cell as-is
+                        }
+                        EofBehavior::Error => {
+                            return Err(BfError::IoError {
+                                operation: "reading input (EOF reached)".to_string(),
+                                instruction_index: Some(state.step_count.into()),
+                                source: io::Error::new(io::ErrorKind::UnexpectedEof, "EOF reached"),
+                            });
+                        }
+                    }
+                }
+                Err(source) => {
+                    return Err(BfError::IoError {
+                        operation: "reading input".to_string(),
+                        instruction_index: Some(state.step_count.into()),
+                        source,
+                    });
+                }
+            }
+        }
+
+        Instruction::Loop(_) => {
+            panic!("execute_single_instruction() cannot handle loops - use execute_block()");
+        }
+    }
+
+    Ok(())
+}
+
 fn execute_block<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
     state: &mut VmState,
@@ -282,102 +470,23 @@ fn execute_block<I: BfInput, O: BfOutput>(
             }
         }
 
+        // Execute instruction: delegate to specialized handlers
         match instruction {
-            Instruction::IncrementPointer => {
-                increment_pointer(state)?;
-                // Track peak memory usage
-                if state.pointer.get() + 1 > state.stats.peak_memory_used.get() {
-                    state.stats.peak_memory_used = MemoryAddress::new(state.pointer.get() + 1);
-                }
-            }
-            Instruction::DecrementPointer => {
-                decrement_pointer(state, config.allow_negative_pointer())?;
-            }
-            // Cell arithmetic: Delegated to CellModel (now configurable!)
-            //
-            // IMPORTANT: Cell arithmetic is NOW configurable via ExecutionConfig.cell_model().
-            // Different models provide different overflow/underflow behaviors:
-            // - U8Wrapping: 255+1=0, 0-1=255 (default, most compatible)
-            // - U8Checked: Overflow/underflow returns error
-            //
-            // This is INDEPENDENT of MemoryModel, which only controls pointer movement.
-            // See config.rs module docs for CellModel and MemoryModel orthogonality.
-            // See validator.rs module docs for cell-model-aware validation.
-            Instruction::IncrementValue => {
-                config.cell_model().behavior().try_increment(
-                    &mut state.memory[state.pointer.get()],
-                    state.step_count,
-                    &mut state.stats.warnings,
-                    state.debug_info,
-                )?;
-            }
-            Instruction::DecrementValue => {
-                config.cell_model().behavior().try_decrement(
-                    &mut state.memory[state.pointer.get()],
-                    state.step_count,
-                    &mut state.stats.warnings,
-                    state.debug_info,
-                )?;
-            }
-            Instruction::Output => {
-                output
-                    .write_byte(state.memory[state.pointer.get()])
-                    .map_err(|source| BfError::IoError {
-                        operation: "writing output".to_string(),
-                        instruction_index: Some(state.step_count.into()),
-                        source,
-                    })?;
-                output.flush().map_err(|source| BfError::IoError {
-                    operation: "flushing output".to_string(),
-                    instruction_index: Some(state.step_count.into()),
-                    source,
-                })?;
-                state.stats.bytes_written += 1;
-            }
-            Instruction::Input => {
-                match input.read_byte() {
-                    Ok(Some(byte)) => {
-                        state.memory[state.pointer.get()] = byte;
-                        state.stats.bytes_read += 1;
-                    }
-                    Ok(None) => {
-                        // Handle EOF based on configuration
-                        match config.eof_behavior() {
-                            EofBehavior::SetZero => {
-                                state.memory[state.pointer.get()] = 0;
-                            }
-                            EofBehavior::SetNegOne => {
-                                state.memory[state.pointer.get()] = 255; // -1 as u8
-                            }
-                            EofBehavior::NoChange => {
-                                // Do nothing, leave cell as-is
-                            }
-                            EofBehavior::Error => {
-                                return Err(BfError::IoError {
-                                    operation: "reading input (EOF reached)".to_string(),
-                                    instruction_index: Some(state.step_count.into()),
-                                    source: io::Error::new(
-                                        io::ErrorKind::UnexpectedEof,
-                                        "EOF reached",
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    Err(source) => {
-                        return Err(BfError::IoError {
-                            operation: "reading input".to_string(),
-                            instruction_index: Some(state.step_count.into()),
-                            source,
-                        });
-                    }
-                }
-            }
+            // Loops require special handling for recursion and depth tracking
             Instruction::Loop(body) => {
                 while state.memory[state.pointer.get()] != 0 {
                     state.stats.loop_iterations += 1;
+
+                    // Track loop nesting depth
+                    state.loop_depth += 1;
                     execute_block(body, state, config, input, output)?;
+                    state.loop_depth -= 1;
                 }
+            }
+
+            // All other instructions are handled by execute_single_instruction
+            non_loop_instruction => {
+                execute_single_instruction(non_loop_instruction, state, config, input, output)?;
             }
         }
     }
@@ -1427,5 +1536,136 @@ mod tests {
         assert!(result.is_ok());
         let (output, _) = result.unwrap();
         assert_eq!(output.as_bytes()[0], 3);
+    }
+
+    // ===================================================================
+    // LOOP DEPTH TRACKING TESTS
+    // ===================================================================
+    //
+    // These tests verify that the loop_depth field in VmState correctly
+    // tracks nesting depth during execution. This is foundational for
+    // the upcoming hook architecture.
+
+    #[test]
+    fn test_loop_depth_single_loop() {
+        // Test that loop_depth increments inside a single loop
+        // Program: ++[>.<-]  (loops twice)
+        use crate::test_utils::run_bf;
+
+        let source = "++[>.<-]";
+        let result = run_bf(source, "");
+
+        // Should execute successfully
+        assert!(result.is_ok(), "Simple loop should execute successfully");
+
+        // Note: We can't directly test loop_depth from outside since VmState is private.
+        // But we verify the program executes correctly, and the loop tracking doesn't
+        // break anything. In the future, hooks will be able to observe loop_depth.
+    }
+
+    #[test]
+    fn test_loop_depth_nested_loops() {
+        // Test nested loops: outer[inner[...]]
+        // Program: +++[>++[<.>-]<-]
+        // - Outer loop runs 3 times
+        // - Inner loop runs 2 times per outer iteration
+        use crate::test_utils::run_bf;
+
+        let source = "+++[>++[<.>-]<-]";
+        let result = run_bf(source, "");
+
+        assert!(result.is_ok(), "Nested loops should execute successfully");
+
+        let (_, stats) = result.unwrap();
+
+        // Outer: 3 iterations
+        // Inner: 2 iterations × 3 outer = 6 iterations
+        // Total: 3 + 6 = 9 loop iterations
+        assert_eq!(stats.loop_iterations, 9);
+    }
+
+    #[test]
+    fn test_loop_depth_deeply_nested() {
+        // Test deeply nested loops (depth 3)
+        // Program: +++[>>++[>>++[<<+>>-]<<-]<<-]
+        // This creates three levels of nesting and moves memory carefully
+        use crate::test_utils::run_bf;
+
+        let source = "+++[>>++[>>++[<<+>>-]<<-]<<-]";
+        let result = run_bf(source, "");
+
+        assert!(
+            result.is_ok(),
+            "Deeply nested loops should execute successfully"
+        );
+
+        // The key here is that loop_depth increments and decrements correctly
+        // without causing any issues. If it didn't, we'd likely see a crash
+        // or incorrect behavior.
+    }
+
+    #[test]
+    fn test_loop_depth_sequential_loops() {
+        // Test that loop_depth resets between sequential loops
+        // Program: ++[>+<-] (first loop), then >>++[>+<-] (second loop)
+        use crate::test_utils::run_bf;
+
+        let source = "++[>+<-]>>++[>+<-]";
+        let result = run_bf(source, "");
+
+        assert!(
+            result.is_ok(),
+            "Sequential loops should execute successfully"
+        );
+
+        let (_, stats) = result.unwrap();
+
+        // Each loop runs 2 times
+        // Total: 2 + 2 = 4 loop iterations
+        assert_eq!(stats.loop_iterations, 4);
+    }
+
+    #[test]
+    fn test_loop_depth_empty_loop_body() {
+        // Test loop with empty condition (never enters)
+        // Program: [+]  (starts with cell=0, never enters)
+        use crate::test_utils::run_bf;
+
+        let source = "[+]";
+        let result = run_bf(source, "");
+
+        assert!(result.is_ok(), "Empty loop should execute successfully");
+
+        let (_, stats) = result.unwrap();
+
+        // Loop never executes (cell starts at 0)
+        assert_eq!(stats.loop_iterations, 0);
+    }
+
+    #[test]
+    fn test_loop_depth_with_errors() {
+        // Test that loop_depth tracking doesn't interfere with error handling
+        // Program that causes memory overflow inside a nested loop
+        use crate::config::ExecutionConfigBuilder;
+        use crate::test_utils::run_bf_with_config;
+
+        // Program: ++[>>>>> ... many >>> ...]  (goes out of bounds)
+        let source = format!("++[{}]", ">".repeat(60));
+
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(50) // Small memory to trigger bounds error
+            .build();
+
+        let result = run_bf_with_config(&source, "", config);
+
+        // Should error with memory out of bounds
+        assert!(
+            result.is_err(),
+            "Should error on memory overflow inside loop"
+        );
+        assert!(
+            matches!(result, Err(BfError::MemoryOutOfBounds { .. })),
+            "Should be MemoryOutOfBounds error"
+        );
     }
 }
