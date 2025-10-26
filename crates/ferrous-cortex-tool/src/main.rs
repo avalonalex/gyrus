@@ -325,7 +325,13 @@ fn display_debug_table(source: &str, debug_info: &DebugInfo, show_source: bool) 
 
     if show_source {
         println!("Source code ({} bytes):", source.len());
-        println!("{:?}\n", source);
+        println!();
+
+        // Use syntax highlighter to display source
+        let highlighter = SyntaxHighlighter::new().show_line_numbers(true);
+        let highlighted = highlighter.highlight(source);
+        print!("{}", highlighted.to_ansi());
+        println!();
     }
 
     println!("Symbol table ({} entries):", debug_info.len());

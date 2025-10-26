@@ -60,17 +60,21 @@ impl MemoryBehavior for FixedMemory {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
-        _debug_info: Option<&DebugInfo>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         pointer.increment();
 
         if pointer.get() >= self.size.get() {
             let dump = MemoryDump::from_memory(memory, *pointer);
+            // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
+            let instruction_idx = step_count.get().saturating_sub(1) as usize;
+            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
                 max: MemorySize::new(self.size.get() - 1),
                 memory_dump: Some(dump),
+                source_location,
                 hint: format!(
                     "Attempted to access cell {}, but memory size is fixed at {} cells. \
                      Try increasing memory size with --memory-size {} or use --memory-model unbounded",
@@ -91,15 +95,19 @@ impl MemoryBehavior for FixedMemory {
         allow_negative: bool,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
-        _debug_info: Option<&DebugInfo>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
+            // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
+            let instruction_idx = step_count.get().saturating_sub(1) as usize;
+            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: -1,
                 max: MemorySize::new(self.size.get() - 1),
                 memory_dump: Some(dump),
+                source_location,
                 hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
             });
         }
@@ -158,11 +166,15 @@ impl MemoryBehavior for UnboundedMemory {
 
         if pointer.get() >= self.max_size.get() {
             let dump = MemoryDump::from_memory(memory, *pointer);
+            // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
+            let instruction_idx = step_count.get().saturating_sub(1) as usize;
+            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
                 max: MemorySize::new(self.max_size.get() - 1),
                 memory_dump: Some(dump),
+                source_location,
                 hint: format!(
                     "Attempted to access cell {}, exceeding maximum size of {}. \
                      This may indicate an infinite loop moving the pointer",
@@ -200,15 +212,19 @@ impl MemoryBehavior for UnboundedMemory {
         allow_negative: bool,
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
-        _debug_info: Option<&DebugInfo>,
+        debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
+            // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
+            let instruction_idx = step_count.get().saturating_sub(1) as usize;
+            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: -1,
                 max: MemorySize::new(self.max_size.get() - 1),
                 memory_dump: Some(dump),
+                source_location,
                 hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
             });
         }
