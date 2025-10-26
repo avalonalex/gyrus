@@ -93,6 +93,53 @@ pub struct ExecutionConfigBuilder<State = Unbuilt> {
     _state: PhantomData<State>,
 }
 
+/// Macro to generate common builder methods shared between Unbuilt and ReadyToBuild states
+macro_rules! common_builder_methods {
+    () => {
+        /// Set cell model
+        pub fn with_cell_model(mut self, model: CellModel) -> Self {
+            self.cell_model = model;
+            self
+        }
+
+        /// Set cell model to U8 wrapping (default)
+        pub fn with_wrapping_cells(mut self) -> Self {
+            self.cell_model = CellModel::U8Wrapping(U8WrappingCells);
+            self
+        }
+
+        /// Set cell model to U8 checked (errors on overflow/underflow)
+        pub fn with_checked_cells(mut self) -> Self {
+            self.cell_model = CellModel::U8Checked(U8CheckedCells);
+            self
+        }
+
+        /// Set EOF behavior
+        pub fn with_eof_behavior(mut self, behavior: EofBehavior) -> Self {
+            self.eof_behavior = behavior;
+            self
+        }
+
+        /// Allow negative pointer
+        pub fn with_negative_pointer(mut self, allow: bool) -> Self {
+            self.allow_negative_pointer = allow;
+            self
+        }
+
+        /// Set maximum execution steps
+        pub fn with_max_steps(mut self, steps: u64) -> Self {
+            self.max_steps = Some(steps);
+            self
+        }
+
+        /// Set execution timeout in milliseconds
+        pub fn with_timeout_ms(mut self, timeout: u64) -> Self {
+            self.timeout_ms = Some(timeout);
+            self
+        }
+    };
+}
+
 impl ExecutionConfigBuilder<Unbuilt> {
     /// Create a new builder
     pub fn new() -> Self {
@@ -180,91 +227,13 @@ impl ExecutionConfigBuilder<Unbuilt> {
         }
     }
 
-    /// Set cell model
-    pub fn with_cell_model(mut self, model: CellModel) -> Self {
-        self.cell_model = model;
-        self
-    }
-
-    /// Set cell model to U8 wrapping (default)
-    pub fn with_wrapping_cells(mut self) -> Self {
-        self.cell_model = CellModel::U8Wrapping(U8WrappingCells);
-        self
-    }
-
-    /// Set cell model to U8 checked (errors on overflow/underflow)
-    pub fn with_checked_cells(mut self) -> Self {
-        self.cell_model = CellModel::U8Checked(U8CheckedCells);
-        self
-    }
-
-    /// Set EOF behavior
-    pub fn with_eof_behavior(mut self, behavior: EofBehavior) -> Self {
-        self.eof_behavior = behavior;
-        self
-    }
-
-    /// Allow negative pointer
-    pub fn with_negative_pointer(mut self, allow: bool) -> Self {
-        self.allow_negative_pointer = allow;
-        self
-    }
-
-    /// Set maximum execution steps
-    pub fn with_max_steps(mut self, steps: u64) -> Self {
-        self.max_steps = Some(steps);
-        self
-    }
-
-    /// Set execution timeout in milliseconds
-    pub fn with_timeout_ms(mut self, timeout: u64) -> Self {
-        self.timeout_ms = Some(timeout);
-        self
-    }
+    // Common builder methods (shared with ReadyToBuild)
+    common_builder_methods!();
 }
 
 impl ExecutionConfigBuilder<ReadyToBuild> {
-    /// Set cell model
-    pub fn with_cell_model(mut self, model: CellModel) -> Self {
-        self.cell_model = model;
-        self
-    }
-
-    /// Set cell model to U8 wrapping (default)
-    pub fn with_wrapping_cells(mut self) -> Self {
-        self.cell_model = CellModel::U8Wrapping(U8WrappingCells);
-        self
-    }
-
-    /// Set cell model to U8 checked (errors on overflow/underflow)
-    pub fn with_checked_cells(mut self) -> Self {
-        self.cell_model = CellModel::U8Checked(U8CheckedCells);
-        self
-    }
-
-    /// Set EOF behavior
-    pub fn with_eof_behavior(mut self, behavior: EofBehavior) -> Self {
-        self.eof_behavior = behavior;
-        self
-    }
-
-    /// Allow negative pointer
-    pub fn with_negative_pointer(mut self, allow: bool) -> Self {
-        self.allow_negative_pointer = allow;
-        self
-    }
-
-    /// Set maximum execution steps
-    pub fn with_max_steps(mut self, steps: u64) -> Self {
-        self.max_steps = Some(steps);
-        self
-    }
-
-    /// Set execution timeout in milliseconds
-    pub fn with_timeout_ms(mut self, timeout: u64) -> Self {
-        self.timeout_ms = Some(timeout);
-        self
-    }
+    // Common builder methods (shared with Unbuilt)
+    common_builder_methods!();
 
     /// Build the final ExecutionConfig
     ///
