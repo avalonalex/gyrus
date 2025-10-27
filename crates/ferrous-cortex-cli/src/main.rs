@@ -6,7 +6,7 @@ use ferrous_cortex::{
     BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
     interpret_with_io,
     io::{StdInput, StdOutput},
-    parse_with_debug,
+    parse, parse_with_debug,
 };
 
 #[derive(Parser)]
@@ -59,6 +59,10 @@ struct Cli {
     /// EOF behavior: zero, neg-one, no-change, or error
     #[arg(long, default_value = "zero")]
     eof_behavior: String,
+
+    /// Enable debug symbols for source location tracking (slower, shows line/column in errors)
+    #[arg(long)]
+    debug: bool,
 }
 
 fn main() {
@@ -96,14 +100,27 @@ fn run() -> Result<(), BfError> {
         ),
     })?;
 
-    // Parse the program (with debug symbols)
-    let (instructions, debug_info) = match parse_with_debug(&source) {
-        Ok(result) => result,
-        Err(BfError::MultipleBracketErrors { .. }) => {
-            // Errors already reported to stderr, just exit with error code
-            std::process::exit(1);
+    // Parse the program (with or without debug symbols based on --debug flag)
+    let (instructions, debug_info) = if cli.debug {
+        // Debug mode: parse with debug symbols for source location tracking
+        match parse_with_debug(&source) {
+            Ok((instructions, debug_info)) => (instructions, Some(debug_info)),
+            Err(BfError::MultipleBracketErrors { .. }) => {
+                // Errors already reported to stderr, just exit with error code
+                std::process::exit(1);
+            }
+            Err(e) => return Err(e),
         }
-        Err(e) => return Err(e),
+    } else {
+        // Fast mode (default): parse without debug symbols
+        match parse(&source) {
+            Ok(instructions) => (instructions, None),
+            Err(BfError::MultipleBracketErrors { .. }) => {
+                // Errors already reported to stderr, just exit with error code
+                std::process::exit(1);
+            }
+            Err(e) => return Err(e),
+        }
     };
 
     // Parse cell model
@@ -206,7 +223,7 @@ fn run() -> Result<(), BfError> {
         eprintln!();
     }
 
-    // Execute the program (with debug symbols)
+    // Execute the program (with or without debug symbols)
     let mut input = StdInput;
     let mut output = StdOutput;
     let stats = match interpret_with_io(
@@ -214,7 +231,7 @@ fn run() -> Result<(), BfError> {
         config,
         &mut input,
         &mut output,
-        Some(&debug_info),
+        debug_info.as_ref(),
     ) {
         Ok(s) => s,
         Err(e) => {

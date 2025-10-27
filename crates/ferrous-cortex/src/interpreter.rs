@@ -1819,10 +1819,7 @@ mod tests {
         let result = run_bf(&source, "");
 
         // Should execute successfully (might be slow, but should work)
-        assert!(
-            result.is_ok(),
-            "Should handle 100 levels of nesting"
-        );
+        assert!(result.is_ok(), "Should handle 100 levels of nesting");
 
         let (_, stats) = result.unwrap();
 
@@ -1831,8 +1828,12 @@ mod tests {
         // - Innermost loop (containing '+') runs until cell wraps to 0
         //   Cell starts at 1, increments to 255, then wraps to 0 = 255 iterations
         // - Total = 99 + 255 = 354
-        assert_eq!(stats.loop_iterations, 354,
-            "Expected {} outer loops + 255 innermost = 354 total", depth - 1);
+        assert_eq!(
+            stats.loop_iterations,
+            354,
+            "Expected {} outer loops + 255 innermost = 354 total",
+            depth - 1
+        );
     }
 
     #[test]
@@ -1891,7 +1892,10 @@ mod tests {
 
         let result = run_bf_with_config(source, "", config);
 
-        assert!(result.is_err(), "Should fail when exceeding step limit by 1");
+        assert!(
+            result.is_err(),
+            "Should fail when exceeding step limit by 1"
+        );
         assert!(
             matches!(result, Err(BfError::StepLimitExceeded { .. })),
             "Should be StepLimitExceeded error"

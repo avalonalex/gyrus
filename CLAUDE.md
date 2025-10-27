@@ -74,11 +74,12 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 **CLI** (`crates/ferrous-cortex-cli/src/main.rs`)
    - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
-   - Flags: `--verbose`, `--quiet`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
+   - Flags: `--verbose`, `--quiet`, `--debug`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
    - Validate mode: Parse → validate → show warnings (no execution, always assumes u8 wrapping)
    - **Runtime warnings**: Only shown with `--verbose` flag (cell wrapping is common in BF programs)
+   - **Debug symbols**: Opt-in with `--debug` flag (default: fast mode without source locations)
 
 ### Key Design Decisions
 

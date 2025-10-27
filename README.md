@@ -161,6 +161,7 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 |------|-------------|---------|
 | `-v, --verbose` | Show detailed execution information and statistics | false |
 | `-q, --quiet` | Suppress runtime warnings and non-program output | false |
+| `--debug` | Enable debug symbols for source location tracking (slower) | false |
 | `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
 | `--memory-size <BYTES>` | Memory size in bytes (for fixed model) | 30000 |
@@ -308,7 +309,12 @@ Runtime errors include:
 - **Execution timeout**: Program took too long to execute
 - **I/O errors**: Problems reading input or writing output
 
-All runtime errors now include **syntax-highlighted source code** showing exactly where the error occurred:
+Runtime errors can include **syntax-highlighted source code** showing exactly where the error occurred when using the `--debug` flag:
+
+```bash
+# Debug mode: errors show source locations
+ferrous-cortex program.bf --debug
+```
 
 ```
 Error: Cell overflow
@@ -322,12 +328,30 @@ At line 6, column 16:
 Attempted to increment cell with value 255, but checked arithmetic prevents overflow.
 ```
 
-**Syntax highlighting features:**
+**Syntax highlighting features (with `--debug`):**
 - Commands color-coded by type (pointer movement in cyan, cell operations in green)
 - Line numbers shown in gray
 - Red caret (^) points at exact instruction that caused the error
 - Comments rendered in gray
 - Loop brackets color-coded by nesting depth
+
+**Default mode (fast):**
+By default, errors show detailed messages but without source locations. This is much faster, especially for large programs:
+
+```
+Error: Memory pointer out of bounds
+Attempted to access cell 100, but memory size is 100 cells.
+```
+
+**When to use `--debug`:**
+- 🐛 **Debugging issues**: Finding where in your code a problem occurs
+- 📚 **Learning**: Understanding how BrainFuck programs execute
+- 🔍 **Development**: Writing and testing new BrainFuck code
+
+**When to skip `--debug` (default):**
+- 🚀 **Production runs**: Running known-good programs quickly
+- ⚡ **Large programs**: Mandelbrot, quines, and other complex programs (40x faster)
+- 📊 **Benchmarking**: Measuring program performance
 
 ### Runtime Warnings
 
