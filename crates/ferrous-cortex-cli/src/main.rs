@@ -224,8 +224,8 @@ fn run() -> Result<(), BfError> {
         }
     };
 
-    // Display runtime warnings (unless --quiet)
-    if !cli.quiet && !stats.warnings.is_empty() {
+    // Display runtime warnings only in verbose mode (cell wrapping is common in BF)
+    if cli.verbose && !cli.quiet && !stats.warnings.is_empty() {
         eprintln!("\n=== Runtime Warnings ===");
         eprintln!("Detected {} runtime event(s):\n", stats.warnings.len());
         for warning in &stats.warnings {

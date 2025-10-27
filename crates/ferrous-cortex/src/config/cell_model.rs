@@ -89,22 +89,10 @@ impl CellBehavior for U8WrappingCells {
     fn try_increment(
         &self,
         value: &mut u8,
-        step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
-        debug_info: Option<&DebugInfo>,
+        _step_count: StepCount,
+        _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
-        if *value == 255 {
-            // Generate warning before wrapping
-            // step_count has already been incremented, so subtract 1 for lookup
-            let source_location =
-                debug_info.and_then(|d| d.lookup((step_count.get() - 1) as usize));
-
-            warnings.push(RuntimeWarning::CellOverflow {
-                instruction_index: step_count.into(),
-                source_location,
-                _reserved: (),
-            });
-        }
         *value = value.wrapping_add(1);
         Ok(())
     }
@@ -112,22 +100,10 @@ impl CellBehavior for U8WrappingCells {
     fn try_decrement(
         &self,
         value: &mut u8,
-        step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
-        debug_info: Option<&DebugInfo>,
+        _step_count: StepCount,
+        _warnings: &mut Vec<RuntimeWarning>,
+        _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
-        if *value == 0 {
-            // Generate warning before wrapping
-            // step_count has already been incremented, so subtract 1 for lookup
-            let source_location =
-                debug_info.and_then(|d| d.lookup((step_count.get() - 1) as usize));
-
-            warnings.push(RuntimeWarning::CellUnderflow {
-                instruction_index: step_count.into(),
-                source_location,
-                _reserved: (),
-            });
-        }
         *value = value.wrapping_sub(1);
         Ok(())
     }
@@ -135,10 +111,7 @@ impl CellBehavior for U8WrappingCells {
 
 impl fmt::Display for U8WrappingCells {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "U8 Wrapping Cells (255+1=0, 0-1=255, runtime warnings on overflow/underflow)"
-        )
+        write!(f, "U8 Wrapping Cells (255+1=0, 0-1=255)")
     }
 }
 

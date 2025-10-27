@@ -11,7 +11,7 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
   - Visual error context with caret (^) pointing to exact instruction
   - **Multiple bracket error reporting** - shows ALL errors at once
   - Detailed error messages for debugging
-  - Runtime warnings with source location (cell overflow/underflow, memory expansion)
+  - Runtime warnings with source location (memory expansion in unbounded mode)
 - Support for all 8 BrainFuck commands: `><+-.,[]`
 - **Line comments** using `*` - makes documentation safe and easy
 - Nested loop support
@@ -331,22 +331,20 @@ Attempted to increment cell with value 255, but checked arithmetic prevents over
 
 ### Runtime Warnings
 
-When using permissive modes (wrapping cells, unbounded memory), the interpreter generates **warnings** instead of errors:
+When using unbounded memory mode, the interpreter generates **warnings** when memory is expanded:
 
 ```
-Runtime warning: Cell underflow (wrapped 0→255)
+Runtime warning: Memory expanded from 30000 to 30001 bytes
 
-At line 1, column 1:
-   1 │ -
-       ^
+At line 1, column 50001:
+   1 │ >>>>>>>>>>>>>>>>...
+                        ^
 ```
 
 **Warning types:**
-- **Cell overflow**: Cell value wrapped from 255 to 0 (with wrapping cells)
-- **Cell underflow**: Cell value wrapped from 0 to 255 (with wrapping cells)
 - **Memory expansion**: Memory grew dynamically (with unbounded memory model)
 
-Use `--quiet` to suppress runtime warnings if desired.
+Warnings are shown with `--verbose` flag. Cell wrapping (255+1=0, 0-1=255) does not generate warnings as it's standard BrainFuck behavior.
 
 ### Preventing Infinite Loops
 
@@ -950,7 +948,7 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 - [x] Configurable cell arithmetic (wrapping, checked)
 - [x] Cell-model-aware validation
 - [x] Execution statistics tracking
-- [x] Runtime warnings with source location (cell overflow/underflow, memory expansion)
+- [x] Runtime warnings with source location (memory expansion in unbounded mode)
 - [x] Advanced I/O error handling (EOF behavior)
 - [x] I/O abstraction for library usage and testing
 - [x] Comprehensive testing infrastructure (118 library tests + integration tests)
