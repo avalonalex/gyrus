@@ -83,23 +83,29 @@ When the inner loop repeats, it jumps back to step 8. When the outer loop repeat
 
 ## Runtime Warnings with Source Context
 
-Runtime warnings automatically show source context when using debug symbols:
+Runtime warnings automatically show source context when using debug symbols and the `--verbose` flag:
 
 ```bash
-# This will show warnings with source locations
-cargo run -- programs/debug/overflow_demo.bf
+# This will show memory expansion warnings with source locations (unbounded mode)
+cargo run -- programs/warnings/memory_expansion.bf \
+  --memory-model unbounded \
+  --unbounded-initial 5 \
+  --unbounded-max 20 \
+  --verbose
 ```
 
 **Example output**:
 ```
-Runtime warning: Cell overflow (wrapped 255→0) at line 11, column 1
-    9 |
-   10 | * Now increment to 256 which wraps to 0, then add 42 for '*'
-   11 | +
-      | ^
-   12 | +++++++++++++++++++++++++++++++++++++++++++.
-   13 |
+Runtime warning: Memory expanded from 5 to 6 bytes
+
+At line 4, column 5:
+   2 | * Demonstrates memory expansion in unbounded mode
+   3 | * Start with small memory, trigger growth
+   4 | >>>>>>>>>>
+             ^
 ```
+
+**Note**: Cell wrapping (255+1=0, 0-1=255) does not generate warnings as it's standard BrainFuck behavior.
 
 ## Use Cases
 

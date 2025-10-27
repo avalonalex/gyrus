@@ -51,8 +51,7 @@ pub struct ExecutionStats {
 
     /// Runtime warnings collected during execution
     ///
-    /// These warnings indicate potentially problematic behavior such as:
-    /// - Cell overflow/underflow (wrapping in U8Wrapping mode)
+    /// Warnings indicate potentially unexpected behavior such as:
     /// - Memory expansion (in Unbounded mode)
     ///
     /// Warnings are deduplicated by instruction index to avoid spam.

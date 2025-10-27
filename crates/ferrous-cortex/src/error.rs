@@ -443,8 +443,8 @@ impl fmt::Display for BfWarning {
 
 /// Runtime warnings collected during program execution
 ///
-/// These warnings indicate potentially problematic behavior that occurred
-/// during runtime, such as cell overflow/underflow or memory expansion.
+/// These warnings indicate potentially unexpected behavior that occurred
+/// during runtime, such as memory expansion in unbounded mode.
 /// Unlike validation warnings (which are static analysis), these capture
 /// actual runtime events.
 ///

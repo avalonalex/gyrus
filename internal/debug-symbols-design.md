@@ -2,7 +2,9 @@
 
 **Status**: Phase 1 Complete ✅ (October 2025)
 **Authors**: Development Team
-**Last Updated**: 2025-10-25
+**Last Updated**: 2025-10-26
+
+**Note**: As of October 26, 2025, cell overflow/underflow runtime warnings have been removed. Cell wrapping (255+1=0, 0-1=255) is standard BrainFuck behavior and no longer generates warnings. This document retains historical examples using cell warnings to illustrate the debug symbols system, but the current implementation only generates warnings for memory expansion in unbounded mode.
 
 ---
 
