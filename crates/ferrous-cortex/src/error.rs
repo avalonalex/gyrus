@@ -453,22 +453,6 @@ impl fmt::Display for BfWarning {
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeWarning {
-    /// Cell value wrapped from 255 to 0 (overflow in wrapping mode)
-    CellOverflow {
-        instruction_index: InstructionIndex,
-        source_location: Option<SourceLocation>,
-        #[doc(hidden)]
-        _reserved: (),
-    },
-
-    /// Cell value wrapped from 0 to 255 (underflow in wrapping mode)
-    CellUnderflow {
-        instruction_index: InstructionIndex,
-        source_location: Option<SourceLocation>,
-        #[doc(hidden)]
-        _reserved: (),
-    },
-
     /// Memory was expanded in unbounded mode
     MemoryExpanded {
         instruction_index: InstructionIndex,
@@ -484,44 +468,6 @@ impl RuntimeWarning {
     /// Format warning with source context if available
     pub fn format_with_source(&self, source: &str) -> String {
         match self {
-            RuntimeWarning::CellOverflow {
-                instruction_index,
-                source_location,
-                ..
-            } => {
-                if let Some(loc) = source_location {
-                    format!(
-                        "Runtime warning: Cell overflow (wrapped 255→0)\n\nAt line {}, column {}:\n{}",
-                        loc.line,
-                        loc.column,
-                        extract_source_context_highlighted(source, *loc)
-                    )
-                } else {
-                    format!(
-                        "Runtime warning at instruction {}: Cell overflow (wrapped 255→0)",
-                        instruction_index
-                    )
-                }
-            }
-            RuntimeWarning::CellUnderflow {
-                instruction_index,
-                source_location,
-                ..
-            } => {
-                if let Some(loc) = source_location {
-                    format!(
-                        "Runtime warning: Cell underflow (wrapped 0→255)\n\nAt line {}, column {}:\n{}",
-                        loc.line,
-                        loc.column,
-                        extract_source_context_highlighted(source, *loc)
-                    )
-                } else {
-                    format!(
-                        "Runtime warning at instruction {}: Cell underflow (wrapped 0→255)",
-                        instruction_index
-                    )
-                }
-            }
             RuntimeWarning::MemoryExpanded {
                 instruction_index,
                 from_size,
@@ -552,44 +498,6 @@ impl RuntimeWarning {
 impl fmt::Display for RuntimeWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RuntimeWarning::CellOverflow {
-                instruction_index,
-                source_location,
-                ..
-            } => {
-                if let Some(loc) = source_location {
-                    write!(
-                        f,
-                        "Runtime warning: Cell overflow (wrapped 255→0) at {}",
-                        loc
-                    )
-                } else {
-                    write!(
-                        f,
-                        "Runtime warning at instruction {}: Cell overflow (wrapped 255→0)",
-                        instruction_index
-                    )
-                }
-            }
-            RuntimeWarning::CellUnderflow {
-                instruction_index,
-                source_location,
-                ..
-            } => {
-                if let Some(loc) = source_location {
-                    write!(
-                        f,
-                        "Runtime warning: Cell underflow (wrapped 0→255) at {}",
-                        loc
-                    )
-                } else {
-                    write!(
-                        f,
-                        "Runtime warning at instruction {}: Cell underflow (wrapped 0→255)",
-                        instruction_index
-                    )
-                }
-            }
             RuntimeWarning::MemoryExpanded {
                 instruction_index,
                 from_size,

@@ -74,10 +74,11 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 **CLI** (`crates/ferrous-cortex-cli/src/main.rs`)
    - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
-   - Flags: `--verbose`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
+   - Flags: `--verbose`, `--quiet`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
    - Minify mode: Parse → minify → output (no execution)
    - Validate mode: Parse → validate → show warnings (no execution, always assumes u8 wrapping)
+   - **Runtime warnings**: Only shown with `--verbose` flag (cell wrapping is common in BF programs)
 
 ### Key Design Decisions
 
@@ -504,7 +505,7 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 - ✅ Execution statistics tracking (Community feature)
   - Steps, loop iterations, memory usage
   - I/O tracking
-  - `--verbose` flag shows stats
+  - Stats and warnings shown with `--verbose` flag
 - ✅ Advanced I/O error handling (Phase 3.3)
   - EOF behavior configuration (SetZero, SetNegOne, NoChange, Error)
   - `--eof-behavior` CLI flag
@@ -515,11 +516,10 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
   - Cell-model-aware validation
   - `--cell-model` CLI flag
   - Fully orthogonal with MemoryModel (any combination supported)
-- ✅ Runtime warnings with source location (NEW)
-  - CellOverflow: Shows 255→0 wrap with syntax highlighting
-  - CellUnderflow: Shows 0→255 wrap with syntax highlighting
-  - MemoryExpanded: Shows memory growth with syntax highlighting
-  - All warnings formatted consistently with errors
+- ✅ Runtime warnings with source location
+  - MemoryExpanded: Shows unbounded memory growth with syntax highlighting
+  - **Display behavior**: Only shown with `--verbose` flag
+  - **Note**: Cell overflow/underflow warnings removed - wrapping is standard BF behavior
 
 **Remaining (from PRD)**:
 - ⏳ Debug symbols and runtime diagnostics (Phase 4.2)
