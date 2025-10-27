@@ -64,16 +64,16 @@ cargo run -- programs/utilities/brainfuck_print.bf
 
 ### `warnings/` - Runtime Warning Demonstrations
 
-Programs that demonstrate the runtime warning system for cell overflow/underflow and memory expansion.
+Programs that demonstrate the runtime warning system for memory expansion in unbounded mode.
 
-**NEW**: All warnings now include **syntax-highlighted source code** with line numbers, color-coded commands, and a red caret pointing at the exact instruction that triggered the warning!
+All warnings include **syntax-highlighted source code** with line numbers, color-coded commands, and a red caret pointing at the exact instruction that triggered the warning!
 
-- **`cell_overflow.bf`** - Demonstrates cell overflow warnings (255 + 1 = 0)
-- **`cell_underflow.bf`** - Demonstrates cell underflow warnings (0 - 1 = 255)
 - **`memory_expansion.bf`** - Demonstrates memory expansion in unbounded mode
-- **`mixed_warnings.bf`** - Combines multiple warning types
+- **`cell_overflow.bf`** - Tests cell wrapping behavior (no warnings - wrapping is standard BF)
+- **`cell_underflow.bf`** - Tests cell wrapping behavior (no warnings - wrapping is standard BF)
+- **`mixed_warnings.bf`** - Historical test file (retained for testing purposes)
 
-See `warnings/README.md` for detailed explanations and expected output with syntax highlighting examples.
+See `warnings/README.md` for detailed explanations and usage with `--verbose` flag.
 
 **Run examples:**
 ```bash
