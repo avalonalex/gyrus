@@ -39,6 +39,19 @@ use crate::types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};
 /// Type alias for Results using BfError
 pub type Result<T> = std::result::Result<T, BfError>;
 
+/// Loop call stack frame for error reporting (Phase 2)
+///
+/// Represents one active loop in the call stack when an error occurs.
+/// Multiple frames show nested loop context.
+#[derive(Debug, Clone)]
+pub struct LoopStackFrame {
+    /// Source location of the '[' character that started this loop
+    pub source_location: SourceLocation,
+
+    /// Current iteration number (1-based)
+    pub iteration: u64,
+}
+
 /// Memory state snapshot for error reporting
 #[derive(Debug, Clone)]
 pub struct MemoryDump {
@@ -181,6 +194,7 @@ pub enum BfError {
         max: MemorySize,
         memory_dump: Option<MemoryDump>,
         source_location: Option<SourceLocation>,
+        loop_call_stack: Option<Vec<LoopStackFrame>>, // Phase 2: loop context
         hint: String,
     },
 
@@ -290,6 +304,7 @@ impl BfError {
                 attempted,
                 max,
                 memory_dump,
+                loop_call_stack,
                 hint,
                 ..
             } => {
@@ -313,6 +328,23 @@ impl BfError {
                         max.get() + 1
                     ));
                 }
+
+                // Phase 2: Show loop call stack if available
+                if let Some(stack) = loop_call_stack {
+                    if !stack.is_empty() {
+                        output.push_str("\nLoop call stack:\n");
+                        for (depth, frame) in stack.iter().enumerate().rev() {
+                            output.push_str(&format!(
+                                "  #{}: Loop at line {}, column {} (iteration {})\n",
+                                depth,
+                                frame.source_location.line,
+                                frame.source_location.column,
+                                frame.iteration
+                            ));
+                        }
+                    }
+                }
+
                 output.push_str(&format!("\nHint: {}", hint));
                 if let Some(dump) = memory_dump {
                     output.push_str(&format!("\n\n{}", dump));
