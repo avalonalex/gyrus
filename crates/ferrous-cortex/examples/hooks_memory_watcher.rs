@@ -75,12 +75,15 @@ impl ExecutionHook for MemoryWatchpoint {
     }
 }
 
+use std::collections::HashMap;
+
+/// Type alias for memory change tracking: address -> [(step, value), ...]
+type MemoryChanges = Arc<Mutex<HashMap<usize, Vec<(u64, u8)>>>>;
+
 /// A hook that tracks all memory modifications
 struct MemoryChangeTracker {
-    changes: Arc<Mutex<HashMap<usize, Vec<(u64, u8)>>>>, // address -> [(step, value), ...]
+    changes: MemoryChanges,
 }
-
-use std::collections::HashMap;
 
 impl ExecutionHook for MemoryChangeTracker {
     fn after_instruction(
@@ -101,7 +104,7 @@ impl ExecutionHook for MemoryChangeTracker {
                 .lock()
                 .unwrap()
                 .entry(addr)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((step, value));
         }
 
