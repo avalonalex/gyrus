@@ -130,8 +130,6 @@ struct VmState<'a> {
     /// This is incremented when entering a loop body and decremented when exiting.
     /// Useful for debugging, profiling, and hook context.
     loop_depth: usize,
-    /// Start time for timeout tracking (if enabled)
-    start_time: Option<std::time::Instant>,
     /// Memory model that dictates how memory operations behave
     memory_model: MemoryModel,
     /// Debug information for mapping step indices to source locations
@@ -151,19 +149,14 @@ struct VmState<'a> {
 }
 
 impl<'a> VmState<'a> {
-    /// Create a new VM state with the given memory model and optional start time
-    fn new(
-        memory_model: MemoryModel,
-        start_time: Option<std::time::Instant>,
-        debug_info: Option<&'a DebugInfo>,
-    ) -> Self {
+    /// Create a new VM state with the given memory model
+    fn new(memory_model: MemoryModel, debug_info: Option<&'a DebugInfo>) -> Self {
         let memory_size = memory_model.initial_size().get();
         Self {
             memory: vec![0u8; memory_size],
             pointer: MemoryAddress::new(0),
             step_count: StepCount::new(0),
             loop_depth: 0, // Start at top level (not inside any loops)
-            start_time,
             memory_model,
             debug_info,
             // Phase 2: Initialize loop tracking
@@ -241,8 +234,7 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     output: &mut O,
     debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
-    use crate::hooks::builtin::{SharedStatsHook, SharedWarningHook};
-    use std::time::Instant;
+    use crate::hooks::builtin::{SharedLimitHook, SharedStatsHook, SharedWarningHook};
 
     // Auto-register built-in hooks
     let (stats_hook, stats_handle) = SharedStatsHook::new();
@@ -250,11 +242,30 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     config.register_hook(Box::new(stats_hook));
     config.register_hook(Box::new(warning_hook));
 
-    let start_time = config.timeout_ms().map(|_| Instant::now());
-    let mut state = VmState::new(*config.memory_model(), start_time, debug_info);
+    // Register limit enforcement hook if limits are configured
+    let limit_hook_handle = if config.max_steps().is_some() || config.timeout_ms().is_some() {
+        let (limit_hook, handle) = SharedLimitHook::new(config.max_steps(), config.timeout_ms());
+        config.register_hook(Box::new(limit_hook));
+        Some(handle)
+    } else {
+        None
+    };
+
+    let mut state = VmState::new(*config.memory_model(), debug_info);
 
     // Phase 2: Start execution at instruction index 0
-    execute_block(instructions, &mut state, &mut config, input, output, 0)?;
+    let execute_result = execute_block(instructions, &mut state, &mut config, input, output, 0);
+
+    // Check if limit hook stopped execution with an error
+    // This takes precedence over ExecutionPaused since limits are more specific
+    if let Some(handle) = &limit_hook_handle {
+        if let Some(error) = handle.lock().unwrap().take_error() {
+            return Err(error);
+        }
+    }
+
+    // If there was an error and it wasn't from the limit hook, return it
+    execute_result?;
 
     // Hook: on_complete
     if let Some(hook_manager) = config.hook_manager_mut() {
@@ -467,44 +478,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
     for instruction in instructions {
         // Phase 2: Update global instruction_index before executing
         state.instruction_index = start_index + local_index;
-        // Check step limit
         state.step_count.increment();
-        if let Some(max_steps) = config.max_steps()
-            && state.step_count.get() > max_steps
-        {
-            return Err(BfError::StepLimitExceeded {
-                limit: max_steps,
-                actual_steps: state.step_count,
-                hint: format!(
-                    "Program executed {} steps, exceeding the limit of {}. \
-                         This may indicate an infinite loop. Try increasing the limit with --max-steps {} \
-                         or add breakpoints to debug.",
-                    state.step_count.get(),
-                    max_steps,
-                    max_steps * 2
-                ),
-            });
-        }
-
-        // Check timeout
-        if let Some(start) = &state.start_time
-            && let Some(timeout_ms) = config.timeout_ms()
-        {
-            let elapsed = start.elapsed().as_millis() as u64;
-            if elapsed > timeout_ms {
-                return Err(BfError::ExecutionTimeout {
-                    limit_ms: timeout_ms,
-                    actual_steps: Some(state.step_count),
-                    hint: format!(
-                        "Program exceeded {}ms timeout after executing {} steps. \
-                             Try increasing timeout with --timeout {} or optimize your BrainFuck code.",
-                        timeout_ms,
-                        state.step_count.get(),
-                        timeout_ms * 2
-                    ),
-                });
-            }
-        }
 
         // Hook: before_instruction
         if let Some(hook_manager) = config.hook_manager_mut() {
