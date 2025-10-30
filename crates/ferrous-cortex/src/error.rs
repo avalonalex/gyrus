@@ -225,6 +225,8 @@ pub enum BfError {
     StepLimitExceeded {
         limit: u64,
         actual_steps: StepCount,
+        instruction_index: usize,
+        source_location: Option<SourceLocation>,
         hint: String,
     },
 
@@ -444,6 +446,26 @@ impl BfError {
                 hint,
             },
             // Other error types don't support loop_call_stack (CellOverflow, CellUnderflow, etc.)
+            other => other,
+        }
+    }
+
+    /// Enrich StepLimitExceeded error with source location information
+    pub fn with_step_limit_source_location(self, source_location: SourceLocation) -> Self {
+        match self {
+            BfError::StepLimitExceeded {
+                limit,
+                actual_steps,
+                instruction_index,
+                source_location: _,
+                hint,
+            } => BfError::StepLimitExceeded {
+                limit,
+                actual_steps,
+                instruction_index,
+                source_location: Some(source_location),
+                hint,
+            },
             other => other,
         }
     }

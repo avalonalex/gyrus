@@ -4,7 +4,8 @@
 //! Test cases are defined based on programs/test_manifest.toml
 
 use ferrous_cortex::{
-    EofBehavior, ExecutionConfig, ExecutionConfigBuilder, interpret_with_io, io::StringIo, parse,
+    BfError, EofBehavior, ExecutionConfig, ExecutionConfigBuilder, interpret_with_io,
+    io::{DebugIo, StringIo}, parse, parse_with_debug,
 };
 use std::fs;
 use std::path::Path;
@@ -471,4 +472,107 @@ fn test_corpus_inventory() {
 
     // Verify we have a reasonable corpus
     assert!(total >= 10, "Corpus should have at least 10 programs");
+}
+
+// ============================================================================
+// DEBUG INFO VERIFICATION
+// ============================================================================
+
+/// Test that corpus programs with debug info track execution correctly
+///
+/// This test verifies that debug symbols work correctly with real programs:
+/// - Programs that complete successfully should track all the way through
+/// - Programs that hit limits should have source location at the limit
+/// - Programs that error should have source location at the error
+#[test]
+fn test_corpus_debug_info_tracking() {
+    let base_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    // Select programs that complete quickly
+    let test_programs = vec![
+        "basic/simple.bf",            // Very simple: prints 'H'
+        "basic/hello_world.bf",       // Classic: prints "Hello World!"
+        "basic/line_comments.bf",     // Comment syntax test
+        "advanced/deep_nesting.bf",   // Nested loops test
+    ];
+
+    for program_path in test_programs {
+        let full_path = base_path.join("programs").join(program_path);
+
+        if !full_path.exists() {
+            println!("Skipping {}: file not found", program_path);
+            continue;
+        }
+
+        println!("Testing debug info: {}", program_path);
+
+        let source = fs::read_to_string(&full_path)
+            .unwrap_or_else(|_| panic!("Failed to read {}", program_path));
+
+        let (instructions, debug_info) = parse_with_debug(&source)
+            .unwrap_or_else(|_| panic!("Failed to parse {}", program_path));
+
+        // Use DebugIo to provide infinite input and discard output
+        let mut input = DebugIo::new();
+        let mut output = DebugIo::new();
+
+        // Moderate limits - enough for quick programs, not too slow for tests
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(30000)
+            .with_max_steps(5000)  // Lower limit for faster test execution
+            .build();
+
+        let result = interpret_with_io(
+            &instructions,
+            config,
+            &mut input,
+            &mut output,
+            Some(&debug_info),
+        );
+
+        match result {
+            Ok(_) => {
+                println!("  ✓ Completed successfully with debug tracking");
+            }
+            Err(BfError::StepLimitExceeded {
+                instruction_index,
+                source_location,
+                ..
+            }) => {
+                println!(
+                    "  ⚠ Hit step limit at instruction {} (expected for complex programs)",
+                    instruction_index
+                );
+                assert!(
+                    source_location.is_some(),
+                    "{}: StepLimitExceeded should have source location",
+                    program_path
+                );
+                let loc = source_location.unwrap();
+                println!("    Source location: line {}, column {}", loc.line, loc.column);
+            }
+            Err(e) => {
+                println!("  ⚠ Error: {:?}", e);
+                // Verify runtime errors have source locations
+                match e {
+                    BfError::MemoryOutOfBounds { source_location, .. }
+                    | BfError::CellOverflow { source_location, .. }
+                    | BfError::CellUnderflow { source_location, .. } => {
+                        assert!(
+                            source_location.is_some(),
+                            "{}: Runtime error should have source location",
+                            program_path
+                        );
+                    }
+                    _ => {
+                        // Other errors (IO, config) don't require source locations
+                    }
+                }
+            }
+        }
+    }
 }

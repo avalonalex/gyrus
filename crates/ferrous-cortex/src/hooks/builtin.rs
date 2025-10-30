@@ -475,21 +475,24 @@ impl ExecutionHook for LimitEnforcerHook {
 
         // Check step limit
         if let Some(max_steps) = self.max_steps
-            && context.step_count().get() > max_steps {
-                self.error = Some(BfError::StepLimitExceeded {
-                    limit: max_steps,
-                    actual_steps: context.step_count(),
-                    hint: format!(
-                        "Program executed {} steps, exceeding the limit of {}. \
+            && context.step_count().get() > max_steps
+        {
+            self.error = Some(BfError::StepLimitExceeded {
+                limit: max_steps,
+                actual_steps: context.step_count(),
+                instruction_index: context.instruction_index(),
+                source_location: None, // Will be enriched by interpreter if debug info available
+                hint: format!(
+                    "Program executed {} steps, exceeding the limit of {}. \
                          This may indicate an infinite loop. Try increasing the limit with --max-steps {} \
                          or investigate your BrainFuck code for infinite loops.",
-                        context.step_count().get(),
-                        max_steps,
-                        max_steps * 10
-                    ),
-                });
-                return HookDecision::Break;
-            }
+                    context.step_count().get(),
+                    max_steps,
+                    max_steps * 10
+                ),
+            });
+            return HookDecision::Break;
+        }
 
         // Check timeout
         if let Some(timeout_ms) = self.timeout_ms {

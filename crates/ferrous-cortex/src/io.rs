@@ -294,6 +294,82 @@ impl Default for StringIo {
     }
 }
 
+/// Debug I/O for testing: infinite input, discarded output.
+///
+/// This I/O implementation is designed for testing scenarios where:
+/// - Programs may request arbitrary amounts of input (`,` instruction)
+/// - Output is not needed for the test
+/// - Programs should never block on input
+///
+/// `DebugIo` cycles through a predefined set of characters indefinitely,
+/// ensuring that programs always get input when requested. All output
+/// is silently discarded.
+///
+/// # Use Cases
+///
+/// - Property-based testing with random programs
+/// - Stress testing without input/output bottlenecks
+/// - Testing programs with unknown input requirements
+///
+/// # Examples
+///
+/// ```rust
+/// use ferrous_cortex::io::{DebugIo, BfInput, BfOutput};
+///
+/// let mut io = DebugIo::new();
+///
+/// // Infinite input - never returns EOF
+/// assert_eq!(io.read_byte().unwrap(), Some(b'X'));
+/// assert_eq!(io.read_byte().unwrap(), Some(b'\n'));
+/// assert_eq!(io.read_byte().unwrap(), Some(b'A'));
+/// assert_eq!(io.read_byte().unwrap(), Some(b'B'));
+/// assert_eq!(io.read_byte().unwrap(), Some(b'0'));
+/// assert_eq!(io.read_byte().unwrap(), Some(b'X')); // Cycles back
+///
+/// // Output is discarded
+/// io.write_byte(b'H').unwrap();
+/// io.write_byte(b'i').unwrap();
+/// // No way to retrieve output - it's gone
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct DebugIo {
+    /// Counter for cycling through input characters
+    counter: usize,
+}
+
+impl DebugIo {
+    /// Create a new debug I/O instance.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ferrous_cortex::io::DebugIo;
+    ///
+    /// let io = DebugIo::new();
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl BfInput for DebugIo {
+    fn read_byte(&mut self) -> io::Result<Option<u8>> {
+        // Cycle through a few characters: 'X', '\n', 'A', 'B', '0'
+        // This provides variety while keeping programs progressing
+        const INPUT_CHARS: &[u8] = b"X\nAB0";
+        let byte = INPUT_CHARS[self.counter % INPUT_CHARS.len()];
+        self.counter += 1;
+        Ok(Some(byte))
+    }
+}
+
+impl BfOutput for DebugIo {
+    fn write_byte(&mut self, _byte: u8) -> io::Result<()> {
+        // Discard all output - we don't care about it in debug/test scenarios
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +437,39 @@ mod tests {
         // Non-UTF8 bytes, but output_string should handle it
         assert!(io.output_string().contains('�'));
         assert_eq!(io.output_bytes(), &[0xFF, 0xFE]);
+    }
+
+    #[test]
+    fn test_debug_io_infinite_input() {
+        let mut io = DebugIo::new();
+        // Read more than the cycle length to verify it cycles
+        assert_eq!(io.read_byte().unwrap(), Some(b'X'));
+        assert_eq!(io.read_byte().unwrap(), Some(b'\n'));
+        assert_eq!(io.read_byte().unwrap(), Some(b'A'));
+        assert_eq!(io.read_byte().unwrap(), Some(b'B'));
+        assert_eq!(io.read_byte().unwrap(), Some(b'0'));
+        // Should cycle back to 'X'
+        assert_eq!(io.read_byte().unwrap(), Some(b'X'));
+        assert_eq!(io.read_byte().unwrap(), Some(b'\n'));
+    }
+
+    #[test]
+    fn test_debug_io_discards_output() {
+        let mut io = DebugIo::new();
+        // Output operations should succeed but discard data
+        io.write_byte(b'H').unwrap();
+        io.write_byte(b'i').unwrap();
+        io.write_byte(b'!').unwrap();
+        // No way to verify output was discarded (which is the point)
+        // Just verify the operations succeeded
+    }
+
+    #[test]
+    fn test_debug_io_never_eof() {
+        let mut io = DebugIo::new();
+        // Read many bytes to ensure we never get EOF
+        for _ in 0..100 {
+            assert!(io.read_byte().unwrap().is_some());
+        }
     }
 }
