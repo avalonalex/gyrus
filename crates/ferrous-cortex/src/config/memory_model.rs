@@ -95,9 +95,9 @@ impl MemoryBehavior for FixedMemory {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
                 max: MemorySize::new(self.size.get() - 1),
-                memory_dump: Some(dump),
+                memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack,
+                loop_call_stack: loop_call_stack.map(Box::new),
                 hint: format!(
                     "Attempted to access cell {}, but memory size is fixed at {} cells. \
                      Try increasing memory size with --memory-size {} or use --memory-model unbounded",
@@ -145,9 +145,9 @@ impl MemoryBehavior for FixedMemory {
                 instruction_index: step_count.into(),
                 attempted: -1,
                 max: MemorySize::new(self.size.get() - 1),
-                memory_dump: Some(dump),
+                memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack,
+                loop_call_stack: loop_call_stack.map(Box::new),
                 hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
             });
         }
@@ -229,9 +229,9 @@ impl MemoryBehavior for UnboundedMemory {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
                 max: MemorySize::new(self.max_size.get() - 1),
-                memory_dump: Some(dump),
+                memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack,
+                loop_call_stack: loop_call_stack.map(Box::new),
                 hint: format!(
                     "Attempted to access cell {}, exceeding maximum size of {}. \
                      This may indicate an infinite loop moving the pointer",
@@ -283,9 +283,9 @@ impl MemoryBehavior for UnboundedMemory {
                 instruction_index: step_count.into(),
                 attempted: -1,
                 max: MemorySize::new(self.max_size.get() - 1),
-                memory_dump: Some(dump),
+                memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack,
+                loop_call_stack: loop_call_stack.map(Box::new),
                 hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
             });
         }
