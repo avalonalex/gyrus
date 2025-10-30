@@ -236,15 +236,14 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         && let Some(mut error) = handle.lock().unwrap().take_error()
     {
         // Enrich StepLimitExceeded with source_location before returning
-        if let Some(debug_handle) = &debug_hook_handle {
-            if let BfError::StepLimitExceeded {
+        if let Some(debug_handle) = &debug_hook_handle
+            && let BfError::StepLimitExceeded {
                 instruction_index, ..
             } = &error
-            {
-                let debug_hook = debug_handle.lock().unwrap();
-                if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
-                    error = error.with_step_limit_source_location(loc);
-                }
+        {
+            let debug_hook = debug_handle.lock().unwrap();
+            if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
+                error = error.with_step_limit_source_location(loc);
             }
         }
         return Err(error);
@@ -271,10 +270,9 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
             if let BfError::StepLimitExceeded {
                 instruction_index, ..
             } = &error
+                && let Some(loc) = debug_hook.debug_info().lookup(*instruction_index)
             {
-                if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
-                    error = error.with_step_limit_source_location(loc);
-                }
+                error = error.with_step_limit_source_location(loc);
             }
         }
         return Err(error);
@@ -1223,7 +1221,7 @@ mod tests {
         use crate::io::StringIo;
 
         // Set cell to 255 using many increments, then increment once more
-        let source = format!("{}", "+".repeat(256)) + "."; // 0+256=0 (wraps at 255), output 0
+        let source = "+".repeat(256).to_string() + "."; // 0+256=0 (wraps at 255), output 0
         let instructions = parse(&source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
@@ -1269,7 +1267,7 @@ mod tests {
         use crate::test_utils::run_bf_with_config;
 
         // Set cell to 255 using increments, then try to increment → should error
-        let source = format!("{}", "+".repeat(256)); // 0+255=255, +1=error!
+        let source = "+".repeat(256).to_string(); // 0+255=255, +1=error!
 
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(100)
@@ -1701,7 +1699,7 @@ mod tests {
         use crate::test_utils::run_bf_with_config;
 
         // Set cell to 255, try to increment → cell overflow
-        let source = format!("{}", "+".repeat(256)); // Should error on cell arithmetic
+        let source = "+".repeat(256).to_string(); // Should error on cell arithmetic
 
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(100) // Fixed MEMORY
@@ -1994,7 +1992,7 @@ mod tests {
             .expect("valid unbounded config")
             .build();
 
-        let result = run_bf_with_config(&source, "", config);
+        let result = run_bf_with_config(source, "", config);
 
         assert!(result.is_ok(), "Should succeed within unbounded limits");
         let (_, stats) = result.unwrap();
@@ -2555,23 +2553,22 @@ mod tests {
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
         if let Err(BfError::MemoryOutOfBounds {
-            loop_call_stack, ..
+            loop_call_stack: Some(stack),
+            ..
         }) = result
         {
-            if let Some(stack) = loop_call_stack {
-                // Should have 3 frames for 3 nested loops
-                assert_eq!(stack.len(), 3, "Should have 3 frames for triple nesting");
+            // Should have 3 frames for 3 nested loops
+            assert_eq!(stack.len(), 3, "Should have 3 frames for triple nesting");
 
-                // All frames should have valid source locations
-                for (i, frame) in stack.iter().enumerate() {
-                    assert_eq!(frame.source_location.line, 1);
-                    assert!(
-                        frame.iteration >= 1,
-                        "Frame {} should have iteration >= 1, got {}",
-                        i,
-                        frame.iteration
-                    );
-                }
+            // All frames should have valid source locations
+            for (i, frame) in stack.iter().enumerate() {
+                assert_eq!(frame.source_location.line, 1);
+                assert!(
+                    frame.iteration >= 1,
+                    "Frame {} should have iteration >= 1, got {}",
+                    i,
+                    frame.iteration
+                );
             }
         }
     }
@@ -2828,7 +2825,7 @@ mod tests {
                     }
 
                     // This should have nested loops
-                    assert!(stack.len() >= 1, "Should have at least 1 loop in stack");
+                    assert!(!stack.is_empty(), "Should have at least 1 loop in stack");
                 }
             }
             Ok(stats) => {

@@ -30,29 +30,28 @@ impl ExecutionHook for MemoryWatchpoint {
         let current_value = context.current_cell();
         let mut last_value_guard = self.last_value.lock().unwrap();
 
-        if let Some(last) = *last_value_guard {
-            if current_value != last {
-                // Value changed!
-                self.changes.lock().unwrap().push((
-                    context.step_count().get(),
-                    last,
-                    current_value,
-                ));
+        if let Some(last) = *last_value_guard
+            && current_value != last
+        {
+            // Value changed!
+            self.changes
+                .lock()
+                .unwrap()
+                .push((context.step_count().get(), last, current_value));
 
-                println!(
-                    "\n⚠️  Watchpoint triggered at step {}!",
-                    context.step_count().get()
-                );
-                println!(
-                    "   Cell {}: {} -> {}",
-                    self.watch_address, last, current_value
-                );
-                println!("   Instruction: {:?}", instruction);
-                println!("   Loop depth: {}", context.loop_depth());
+            println!(
+                "\n⚠️  Watchpoint triggered at step {}!",
+                context.step_count().get()
+            );
+            println!(
+                "   Cell {}: {} -> {}",
+                self.watch_address, last, current_value
+            );
+            println!("   Instruction: {:?}", instruction);
+            println!("   Loop depth: {}", context.loop_depth());
 
-                if let Some(loc) = context.source_location() {
-                    println!("   Source: line {}, column {}", loc.line, loc.column);
-                }
+            if let Some(loc) = context.source_location() {
+                println!("   Source: line {}, column {}", loc.line, loc.column);
             }
         }
 
@@ -67,7 +66,7 @@ impl ExecutionHook for MemoryWatchpoint {
         println!("  Watched address: {}", self.watch_address);
         println!("  Total changes: {}", changes.len());
 
-        if changes.len() > 0 {
+        if !changes.is_empty() {
             println!("\n  Change history:");
             for (step, old_val, new_val) in changes.iter() {
                 println!("    Step {}: {} -> {}", step, old_val, new_val);

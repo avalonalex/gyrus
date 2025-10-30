@@ -5,7 +5,8 @@
 
 use ferrous_cortex::{
     BfError, EofBehavior, ExecutionConfig, ExecutionConfigBuilder, interpret_with_io,
-    io::{DebugIo, StringIo}, parse, parse_with_debug,
+    io::{DebugIo, StringIo},
+    parse, parse_with_debug,
 };
 use std::fs;
 use std::path::Path;
@@ -494,10 +495,10 @@ fn test_corpus_debug_info_tracking() {
 
     // Select programs that complete quickly
     let test_programs = vec![
-        "basic/simple.bf",            // Very simple: prints 'H'
-        "basic/hello_world.bf",       // Classic: prints "Hello World!"
-        "basic/line_comments.bf",     // Comment syntax test
-        "advanced/deep_nesting.bf",   // Nested loops test
+        "basic/simple.bf",          // Very simple: prints 'H'
+        "basic/hello_world.bf",     // Classic: prints "Hello World!"
+        "basic/line_comments.bf",   // Comment syntax test
+        "advanced/deep_nesting.bf", // Nested loops test
     ];
 
     for program_path in test_programs {
@@ -523,7 +524,7 @@ fn test_corpus_debug_info_tracking() {
         // Moderate limits - enough for quick programs, not too slow for tests
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(30000)
-            .with_max_steps(5000)  // Lower limit for faster test execution
+            .with_max_steps(5000) // Lower limit for faster test execution
             .build();
 
         let result = interpret_with_io(
@@ -553,15 +554,24 @@ fn test_corpus_debug_info_tracking() {
                     program_path
                 );
                 let loc = source_location.unwrap();
-                println!("    Source location: line {}, column {}", loc.line, loc.column);
+                println!(
+                    "    Source location: line {}, column {}",
+                    loc.line, loc.column
+                );
             }
             Err(e) => {
                 println!("  ⚠ Error: {:?}", e);
                 // Verify runtime errors have source locations
                 match e {
-                    BfError::MemoryOutOfBounds { source_location, .. }
-                    | BfError::CellOverflow { source_location, .. }
-                    | BfError::CellUnderflow { source_location, .. } => {
+                    BfError::MemoryOutOfBounds {
+                        source_location, ..
+                    }
+                    | BfError::CellOverflow {
+                        source_location, ..
+                    }
+                    | BfError::CellUnderflow {
+                        source_location, ..
+                    } => {
                         assert!(
                             source_location.is_some(),
                             "{}: Runtime error should have source location",

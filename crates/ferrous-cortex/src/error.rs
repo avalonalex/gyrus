@@ -414,6 +414,36 @@ impl BfError {
                 output.push_str(&format!("\nHint: {}", hint));
                 output
             }
+            BfError::StepLimitExceeded {
+                source_location,
+                limit,
+                actual_steps,
+                hint,
+                ..
+            } => {
+                let mut output = String::new();
+                if let Some(loc) = source_location {
+                    output.push_str(&format!(
+                        "Error: Step limit exceeded\n\nAt line {}, column {}:\n",
+                        loc.line, loc.column
+                    ));
+                    output.push_str(&extract_source_context_highlighted(source, *loc));
+                    output.push_str(&format!(
+                        "Program exceeded {} instruction limit (executed {} steps).\n",
+                        limit,
+                        actual_steps.get()
+                    ));
+                } else {
+                    output.push_str("Error: Step limit exceeded\n");
+                    output.push_str(&format!(
+                        "Program exceeded {} instruction limit (executed {} steps).\n",
+                        limit,
+                        actual_steps.get()
+                    ));
+                }
+                output.push_str(&format!("\nHint: {}", hint));
+                output
+            }
             // For other errors, use detailed format
             _ => self.format_detailed(),
         }
