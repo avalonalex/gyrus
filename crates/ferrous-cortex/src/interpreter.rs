@@ -278,6 +278,7 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
             state.step_count,
             source_loc.as_ref(),
             state.loop_depth,
+            state.instruction_index,
         );
         hook_manager.on_complete(&hook_context);
     }
@@ -491,6 +492,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 state.step_count,
                 source_loc.as_ref(),
                 state.loop_depth,
+                state.instruction_index,
             );
 
             match hook_manager.before_instruction(instruction, &hook_context) {
@@ -565,9 +567,19 @@ fn execute_block<I: BfInput, O: BfOutput>(
                             state.step_count,
                             source_loc.as_ref(),
                             state.loop_depth,
+                            state.instruction_index,
                         );
 
-                        match hook_manager.on_loop_enter(&hook_context) {
+                        // Create LoopInfo from metadata if available
+                        let loop_info = loop_metadata.map(|metadata| {
+                            crate::hooks::LoopInfo::new(
+                                state.instruction_index,
+                                metadata.body_start_index,
+                                metadata.body_size,
+                            )
+                        });
+
+                        match hook_manager.on_loop_enter(&hook_context, loop_info.as_ref()) {
                             HookDecision::Continue => {}
                             HookDecision::Break => {
                                 return Err(BfError::ExecutionPaused {
@@ -616,6 +628,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                             state.step_count,
                             source_loc.as_ref(),
                             state.loop_depth,
+                            state.instruction_index,
                         );
 
                         match hook_manager.on_loop_exit(&hook_context) {
@@ -655,6 +668,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 state.step_count,
                 source_loc.as_ref(),
                 state.loop_depth,
+                state.instruction_index,
             );
 
             match hook_manager.after_instruction(instruction, &hook_context) {
