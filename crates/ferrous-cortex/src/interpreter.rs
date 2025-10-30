@@ -250,11 +250,10 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
 
     // Check if limit hook stopped execution with an error
     // This takes precedence over ExecutionPaused since limits are more specific
-    if let Some(handle) = &limit_hook_handle {
-        if let Some(error) = handle.lock().unwrap().take_error() {
+    if let Some(handle) = &limit_hook_handle
+        && let Some(error) = handle.lock().unwrap().take_error() {
             return Err(error);
         }
-    }
 
     // If there was an error and it wasn't from the limit hook, enrich it with loop_call_stack
     if let Err(error) = execute_result {

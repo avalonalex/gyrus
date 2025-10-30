@@ -474,8 +474,8 @@ impl ExecutionHook for LimitEnforcerHook {
         use crate::error::BfError;
 
         // Check step limit
-        if let Some(max_steps) = self.max_steps {
-            if context.step_count().get() > max_steps {
+        if let Some(max_steps) = self.max_steps
+            && context.step_count().get() > max_steps {
                 self.error = Some(BfError::StepLimitExceeded {
                     limit: max_steps,
                     actual_steps: context.step_count(),
@@ -490,7 +490,6 @@ impl ExecutionHook for LimitEnforcerHook {
                 });
                 return HookDecision::Break;
             }
-        }
 
         // Check timeout
         if let Some(timeout_ms) = self.timeout_ms {
