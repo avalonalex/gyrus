@@ -192,9 +192,9 @@ pub enum BfError {
         instruction_index: InstructionIndex,
         attempted: isize,
         max: MemorySize,
-        memory_dump: Option<MemoryDump>,
+        memory_dump: Option<Box<MemoryDump>>, // Boxed to reduce enum size
         source_location: Option<SourceLocation>,
-        loop_call_stack: Option<Vec<LoopStackFrame>>, // Phase 2: loop context
+        loop_call_stack: Option<Box<Vec<LoopStackFrame>>>, // Boxed to reduce enum size
         hint: String,
     },
 
@@ -276,7 +276,7 @@ impl BfError {
     /// Get memory dump if available
     pub fn memory_dump(&self) -> Option<&MemoryDump> {
         match self {
-            BfError::MemoryOutOfBounds { memory_dump, .. } => memory_dump.as_ref(),
+            BfError::MemoryOutOfBounds { memory_dump, .. } => memory_dump.as_deref(),
             _ => None,
         }
     }
@@ -440,7 +440,7 @@ impl BfError {
                 max,
                 memory_dump,
                 source_location,
-                loop_call_stack: Some(loop_call_stack),
+                loop_call_stack: Some(Box::new(loop_call_stack)),
                 hint,
             },
             // Other error types don't support loop_call_stack (CellOverflow, CellUnderflow, etc.)
