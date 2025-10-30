@@ -4,6 +4,7 @@ use super::cell_model::{U8CheckedCells, U8WrappingCells};
 use super::memory_model::{FixedMemory, UnboundedMemory};
 use super::{CellModel, EofBehavior, MemoryModel};
 use crate::error::{BfError, Result};
+use crate::hooks::{BoxedHook, HookManager};
 use crate::types::MemorySize;
 use std::marker::PhantomData;
 
@@ -16,7 +17,7 @@ pub struct ReadyToBuild;
 /// Configuration for BrainFuck interpreter execution
 ///
 /// Use `ExecutionConfigBuilder` to create instances with validation.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ExecutionConfig {
     memory_model: MemoryModel,
     cell_model: CellModel,
@@ -24,6 +25,7 @@ pub struct ExecutionConfig {
     timeout_ms: Option<u64>,
     allow_negative_pointer: bool,
     eof_behavior: EofBehavior,
+    pub(crate) hook_manager: Option<HookManager>,
 }
 
 impl Default for ExecutionConfig {
@@ -35,6 +37,7 @@ impl Default for ExecutionConfig {
             timeout_ms: None,
             allow_negative_pointer: false,
             eof_behavior: EofBehavior::default(),
+            hook_manager: None,
         }
     }
 }
@@ -76,6 +79,20 @@ impl ExecutionConfig {
         self.eof_behavior
     }
 
+    /// Get a mutable reference to the hook manager, if present
+    ///
+    /// This is used internally by the interpreter to dispatch hook events.
+    #[inline]
+    pub(crate) fn hook_manager_mut(&mut self) -> Option<&mut HookManager> {
+        self.hook_manager.as_mut()
+    }
+
+    /// Check if hooks are enabled
+    #[inline]
+    pub fn has_hooks(&self) -> bool {
+        self.hook_manager.is_some()
+    }
+
     /// Create a new builder
     pub fn builder() -> ExecutionConfigBuilder<Unbuilt> {
         ExecutionConfigBuilder::new()
@@ -90,6 +107,7 @@ pub struct ExecutionConfigBuilder<State = Unbuilt> {
     timeout_ms: Option<u64>,
     eof_behavior: EofBehavior,
     allow_negative_pointer: bool,
+    hook_manager: Option<HookManager>,
     _state: PhantomData<State>,
 }
 
@@ -137,6 +155,35 @@ macro_rules! common_builder_methods {
             self.timeout_ms = Some(timeout);
             self
         }
+
+        /// Enable hooks and register a hook
+        ///
+        /// This will create a HookManager if one doesn't exist and register the hook.
+        ///
+        /// # Example
+        ///
+        /// ```rust,ignore
+        /// let config = ExecutionConfigBuilder::new()
+        ///     .with_memory_size(1000)
+        ///     .with_hook(Box::new(MyHook::new()))
+        ///     .build();
+        /// ```
+        pub fn with_hook(mut self, hook: BoxedHook) -> Self {
+            self.hook_manager
+                .get_or_insert_with(HookManager::new)
+                .register(hook);
+            self
+        }
+
+        /// Enable hooks without registering any yet
+        ///
+        /// Creates an empty HookManager. You can add hooks later via `with_hook()`.
+        pub fn with_hooks_enabled(mut self) -> Self {
+            if self.hook_manager.is_none() {
+                self.hook_manager = Some(HookManager::new());
+            }
+            self
+        }
     };
 }
 
@@ -150,6 +197,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
             timeout_ms: None,
             eof_behavior: EofBehavior::default(),
             allow_negative_pointer: false,
+            hook_manager: None,
             _state: PhantomData,
         }
     }
@@ -164,6 +212,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
             allow_negative_pointer: self.allow_negative_pointer,
+            hook_manager: self.hook_manager,
             _state: PhantomData,
         }
     }
@@ -209,6 +258,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
             allow_negative_pointer: self.allow_negative_pointer,
+            hook_manager: self.hook_manager,
             _state: PhantomData,
         })
     }
@@ -223,6 +273,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
             allow_negative_pointer: self.allow_negative_pointer,
+            hook_manager: self.hook_manager,
             _state: PhantomData,
         }
     }
@@ -246,6 +297,7 @@ impl ExecutionConfigBuilder<ReadyToBuild> {
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
             allow_negative_pointer: self.allow_negative_pointer,
+            hook_manager: self.hook_manager,
         }
     }
 }

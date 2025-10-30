@@ -11,6 +11,12 @@ FerrousCortex is an industry-strength BrainFuck interpreter/compiler and visual 
 - **ferrous-cortex-cli** (`crates/ferrous-cortex-cli/`): CLI binary crate
 - Future: debugger, REPL, JIT compiler as separate crates
 
+## Documentation Organization
+
+**Important**: Use the following directories for different types of documentation:
+- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents
+- **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
+
 ## Core Architecture
 
 ### Module Structure (Idiomatic Rust)
@@ -454,7 +460,8 @@ The test suite covers:
   - `test_error_without_debug_info`: Backward compatibility (no debug info)
   - `test_memory_overflow_formatting`: Full formatted output with memory dump
   - `test_cell_overflow_formatting`: Full formatted output with syntax highlighting
-- **Total**: 118 library tests
+- **Hook system tests**: Basic hook infrastructure and manager behavior (8 tests)
+- **Total**: 166 library tests (164 passing, 2 ignored)
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()` or `parse_with_debug(source).unwrap()`
@@ -469,12 +476,20 @@ To add new tests:
 ## Future Architecture Notes
 
 The roadmap includes:
-- **Debugger**: Will need to extend interpreter with debug hooks (breakpoints, step execution)
+- **Debugger**: ✅ Hook infrastructure complete! Build on top of `ExecutionHook` trait
+  - Breakpoints: Use `before_instruction` hook with step count or source location matching
+  - Step execution: Return `HookDecision::Break` to pause, resume by calling interpret again
+  - Watchpoints: Use `after_instruction` hook to monitor memory changes
+  - Time-travel debugging: Capture state snapshots in hooks, allow forward/backward navigation
 - **Compiler**: Planned JIT/AOT backend - consider IR layer between parser and execution
 - **Optimizations**: Instruction fusion (e.g., `+++` → IncrementValue(3)) will require AST transformation pass
-- **Validation pass**: Static analysis for warnings (dead loops, suspicious patterns)
+- **Validation pass**: ✅ Complete - static analysis for warnings (dead loops, suspicious patterns)
 
-When adding the debugger, the interpreter state (memory, pointer, instruction counter) should be extracted into a struct that can be inspected and controlled externally.
+**Hook System Integration (Complete):**
+- `HookContext` provides full state access: memory, pointer, step count, source location, loop depth
+- `HookDecision::Break` pauses execution with `BfError::ExecutionPaused`
+- `HookDecision::Skip` allows instruction filtering/modification
+- Zero overhead when hooks not used (`Option<HookManager>`)
 
 ## Implementation Status
 
@@ -492,9 +507,10 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
 - ✅ Execution limits (step count, timeout) (Phase 3.1)
 - ✅ Configurable memory size (Phase 3.1)
 - ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (118 library tests + integration tests)
+- ✅ Comprehensive test suite (166 library tests + integration tests)
   - Added 8 comprehensive tests for error formatting and source location tracking
-  - Tests cover single-char programs, multiline, nested loops, comments
+  - Added 8 tests for hook infrastructure (context creation, manager dispatch, early exit)
+  - Tests cover single-char programs, multiline, nested loops, comments, hooks
 - ✅ Validation pass with warnings (Phase 2.1)
 - ✅ Line comments using `*` (Community feature)
 - ✅ Code minification (Phase 4.1)
@@ -521,10 +537,23 @@ When adding the debugger, the interpreter state (memory, pointer, instruction co
   - MemoryExpanded: Shows unbounded memory growth with syntax highlighting
   - **Display behavior**: Only shown with `--verbose` flag
   - **Note**: Cell overflow/underflow warnings removed - wrapping is standard BF behavior
+- ✅ **Plugin/Hook Architecture** (Foundation for debugger, profiler, tracer)
+  - Complete hook system with 5 hook points: before/after instruction, loop enter/exit, completion
+  - `ExecutionHook` trait for custom execution observers
+  - `HookManager` for efficient hook dispatch
+  - `HookContext` provides immutable state snapshots (memory, pointer, step count, source location, loop depth)
+  - `HookDecision` enum for execution control (Continue, Break, Skip)
+  - Zero-cost abstraction when hooks disabled (Option<HookManager>)
+  - Builder pattern integration: `with_hook()`, `with_hooks_enabled()`
+  - 8 unit tests for hook infrastructure
+  - **Total tests**: 166 library tests (164 passing, 2 ignored)
+  - **Enables**: Interactive debuggers, profilers, execution tracers, time-travel debugging
 
 **Remaining (from PRD)**:
-- ⏳ Debug symbols and runtime diagnostics (Phase 4.2)
-- ⏳ Visual TUI debugger
+- ⏳ Built-in hooks (StepBreakpoint, InstructionCounter, MemoryWatcher)
+- ⏳ Hook usage examples and documentation
+- ⏳ Debug symbols and runtime diagnostics (Phase 4.2) - partially complete with Phase 2
+- ⏳ Visual TUI debugger (foundation ready via hooks)
 - ⏳ Performance optimizations (instruction fusion, I/O buffering)
 - ⏳ JIT/AOT compiler backend
 

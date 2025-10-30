@@ -250,6 +250,13 @@ pub enum BfError {
         source_location: Option<SourceLocation>,
         hint: String,
     },
+
+    #[error("Execution paused by hook at instruction {instruction_index}")]
+    ExecutionPaused {
+        instruction_index: InstructionIndex,
+        source_location: Option<SourceLocation>,
+        message: Option<String>,
+    },
 }
 
 impl BfError {

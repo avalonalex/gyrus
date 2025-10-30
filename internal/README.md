@@ -13,7 +13,9 @@ Unlike external docs (README.md, CLAUDE.md), these are for maintainers who need 
 
 ## Documents
 
-### [`debug-symbols-design.md`](./debug-symbols-design.md)
+### Design Documents
+
+#### [`debug-symbols-design.md`](./debug-symbols-design.md)
 **Status**: Phase 1 Complete ✅
 
 Complete design document for the debug symbols and runtime diagnostics system.
@@ -30,6 +32,65 @@ Complete design document for the debug symbols and runtime diagnostics system.
 - Extend the debug system (loop stack, tracing)
 - Debug issues with source location tracking
 - Learn about the flat index DFS alignment technique
+
+#### [`phase2-loop-tracking-design.md`](./phase2-loop-tracking-design.md)
+**Status**: Phase 2 Complete ✅
+
+Design document for Phase 2 loop tracking with accurate source location in nested loops.
+
+**Contains**:
+- Problem statement (nested loop error attribution)
+- Architecture for loop call stack
+- Flat index to source location mapping
+- Implementation details
+
+#### [`hook-system-complete.md`](./hook-system-complete.md)
+**Status**: Complete ✅ - 2025-10-29
+
+Milestone document for the complete plugin/hook architecture implementation.
+
+**Contains**:
+- Complete hook system overview (ExecutionHook, HookContext, HookManager)
+- Integration points and API design
+- What the hook system enables (debugger, profiler, tracer, time-travel debugging)
+- Architecture highlights (zero-cost abstraction, type safety)
+- Test coverage summary
+- Future enhancements
+
+### Implementation Status & Test Results
+
+#### [`architecture-status.md`](./architecture-status.md)
+**Status**: Current (v0.2.0)
+
+Current implementation state, workspace structure, and module organization.
+
+**Contains**:
+- Workspace structure
+- Module breakdown with line counts
+- Key achievements
+- Current feature status
+
+#### [`phase2-debug-test-results.md`](./phase2-debug-test-results.md)
+**Status**: Complete ✅ - 2025-10-29
+
+Test results for Phase 2 loop tracking in deeply nested loops.
+
+**Contains**:
+- 5 comprehensive test cases (4 passing, 1 ignored)
+- Deep nesting verification (up to 4 levels)
+- Memory boundary testing (100-cell memory)
+- Key findings and test patterns
+
+### Tool Documentation
+
+#### [`debug-tools-usage.md`](./debug-tools-usage.md)
+
+Internal guide for debug symbol inspection tools.
+
+**Contains**:
+- Debug symbol inspector usage (`--inspect-debug`)
+- Output format explanation
+- Example programs and use cases
 
 ## Contributing
 
