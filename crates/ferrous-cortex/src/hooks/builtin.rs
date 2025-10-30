@@ -391,6 +391,157 @@ impl ExecutionHook for SharedWarningHook {
     }
 }
 
+/// Built-in hook for enforcing execution limits.
+///
+/// This hook monitors execution and enforces:
+/// - **Step limits**: Maximum number of instructions to execute
+/// - **Timeout limits**: Maximum execution time in milliseconds
+///
+/// When a limit is exceeded, the hook returns `HookDecision::Break` to stop execution
+/// and stores the appropriate error internally.
+///
+/// # Usage
+///
+/// This hook is automatically registered by the interpreter when limits are configured.
+/// Users typically don't need to use it directly.
+///
+/// # Example
+///
+/// ```rust
+/// use ferrous_cortex::hooks::builtin::LimitEnforcerHook;
+///
+/// let hook = LimitEnforcerHook::new(Some(1000), Some(5000));
+/// // Hook will enforce 1000 step limit and 5000ms timeout
+/// ```
+#[derive(Debug)]
+pub struct LimitEnforcerHook {
+    max_steps: Option<u64>,
+    timeout_ms: Option<u64>,
+    start_time: std::time::Instant,
+    error: Option<crate::error::BfError>,
+}
+
+impl LimitEnforcerHook {
+    /// Create a new limit enforcer hook.
+    ///
+    /// # Parameters
+    /// - `max_steps`: Maximum number of steps before raising StepLimitExceeded error
+    /// - `timeout_ms`: Maximum execution time in milliseconds before raising ExecutionTimeout error
+    pub fn new(max_steps: Option<u64>, timeout_ms: Option<u64>) -> Self {
+        Self {
+            max_steps,
+            timeout_ms,
+            start_time: std::time::Instant::now(),
+            error: None,
+        }
+    }
+
+    /// Check if the hook has stored an error (limit exceeded).
+    pub fn has_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    /// Take the stored error, if any.
+    ///
+    /// This consumes the error, leaving None in its place.
+    pub fn take_error(&mut self) -> Option<crate::error::BfError> {
+        self.error.take()
+    }
+
+    /// Get a reference to the stored error, if any.
+    pub fn error(&self) -> Option<&crate::error::BfError> {
+        self.error.as_ref()
+    }
+}
+
+impl ExecutionHook for LimitEnforcerHook {
+    fn after_instruction(
+        &mut self,
+        _instruction: &Instruction,
+        context: &HookContext,
+    ) -> HookDecision {
+        use crate::error::BfError;
+
+        // Check step limit
+        if let Some(max_steps) = self.max_steps {
+            if context.step_count().get() > max_steps {
+                self.error = Some(BfError::StepLimitExceeded {
+                    limit: max_steps,
+                    actual_steps: context.step_count(),
+                    hint: format!(
+                        "Program executed {} steps, exceeding the limit of {}. \
+                         This may indicate an infinite loop. Try increasing the limit with --max-steps {} \
+                         or investigate your BrainFuck code for infinite loops.",
+                        context.step_count().get(),
+                        max_steps,
+                        max_steps * 10
+                    ),
+                });
+                return HookDecision::Break;
+            }
+        }
+
+        // Check timeout
+        if let Some(timeout_ms) = self.timeout_ms {
+            let elapsed = self.start_time.elapsed().as_millis() as u64;
+            if elapsed > timeout_ms {
+                self.error = Some(BfError::ExecutionTimeout {
+                    limit_ms: timeout_ms,
+                    actual_steps: Some(context.step_count()),
+                    hint: format!(
+                        "Program exceeded {}ms timeout after executing {} steps. \
+                         Try increasing timeout with --timeout {} or optimize your BrainFuck code.",
+                        timeout_ms,
+                        context.step_count().get(),
+                        timeout_ms * 2
+                    ),
+                });
+                return HookDecision::Break;
+            }
+        }
+
+        HookDecision::Continue
+    }
+}
+
+/// Wrapper for LimitEnforcerHook with shared state.
+///
+/// This allows the interpreter to extract errors after execution.
+pub struct SharedLimitHook {
+    shared: Arc<Mutex<LimitEnforcerHook>>,
+}
+
+impl SharedLimitHook {
+    /// Create a new shared limit hook.
+    ///
+    /// Returns both the hook (to be registered) and a handle to extract errors later.
+    pub fn new(
+        max_steps: Option<u64>,
+        timeout_ms: Option<u64>,
+    ) -> (Self, Arc<Mutex<LimitEnforcerHook>>) {
+        let shared = Arc::new(Mutex::new(LimitEnforcerHook::new(max_steps, timeout_ms)));
+        (
+            Self {
+                shared: Arc::clone(&shared),
+            },
+            shared,
+        )
+    }
+}
+
+impl ExecutionHook for SharedLimitHook {
+    fn after_instruction(
+        &mut self,
+        instruction: &Instruction,
+        context: &HookContext,
+    ) -> HookDecision {
+        self.shared
+            .lock()
+            .unwrap()
+            .after_instruction(instruction, context)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
