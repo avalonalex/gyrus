@@ -1,7 +1,7 @@
 //! Cell arithmetic behavior models
 
 use crate::debug::DebugInfo;
-use crate::error::{Result, RuntimeWarning};
+use crate::error::Result;
 use crate::types::StepCount;
 use std::fmt;
 
@@ -39,13 +39,10 @@ pub trait CellBehavior {
     ///
     /// Returns an error if the operation would violate the cell model's constraints
     /// (e.g., overflow with checked arithmetic).
-    ///
-    /// Runtime warnings (e.g., overflow in wrapping mode) are collected in `warnings`.
     fn try_increment(
         &self,
         value: &mut u8,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
     ) -> Result<()>;
 
@@ -53,13 +50,10 @@ pub trait CellBehavior {
     ///
     /// Returns an error if the operation would violate the cell model's constraints
     /// (e.g., underflow with checked arithmetic).
-    ///
-    /// Runtime warnings (e.g., underflow in wrapping mode) are collected in `warnings`.
     fn try_decrement(
         &self,
         value: &mut u8,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
     ) -> Result<()>;
 
@@ -90,7 +84,6 @@ impl CellBehavior for U8WrappingCells {
         &self,
         value: &mut u8,
         _step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         *value = value.wrapping_add(1);
@@ -101,7 +94,6 @@ impl CellBehavior for U8WrappingCells {
         &self,
         value: &mut u8,
         _step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         _debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         *value = value.wrapping_sub(1);
@@ -131,7 +123,6 @@ impl CellBehavior for U8CheckedCells {
         &self,
         value: &mut u8,
         step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         let old_value = *value;
@@ -155,7 +146,6 @@ impl CellBehavior for U8CheckedCells {
         &self,
         value: &mut u8,
         step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
         let old_value = *value;
