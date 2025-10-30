@@ -142,6 +142,7 @@
 mod config;
 mod debug;
 mod error;
+pub mod hooks;
 mod instruction;
 mod interpreter;
 pub mod io;
