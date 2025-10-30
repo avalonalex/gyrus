@@ -1273,6 +1273,290 @@ fn constant_fold(instructions: &[Instruction]) -> Vec<Instruction> {
 
 ---
 
+### 1.7 I/O Buffering
+
+**Description**: Buffer output and input operations to reduce syscall overhead.
+
+**Problem**: Every `.` instruction currently causes:
+1. System call to write 1 byte
+2. Kernel context switch
+3. Terminal/file update
+
+For programs that output 1000 characters: 1000 syscalls!
+
+**Solution**: Buffered I/O
+
+```rust
+pub enum BufferingMode {
+    None,           // Unbuffered (flush every char) - current behavior
+    Line,           // Flush on newline (good for interactive)
+    Block(usize),   // Flush every N bytes (best performance)
+    Auto,           // Smart: unbuffered for TTY, buffered for files
+}
+
+pub struct BufferedOutput {
+    buffer: Vec<u8>,
+    mode: BufferingMode,
+    max_buffer_size: usize,
+}
+
+impl BufferedOutput {
+    pub fn write(&mut self, byte: u8) -> Result<()> {
+        self.buffer.push(byte);
+
+        // Auto-flush based on mode
+        match self.mode {
+            BufferingMode::None => self.flush()?,
+            BufferingMode::Line if byte == b'\n' => self.flush()?,
+            BufferingMode::Block(size) if self.buffer.len() >= size => self.flush()?,
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<()> {
+        if !self.buffer.is_empty() {
+            std::io::stdout().write_all(&self.buffer)?;
+            std::io::stdout().flush()?;
+            self.buffer.clear();
+        }
+        Ok(())
+    }
+}
+```
+
+**Buffering Strategies**:
+
+1. **Line Buffered** (default for interactive):
+   - Buffer until newline encountered
+   - Good balance of performance and interactivity
+   - Feels "real-time" to users
+
+2. **Block Buffered** (best for performance):
+   - Buffer until N bytes accumulated
+   - 10-100x syscall reduction
+   - May delay output visibility
+
+3. **Unbuffered** (current behavior):
+   - Flush after every character
+   - Worst performance, best interactivity
+   - Good for debugging/step-through
+
+4. **Smart Auto-Detection**:
+   - Detect if output is TTY or file/pipe
+   - Use line buffering for TTY
+   - Use block buffering for files
+   - Best of both worlds
+
+**Input Buffering**:
+
+Similarly, buffer input reads:
+
+```rust
+pub struct BufferedInput {
+    buffer: VecDeque<u8>,
+    chunk_size: usize,
+}
+
+impl BufferedInput {
+    pub fn read(&mut self) -> Result<u8> {
+        if self.buffer.is_empty() {
+            self.refill()?;
+        }
+
+        self.buffer.pop_front()
+            .ok_or(BfError::EndOfInput)
+    }
+
+    fn refill(&mut self) -> Result<()> {
+        let mut buf = vec![0u8; self.chunk_size];
+        let n = std::io::stdin().read(&mut buf)?;
+        self.buffer.extend(&buf[..n]);
+        Ok(())
+    }
+}
+```
+
+**Configuration**:
+
+```rust
+let config = ExecutionConfigBuilder::new()
+    .with_memory_size(30000)
+    .with_output_buffering(BufferingMode::Auto)
+    .with_input_buffering(true)
+    .build();
+```
+
+**CLI Integration**:
+
+```bash
+# Buffering flags
+ferrous-cortex program.bf --buffer none      # Unbuffered (debugging)
+ferrous-cortex program.bf --buffer line      # Line buffered (default interactive)
+ferrous-cortex program.bf --buffer block     # Block buffered (fastest)
+ferrous-cortex program.bf --buffer auto      # Smart detection (recommended)
+```
+
+**Impact**:
+- **Performance**: 5-10x speedup for I/O-heavy programs
+- **Complexity**: Low (standard library support)
+- **Trade-off**: Slight delay in output visibility (block mode)
+
+**Hook Compatibility**: ✅ Fully compatible
+- Hooks still see every Output instruction
+- Buffering happens at I/O layer, not instruction layer
+- No impact on debugging
+
+---
+
+### 1.8 Memory Optimizations
+
+**Description**: Reduce memory footprint and improve cache locality.
+
+#### 1.8.1 Lazy Memory Allocation
+
+**Problem**: Allocating 30,000 bytes for simple "Hello World" programs
+
+**Current**:
+```rust
+let memory = vec![0u8; 30000];  // Always allocate full size
+```
+
+**Optimized**:
+```rust
+pub struct LazyMemory {
+    chunks: HashMap<usize, Box<[u8; CHUNK_SIZE]>>,
+    chunk_size: usize,
+}
+
+const CHUNK_SIZE: usize = 1024;  // 1KB chunks
+
+impl LazyMemory {
+    pub fn get(&self, index: usize) -> u8 {
+        let chunk_idx = index / CHUNK_SIZE;
+        let offset = index % CHUNK_SIZE;
+
+        self.chunks
+            .get(&chunk_idx)
+            .map(|chunk| chunk[offset])
+            .unwrap_or(0)  // Unallocated chunks are implicitly zero
+    }
+
+    pub fn set(&mut self, index: usize, value: u8) {
+        let chunk_idx = index / CHUNK_SIZE;
+        let offset = index % CHUNK_SIZE;
+
+        let chunk = self.chunks
+            .entry(chunk_idx)
+            .or_insert_with(|| Box::new([0u8; CHUNK_SIZE]));
+        chunk[offset] = value;
+    }
+}
+```
+
+**Benefits**:
+- Only allocate chunks actually used
+- Simple "Hello World": 1KB instead of 30KB
+- Better cache locality (hot data is dense)
+- Supports unbounded memory naturally
+
+#### 1.8.2 Zero Cell Tracking (Tier 3 - Advanced)
+
+Track which cells are known to be zero for loop skip optimization:
+
+```rust
+pub struct OptimizedMemory {
+    memory: Vec<u8>,
+    zero_cells: BitVec,  // Bit vector: 1 bit per cell
+}
+
+impl OptimizedMemory {
+    pub fn set(&mut self, index: usize, value: u8) {
+        self.memory[index] = value;
+        self.zero_cells.set(index, value == 0);
+    }
+
+    pub fn is_zero_fast(&self, index: usize) -> bool {
+        // O(1) check without reading memory
+        self.zero_cells[index]
+    }
+}
+```
+
+**Usage**: Skip loop iterations if cell is known zero:
+
+```rust
+// Before loop entry
+if memory.is_zero_fast(pointer) {
+    // Skip entire loop - cell is zero
+    continue;
+}
+```
+
+**Benefits**:
+- Avoids cache misses for zero checks
+- Enables more aggressive loop skipping
+- Bit vector is 8x smaller than cell array
+
+#### 1.8.3 Memory Access Profiling (Developer Tool)
+
+Track hot/cold memory regions for optimization:
+
+```rust
+pub struct MemoryProfiler {
+    access_count: Vec<u64>,  // Access frequency per cell
+    hot_threshold: u64,
+}
+
+impl MemoryProfiler {
+    pub fn record_access(&mut self, index: usize) {
+        self.access_count[index] += 1;
+    }
+
+    pub fn hot_cells(&self) -> Vec<usize> {
+        self.access_count.iter()
+            .enumerate()
+            .filter(|(_, &count)| count > self.hot_threshold)
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+}
+```
+
+**Use Cases**:
+- Identify working set size
+- Guide prefetching strategies
+- Profile-guided optimization
+
+**Configuration**:
+
+```rust
+let config = ExecutionConfigBuilder::new()
+    .with_memory_model(MemoryModel::Lazy {
+        chunk_size: 1024,
+        max_chunks: 1000,
+    })
+    .with_zero_tracking(true)  // Enable zero cell optimization
+    .build();
+```
+
+**Impact**:
+- **Lazy allocation**: 10-30x memory reduction for simple programs
+- **Zero tracking**: 5-15% speedup (loop-heavy programs)
+- **Complexity**: Medium (requires custom memory abstraction)
+
+**Hook Compatibility**: ✅ Fully compatible
+- Memory optimizations are transparent to hooks
+- Hooks see logical memory state
+- No impact on debugging
+
+**Tier Assignment**:
+- Lazy allocation: **Tier 1** (parse-time configuration, always safe)
+- Zero tracking: **Tier 3** (advanced, requires careful invalidation)
+
+---
+
 ## Category 2: Language Extensions (MEDIUM PRIORITY)
 
 **Design Philosophy**: These language extensions (`#` and `@`) are **complementary** to the hook system, not redundant. They serve different use cases:

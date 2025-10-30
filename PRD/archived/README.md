@@ -139,11 +139,34 @@ This directory contains Product Requirements Documents that have been completed 
 - Document served its design/research purpose
 - Ongoing testing tracked in `PRD/TESTING.md`
 
+### Performance Optimizations (October 2025)
+
+**performance-optimizations.md**
+- **Status**: ✅ MERGED into optimization-and-advanced-features.md (October 2025)
+- **Summary**: Early optimization planning document covering instruction fusion, I/O buffering, and memory optimizations
+- **Key Content Migrated**:
+  - I/O Buffering strategies (line, block, auto-detection) → Category 1.7
+  - Memory optimizations (lazy allocation, zero tracking) → Category 1.8
+  - Advanced loop optimizations → Integrated into existing sections
+  - Benchmarking infrastructure → Developer tools section
+
+**Why Archived**:
+- Superseded by more comprehensive optimization-and-advanced-features.md
+- All unique content merged into main PRD
+- Main PRD includes newer design decisions (hook integration, debug symbols)
+- Three-tier optimization strategy provides clearer framework
+- Duplicate content eliminated
+
+**Migration Notes**:
+- I/O buffering → Added as section 1.7 with hook compatibility notes
+- Memory optimizations → Added as section 1.8 with tier assignments
+- Original document preserved for historical reference
+- See `optimization-and-advanced-features.md` for current optimization roadmap
+
 ## Active PRDs
 
 See parent directory for currently active PRDs:
 - `debug-symbols-and-runtime-diagnostics.md` - Debug symbols complete, advanced diagnostics pending
-- `performance-optimizations.md` - JIT/AOT compiler and instruction fusion
-- `optimization-and-advanced-features.md` - Advanced compiler features
+- `optimization-and-advanced-features.md` - Comprehensive optimization roadmap (merged from performance-optimizations.md)
 - `macro-preprocessor-design.md` - Macro system for BrainFuck
 - `TESTING.md` - Testing infrastructure documentation
