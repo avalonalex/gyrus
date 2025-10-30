@@ -1,6 +1,6 @@
 //! Memory management behavior models
 
-use crate::debug::{DebugInfo, LoopContext};
+use crate::debug::DebugInfo;
 use crate::error::{BfError, MemoryDump, Result};
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::fmt;
@@ -13,22 +13,21 @@ pub trait MemoryBehavior {
     ///
     /// Runtime warnings (e.g., memory expansion) are tracked by hooks.
     ///
-    /// Phase 2: Uses instruction_index for accurate source location lookup even in loops.
+    /// Uses instruction_index for accurate source location lookup even in loops.
     fn try_increment_pointer(
         &self,
         pointer: &mut MemoryAddress,
         memory: &mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize, // Phase 2: current instruction in flat index
-        loop_stack: &[LoopContext], // Phase 2: active loop contexts
+        instruction_index: usize, // Current instruction in flat index
     ) -> Result<()>;
 
     /// Try to decrement the pointer by 1
     ///
     /// Returns an error if the operation would violate the memory model's constraints.
     ///
-    /// Phase 2: Uses instruction_index for accurate source location lookup even in loops.
+    /// Uses instruction_index for accurate source location lookup even in loops.
     fn try_decrement_pointer(
         &self,
         pointer: &mut MemoryAddress,
@@ -36,8 +35,7 @@ pub trait MemoryBehavior {
         allow_negative: bool,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize, // Phase 2: current instruction in flat index
-        loop_stack: &[LoopContext], // Phase 2: active loop contexts
+        instruction_index: usize, // Current instruction in flat index
     ) -> Result<()>;
 
     /// Get the initial memory size for this model
@@ -66,38 +64,22 @@ impl MemoryBehavior for FixedMemory {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,   // Phase 2: use this directly
-        loop_stack: &[LoopContext], // Phase 2: active loop contexts
+        instruction_index: usize,
     ) -> Result<()> {
         pointer.increment();
 
         if pointer.get() >= self.size.get() {
             let dump = MemoryDump::from_memory(memory, *pointer);
-            // Phase 2: Use instruction_index directly (accurate even in loops)
             let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
 
-            // Phase 2: Build loop call stack
-            let loop_call_stack = if !loop_stack.is_empty() {
-                Some(
-                    loop_stack
-                        .iter()
-                        .map(|ctx| crate::error::LoopStackFrame {
-                            source_location: ctx.source_location,
-                            iteration: ctx.iteration,
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
-
+            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
                 max: MemorySize::new(self.size.get() - 1),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack: loop_call_stack.map(Box::new),
+                loop_call_stack: None,
                 hint: format!(
                     "Attempted to access cell {}, but memory size is fixed at {} cells. \
                      Try increasing memory size with --memory-size {} or use --memory-model unbounded",
@@ -118,36 +100,20 @@ impl MemoryBehavior for FixedMemory {
         allow_negative: bool,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,   // Phase 2: use this directly
-        loop_stack: &[LoopContext], // Phase 2: active loop contexts
+        instruction_index: usize,
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
-            // Phase 2: Use instruction_index directly (accurate even in loops)
             let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
 
-            // Phase 2: Build loop call stack
-            let loop_call_stack = if !loop_stack.is_empty() {
-                Some(
-                    loop_stack
-                        .iter()
-                        .map(|ctx| crate::error::LoopStackFrame {
-                            source_location: ctx.source_location,
-                            iteration: ctx.iteration,
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
-
+            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: -1,
                 max: MemorySize::new(self.size.get() - 1),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack: loop_call_stack.map(Box::new),
+                loop_call_stack: None,
                 hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
             });
         }
@@ -200,38 +166,22 @@ impl MemoryBehavior for UnboundedMemory {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,   // Phase 2: use this directly
-        loop_stack: &[LoopContext], // Phase 2: active loop contexts
+        instruction_index: usize,
     ) -> Result<()> {
         pointer.increment();
 
         if pointer.get() >= self.max_size.get() {
             let dump = MemoryDump::from_memory(memory, *pointer);
-            // Phase 2: Use instruction_index directly (accurate even in loops)
             let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
 
-            // Phase 2: Build loop call stack
-            let loop_call_stack = if !loop_stack.is_empty() {
-                Some(
-                    loop_stack
-                        .iter()
-                        .map(|ctx| crate::error::LoopStackFrame {
-                            source_location: ctx.source_location,
-                            iteration: ctx.iteration,
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
-
+            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
                 max: MemorySize::new(self.max_size.get() - 1),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack: loop_call_stack.map(Box::new),
+                loop_call_stack: None,
                 hint: format!(
                     "Attempted to access cell {}, exceeding maximum size of {}. \
                      This may indicate an infinite loop moving the pointer",
@@ -256,36 +206,20 @@ impl MemoryBehavior for UnboundedMemory {
         allow_negative: bool,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,   // Phase 2: use this directly
-        loop_stack: &[LoopContext], // Phase 2: active loop contexts
+        instruction_index: usize,
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
-            // Phase 2: Use instruction_index directly (accurate even in loops)
             let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
 
-            // Phase 2: Build loop call stack
-            let loop_call_stack = if !loop_stack.is_empty() {
-                Some(
-                    loop_stack
-                        .iter()
-                        .map(|ctx| crate::error::LoopStackFrame {
-                            source_location: ctx.source_location,
-                            iteration: ctx.iteration,
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
-
+            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: -1,
                 max: MemorySize::new(self.max_size.get() - 1),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
-                loop_call_stack: loop_call_stack.map(Box::new),
+                loop_call_stack: None,
                 hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
             });
         }
@@ -359,7 +293,7 @@ impl MemoryModel {
     ///
     /// Delegates to the specific memory model implementation.
     ///
-    /// Phase 2: Accepts instruction_index and loop_stack for accurate error location.
+    /// Accepts instruction_index for accurate error location even in loops.
     #[inline]
     pub fn try_increment_pointer(
         &self,
@@ -367,26 +301,15 @@ impl MemoryModel {
         memory: &mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,   // Phase 2
-        loop_stack: &[LoopContext], // Phase 2
+        instruction_index: usize,
     ) -> Result<()> {
         match self {
-            MemoryModel::Fixed(m) => m.try_increment_pointer(
-                pointer,
-                memory,
-                step_count,
-                debug_info,
-                instruction_index,
-                loop_stack,
-            ),
-            MemoryModel::Unbounded(m) => m.try_increment_pointer(
-                pointer,
-                memory,
-                step_count,
-                debug_info,
-                instruction_index,
-                loop_stack,
-            ),
+            MemoryModel::Fixed(m) => {
+                m.try_increment_pointer(pointer, memory, step_count, debug_info, instruction_index)
+            }
+            MemoryModel::Unbounded(m) => {
+                m.try_increment_pointer(pointer, memory, step_count, debug_info, instruction_index)
+            }
         }
     }
 
@@ -394,7 +317,7 @@ impl MemoryModel {
     ///
     /// Delegates to the specific memory model implementation.
     ///
-    /// Phase 2: Accepts instruction_index and loop_stack for accurate error location.
+    /// Accepts instruction_index for accurate error location even in loops.
     #[inline]
     pub fn try_decrement_pointer(
         &self,
@@ -403,8 +326,7 @@ impl MemoryModel {
         allow_negative: bool,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,   // Phase 2
-        loop_stack: &[LoopContext], // Phase 2
+        instruction_index: usize,
     ) -> Result<()> {
         match self {
             MemoryModel::Fixed(m) => m.try_decrement_pointer(
@@ -414,7 +336,6 @@ impl MemoryModel {
                 step_count,
                 debug_info,
                 instruction_index,
-                loop_stack,
             ),
             MemoryModel::Unbounded(m) => m.try_decrement_pointer(
                 pointer,
@@ -423,7 +344,6 @@ impl MemoryModel {
                 step_count,
                 debug_info,
                 instruction_index,
-                loop_stack,
             ),
         }
     }

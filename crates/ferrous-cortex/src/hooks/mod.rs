@@ -474,7 +474,7 @@ pub trait ExecutionHook: Send {
     ///
     /// - `context`: Current interpreter state at loop entry
     /// - `loop_info`: Structural information about this loop (indices and size), if available
-    ///                Only present when debug symbols are enabled.
+    ///   Only present when debug symbols are enabled.
     ///
     /// # Note
     ///

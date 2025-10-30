@@ -10,8 +10,9 @@
 //! - **Multiple cell models**: Wrapping (standard BF) and checked (debugging)
 //! - **Configurable EOF behavior**: SetZero, SetNegOne, NoChange, or Error
 //! - **Execution limits**: Step counting and timeout support
-//! - **Statistics tracking**: Steps, memory usage, I/O operations
-//! - **Runtime warnings**: Cell overflow/underflow, memory expansion
+//! - **Execution hooks**: Extensible hook system for custom instrumentation and debugging
+//! - **Statistics tracking**: Steps, memory usage, I/O operations (via hooks)
+//! - **Runtime warnings**: Cell overflow/underflow, memory expansion (via hooks)
 //! - **Custom I/O**: Support for string-based, file-based, or custom I/O
 //! - **Debug symbols**: Optional source location tracking for runtime diagnostics
 //!
@@ -22,6 +23,7 @@
 //! - Loops are represented as `Instruction::Loop(Vec<Instruction>)`
 //! - Recursive `execute_block()` handles nested loop execution
 //! - Memory and pointer state are maintained in `VmState`
+//! - Interpreter state is exposed to hooks via `HookContext` snapshots
 //!
 //! ## Internal Architecture
 //!
@@ -34,13 +36,13 @@
 //!
 //! - **`execute_single_instruction()`**: Executes individual non-loop instructions
 //!   - Handles all BrainFuck operations except loops
-//!   - Clean separation enables future hook integration
+//!   - Clean separation with hook integration points
 //!   - Easier to test and reason about
 //!
-//! - **`VmState`**: Encapsulates all runtime state
+//! - **`VmState`**: Encapsulates all runtime state (private)
 //!   - Memory tape, pointer position, step count
-//!   - Loop depth tracking (for debugging and future hooks)
-//!   - Statistics and debug information
+//!   - Loop depth tracking for debugging
+//!   - State exposed to hooks via `HookContext` immutable snapshots
 //!
 //! # Examples
 //!
@@ -144,26 +146,6 @@ impl VmState {
             memory_model,
         }
     }
-
-    /// Get the current loop nesting depth
-    ///
-    /// Returns 0 at top level, 1 inside one loop, 2 inside nested loops, etc.
-    /// This is useful for debugging and will be used by execution hooks.
-    #[inline]
-    #[allow(dead_code)] // Will be used by hooks in the future
-    fn current_loop_depth(&self) -> usize {
-        self.loop_depth
-    }
-
-    /// Get a read-only view of the memory tape
-    ///
-    /// This allows external inspection of memory without allowing modification.
-    /// Will be used by execution hooks to provide memory snapshots.
-    #[inline]
-    #[allow(dead_code)] // Will be used by hooks in the future
-    fn memory_slice(&self) -> &[u8] {
-        &self.memory
-    }
 }
 
 /// Interpret and execute BrainFuck instructions with default configuration
@@ -237,7 +219,7 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         .as_ref()
         .map(|handle| handle.lock().unwrap().debug_info().clone());
 
-    // Phase 2: Start execution at instruction index 0
+    // Start execution at instruction index 0
     let execute_result = execute_block(
         instructions,
         &mut state,
@@ -333,7 +315,6 @@ fn increment_pointer(
         state.step_count,
         debug_info,
         instruction_index,
-        &[], // Loop stack tracked by hooks now
     )
 }
 
@@ -352,7 +333,6 @@ fn decrement_pointer(
         state.step_count,
         debug_info,
         instruction_index,
-        &[], // Loop stack tracked by hooks now
     )
 }
 
@@ -400,9 +380,9 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             )?;
         }
 
-        // Cell arithmetic: Delegated to CellModel (now configurable!)
+        // Cell arithmetic: Delegated to CellModel (configurable!)
         //
-        // IMPORTANT: Cell arithmetic is NOW configurable via ExecutionConfig.cell_model().
+        // IMPORTANT: Cell arithmetic is configurable via ExecutionConfig.cell_model().
         // Different models provide different overflow/underflow behaviors:
         // - U8Wrapping: 255+1=0, 0-1=255 (default, most compatible)
         // - U8Checked: Overflow/underflow returns error
@@ -685,7 +665,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
             }
         }
 
-        // Phase 2: Increment local index for next instruction
+        // Increment local index for next instruction
         local_index += 1;
     }
 
@@ -2372,45 +2352,6 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore] // TODO: Fix test - current program doesn't trigger expected error
-    fn test_phase2_error_in_nested_loop() {
-        use crate::parser::parse_with_debug;
-
-        // Nested loop that errors inside the inner loop
-        // +[>++[>>]]
-        // Outer: runs once (cell[0]=1)
-        // Inside outer: move right, set cell[1]=2
-        // Inner loop runs twice (cell[1]=2): each iteration moves right twice
-        //   Iteration 1: pointer 1→3
-        //   Iteration 2: pointer 3→5 (ERROR with memory_size=5)
-
-        let source = "+[>++[>>]]";
-        let (instructions, debug_info) = parse_with_debug(source).unwrap();
-
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(5) // Cells 0-4 exist
-            .build();
-
-        let result = interpret_with_config(&instructions, config, Some(&debug_info));
-
-        match result {
-            Err(BfError::MemoryOutOfBounds {
-                source_location, ..
-            }) => {
-                assert!(
-                    source_location.is_some(),
-                    "Phase 2 should track location even in nested loops"
-                );
-
-                let loc = source_location.unwrap();
-                assert_eq!(loc.line, 1);
-                // Error happens at the second '>' inside the inner loop (column 8)
-                assert_eq!(loc.column, 8, "Should point to second '>' in inner loop");
-            }
-            other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
-        }
-    }
 
     // Phase 2: Test loop call stack in nested loops
     #[test]
@@ -2820,62 +2761,6 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore] // TODO: Program completes without overflow - needs adjustment
-    fn test_phase2_debug_overflow_after_many_iterations() {
-        use crate::parser::parse_with_debug;
-
-        // Test with a loop that runs many iterations before overflow
-        // Start at cell 90, use loop that moves right slowly
-        //
-        // >>>>>>>>>>>>>>>>>>>>>>>> (to get to 90, that's 22.5, let's use 22*4+2 = 90)
-        // ++[>>]  - cell[90]=2, each iteration moves right twice
-        //   Iteration 1: 90->92
-        //   Iteration 2: 92->94
-        //   Iteration 3: 94->96
-        //   Iteration 4: 96->98
-        //   Iteration 5: 98->100 OVERFLOW
-        //
-        // NOTE: Currently completes without overflow. The loop exits when cell becomes 0
-        // due to wrapping arithmetic. Need to redesign to actually overflow.
-
-        let setup = format!("{}>>", ">>>>".repeat(22)); // 22*4+2 = 90
-        let loop_prog = "++[>>]";
-        let source = format!("{}{}", setup, loop_prog);
-
-        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
-
-        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
-
-        let result = interpret_with_config(&instructions, config, Some(&debug_info));
-
-        match result {
-            Err(BfError::MemoryOutOfBounds {
-                source_location,
-                loop_call_stack,
-                attempted,
-                ..
-            }) => {
-                println!("✓ Many iterations test triggered!");
-                println!("  Attempted cell: {}", attempted);
-
-                assert!(source_location.is_some(), "Should have source location");
-                assert!(loop_call_stack.is_some(), "Should have loop call stack");
-
-                let stack = loop_call_stack.unwrap();
-                println!("  Loop iteration count: {}", stack[0].iteration);
-
-                // Should overflow somewhere around iteration 5
-                assert!(
-                    stack[0].iteration >= 3 && stack[0].iteration <= 6,
-                    "Should overflow around iteration 5, got {}",
-                    stack[0].iteration
-                );
-            }
-            Ok(_) => panic!("Expected overflow, program completed"),
-            Err(other) => panic!("Expected MemoryOutOfBounds, got {:?}", other),
-        }
-    }
 
     #[test]
     fn test_phase2_debug_realistic_scenario() {
