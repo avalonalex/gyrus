@@ -101,9 +101,10 @@
 //! ```
 
 use super::{ExecutionHook, HookContext, HookDecision};
+use crate::error::RuntimeWarning;
 use crate::instruction::Instruction;
 use crate::stats::ExecutionStats;
-use crate::types::MemoryAddress;
+use crate::types::{InstructionIndex, MemoryAddress, MemorySize};
 use std::sync::{Arc, Mutex};
 
 /// Built-in hook for tracking execution statistics.
@@ -271,6 +272,122 @@ impl ExecutionHook for StatsTrackerHook {
         self.stats.total_steps = context.step_count();
         self.stats.memory_allocated = crate::types::MemorySize::new(context.memory().len());
         self.stats.cells_modified = ExecutionStats::count_modified_cells(context.memory());
+    }
+}
+
+/// Built-in hook for collecting runtime warnings.
+///
+/// This hook detects runtime anomalies and collects warnings:
+/// - Memory expansion (in unbounded memory mode)
+///
+/// Warnings are non-fatal but indicate potentially unexpected behavior.
+///
+/// # Usage
+///
+/// This hook is automatically registered by the interpreter when executing programs.
+/// Users typically don't need to use it directly.
+///
+/// # Example
+///
+/// ```rust
+/// use ferrous_cortex::hooks::builtin::WarningCollectorHook;
+///
+/// let hook = WarningCollectorHook::new();
+/// // Hook will track warnings as execution progresses
+/// ```
+#[derive(Debug, Clone)]
+pub struct WarningCollectorHook {
+    warnings: Vec<RuntimeWarning>,
+    last_memory_size: usize,
+}
+
+impl WarningCollectorHook {
+    /// Create a new warning collector.
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            warnings: Vec::new(),
+            last_memory_size: 0,
+        }
+    }
+
+    /// Get a reference to the collected warnings.
+    #[inline]
+    pub fn warnings(&self) -> &[RuntimeWarning] {
+        &self.warnings
+    }
+
+    /// Consume the hook and return the warnings.
+    #[inline]
+    pub fn into_warnings(self) -> Vec<RuntimeWarning> {
+        self.warnings
+    }
+}
+
+impl Default for WarningCollectorHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExecutionHook for WarningCollectorHook {
+    fn after_instruction(
+        &mut self,
+        _instruction: &Instruction,
+        context: &HookContext,
+    ) -> HookDecision {
+        let current_memory_size = context.memory().len();
+
+        // Detect memory expansion
+        if current_memory_size > self.last_memory_size && self.last_memory_size > 0 {
+            // Memory was expanded - record warning
+            // This happens with unbounded memory model when pointer goes beyond current size
+            self.warnings.push(RuntimeWarning::MemoryExpanded {
+                instruction_index: InstructionIndex::new((context.step_count().get() - 1) as usize),
+                from_size: MemorySize::new(self.last_memory_size),
+                to_size: MemorySize::new(current_memory_size),
+                source_location: context.source_location().cloned(),
+                _reserved: (),
+            });
+        }
+
+        self.last_memory_size = current_memory_size;
+        HookDecision::Continue
+    }
+}
+
+/// Wrapper for WarningCollectorHook with shared state.
+///
+/// This allows the interpreter to extract warnings after execution.
+pub struct SharedWarningHook {
+    shared: Arc<Mutex<WarningCollectorHook>>,
+}
+
+impl SharedWarningHook {
+    /// Create a new shared warning hook.
+    ///
+    /// Returns both the hook (to be registered) and a handle to extract warnings later.
+    pub fn new() -> (Self, Arc<Mutex<WarningCollectorHook>>) {
+        let shared = Arc::new(Mutex::new(WarningCollectorHook::new()));
+        (
+            Self {
+                shared: Arc::clone(&shared),
+            },
+            shared,
+        )
+    }
+}
+
+impl ExecutionHook for SharedWarningHook {
+    fn after_instruction(
+        &mut self,
+        instruction: &Instruction,
+        context: &HookContext,
+    ) -> HookDecision {
+        self.shared
+            .lock()
+            .unwrap()
+            .after_instruction(instruction, context)
     }
 }
 

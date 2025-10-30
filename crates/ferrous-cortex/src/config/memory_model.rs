@@ -1,7 +1,7 @@
 //! Memory management behavior models
 
 use crate::debug::{DebugInfo, LoopContext};
-use crate::error::{BfError, MemoryDump, Result, RuntimeWarning};
+use crate::error::{BfError, MemoryDump, Result};
 use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::fmt;
 
@@ -11,7 +11,7 @@ pub trait MemoryBehavior {
     /// Returns an error if the operation would violate the memory model's constraints.
     /// May grow memory for unbounded models.
     ///
-    /// Runtime warnings (e.g., memory expansion in unbounded mode) are collected in `warnings`.
+    /// Runtime warnings (e.g., memory expansion) are tracked by hooks.
     ///
     /// Phase 2: Uses instruction_index for accurate source location lookup even in loops.
     fn try_increment_pointer(
@@ -19,7 +19,6 @@ pub trait MemoryBehavior {
         pointer: &mut MemoryAddress,
         memory: &mut Vec<u8>,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize, // Phase 2: current instruction in flat index
         loop_stack: &[LoopContext], // Phase 2: active loop contexts
@@ -36,7 +35,6 @@ pub trait MemoryBehavior {
         memory: &[u8],
         allow_negative: bool,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize, // Phase 2: current instruction in flat index
         loop_stack: &[LoopContext], // Phase 2: active loop contexts
@@ -67,7 +65,6 @@ impl MemoryBehavior for FixedMemory {
         pointer: &mut MemoryAddress,
         memory: &mut Vec<u8>,
         step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,   // Phase 2: use this directly
         loop_stack: &[LoopContext], // Phase 2: active loop contexts
@@ -120,7 +117,6 @@ impl MemoryBehavior for FixedMemory {
         memory: &[u8],
         allow_negative: bool,
         step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,   // Phase 2: use this directly
         loop_stack: &[LoopContext], // Phase 2: active loop contexts
@@ -203,7 +199,6 @@ impl MemoryBehavior for UnboundedMemory {
         pointer: &mut MemoryAddress,
         memory: &mut Vec<u8>,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,   // Phase 2: use this directly
         loop_stack: &[LoopContext], // Phase 2: active loop contexts
@@ -246,21 +241,9 @@ impl MemoryBehavior for UnboundedMemory {
             });
         }
         // Grow memory if needed
-        let old_size = memory.len();
-        if pointer.get() >= old_size {
+        if pointer.get() >= memory.len() {
             let new_size = pointer.get() + 1;
             memory.resize(new_size, 0);
-
-            // Warn about memory expansion
-            // Phase 2: Use instruction_index directly
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
-            warnings.push(RuntimeWarning::MemoryExpanded {
-                instruction_index: step_count.into(),
-                from_size: MemorySize::new(old_size),
-                to_size: MemorySize::new(new_size),
-                source_location,
-                _reserved: (),
-            });
         }
 
         Ok(())
@@ -272,7 +255,6 @@ impl MemoryBehavior for UnboundedMemory {
         memory: &[u8],
         allow_negative: bool,
         step_count: StepCount,
-        _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,   // Phase 2: use this directly
         loop_stack: &[LoopContext], // Phase 2: active loop contexts
@@ -384,7 +366,6 @@ impl MemoryModel {
         pointer: &mut MemoryAddress,
         memory: &mut Vec<u8>,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,   // Phase 2
         loop_stack: &[LoopContext], // Phase 2
@@ -394,7 +375,6 @@ impl MemoryModel {
                 pointer,
                 memory,
                 step_count,
-                warnings,
                 debug_info,
                 instruction_index,
                 loop_stack,
@@ -403,7 +383,6 @@ impl MemoryModel {
                 pointer,
                 memory,
                 step_count,
-                warnings,
                 debug_info,
                 instruction_index,
                 loop_stack,
@@ -423,7 +402,6 @@ impl MemoryModel {
         memory: &[u8],
         allow_negative: bool,
         step_count: StepCount,
-        warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,   // Phase 2
         loop_stack: &[LoopContext], // Phase 2
@@ -434,7 +412,6 @@ impl MemoryModel {
                 memory,
                 allow_negative,
                 step_count,
-                warnings,
                 debug_info,
                 instruction_index,
                 loop_stack,
@@ -444,7 +421,6 @@ impl MemoryModel {
                 memory,
                 allow_negative,
                 step_count,
-                warnings,
                 debug_info,
                 instruction_index,
                 loop_stack,

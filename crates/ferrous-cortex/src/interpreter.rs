@@ -107,7 +107,7 @@
 
 use crate::config::{EofBehavior, ExecutionConfig};
 use crate::debug::DebugInfo;
-use crate::error::{BfError, Result, RuntimeWarning};
+use crate::error::{BfError, Result};
 use crate::hooks::{HookContext, HookDecision}; // Hook system integration
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
@@ -130,8 +130,6 @@ struct VmState<'a> {
     /// This is incremented when entering a loop body and decremented when exiting.
     /// Useful for debugging, profiling, and hook context.
     loop_depth: usize,
-    /// Runtime warnings collected during execution (temporary - will be moved to hook)
-    warnings: Vec<RuntimeWarning>,
     /// Start time for timeout tracking (if enabled)
     start_time: Option<std::time::Instant>,
     /// Memory model that dictates how memory operations behave
@@ -165,7 +163,6 @@ impl<'a> VmState<'a> {
             pointer: MemoryAddress::new(0),
             step_count: StepCount::new(0),
             loop_depth: 0, // Start at top level (not inside any loops)
-            warnings: Vec::new(),
             start_time,
             memory_model,
             debug_info,
@@ -244,12 +241,14 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     output: &mut O,
     debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
-    use crate::hooks::builtin::SharedStatsHook;
+    use crate::hooks::builtin::{SharedStatsHook, SharedWarningHook};
     use std::time::Instant;
 
-    // Auto-register stats tracking hook
+    // Auto-register built-in hooks
     let (stats_hook, stats_handle) = SharedStatsHook::new();
+    let (warning_hook, warning_handle) = SharedWarningHook::new();
     config.register_hook(Box::new(stats_hook));
+    config.register_hook(Box::new(warning_hook));
 
     let start_time = config.timeout_ms().map(|_| Instant::now());
     let mut state = VmState::new(*config.memory_model(), start_time, debug_info);
@@ -272,9 +271,9 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         hook_manager.on_complete(&hook_context);
     }
 
-    // Extract stats from the hook and add warnings
+    // Extract stats and warnings from hooks
     let mut stats = stats_handle.lock().unwrap().stats().clone();
-    stats.warnings = state.warnings;
+    stats.warnings = warning_handle.lock().unwrap().warnings().to_vec();
     Ok(stats)
 }
 
@@ -311,7 +310,6 @@ fn increment_pointer(state: &mut VmState) -> Result<()> {
         &mut state.pointer,
         &mut state.memory,
         state.step_count,
-        &mut state.warnings,
         state.debug_info,
         state.instruction_index, // Phase 2: pass current instruction index
         &state.loop_stack,       // Phase 2: pass loop stack
@@ -326,7 +324,6 @@ fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Resul
         &state.memory,
         allow_negative_pointer,
         state.step_count,
-        &mut state.warnings,
         state.debug_info,
         state.instruction_index, // Phase 2: pass current instruction index
         &state.loop_stack,       // Phase 2: pass loop stack
@@ -384,7 +381,6 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             config.cell_model().behavior().try_increment(
                 &mut state.memory[state.pointer.get()],
                 state.step_count,
-                &mut state.warnings,
                 state.debug_info,
             )?;
         }
@@ -393,7 +389,6 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             config.cell_model().behavior().try_decrement(
                 &mut state.memory[state.pointer.get()],
                 state.step_count,
-                &mut state.warnings,
                 state.debug_info,
             )?;
         }
