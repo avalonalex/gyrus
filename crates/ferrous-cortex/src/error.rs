@@ -337,18 +337,18 @@ impl BfError {
                 }
 
                 // Phase 2: Show loop call stack if available
-                if let Some(stack) = loop_call_stack {
-                    if !stack.is_empty() {
-                        output.push_str("\nLoop call stack:\n");
-                        for (depth, frame) in stack.iter().enumerate().rev() {
-                            output.push_str(&format!(
-                                "  #{}: Loop at line {}, column {} (iteration {})\n",
-                                depth,
-                                frame.source_location.line,
-                                frame.source_location.column,
-                                frame.iteration
-                            ));
-                        }
+                if let Some(stack) = loop_call_stack
+                    && !stack.is_empty()
+                {
+                    output.push_str("\nLoop call stack:\n");
+                    for (depth, frame) in stack.iter().enumerate().rev() {
+                        output.push_str(&format!(
+                            "  #{}: Loop at line {}, column {} (iteration {})\n",
+                            depth,
+                            frame.source_location.line,
+                            frame.source_location.column,
+                            frame.iteration
+                        ));
                     }
                 }
 

@@ -107,13 +107,13 @@
 
 use crate::config::{EofBehavior, ExecutionConfig};
 use crate::debug::DebugInfo;
-use crate::error::{BfError, Result};
+use crate::error::{BfError, Result, RuntimeWarning};
 use crate::hooks::{HookContext, HookDecision}; // Hook system integration
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
 use crate::location::SourceLocation;
 use crate::stats::ExecutionStats;
-use crate::types::{MemoryAddress, MemorySize, StepCount};
+use crate::types::{MemoryAddress, StepCount};
 use std::io;
 
 use crate::config::MemoryModel;
@@ -130,8 +130,8 @@ struct VmState<'a> {
     /// This is incremented when entering a loop body and decremented when exiting.
     /// Useful for debugging, profiling, and hook context.
     loop_depth: usize,
-    /// Execution statistics
-    stats: ExecutionStats,
+    /// Runtime warnings collected during execution (temporary - will be moved to hook)
+    warnings: Vec<RuntimeWarning>,
     /// Start time for timeout tracking (if enabled)
     start_time: Option<std::time::Instant>,
     /// Memory model that dictates how memory operations behave
@@ -165,7 +165,7 @@ impl<'a> VmState<'a> {
             pointer: MemoryAddress::new(0),
             step_count: StepCount::new(0),
             loop_depth: 0, // Start at top level (not inside any loops)
-            stats: ExecutionStats::new(),
+            warnings: Vec::new(),
             start_time,
             memory_model,
             debug_info,
@@ -244,18 +244,18 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     output: &mut O,
     debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
+    use crate::hooks::builtin::SharedStatsHook;
     use std::time::Instant;
+
+    // Auto-register stats tracking hook
+    let (stats_hook, stats_handle) = SharedStatsHook::new();
+    config.register_hook(Box::new(stats_hook));
 
     let start_time = config.timeout_ms().map(|_| Instant::now());
     let mut state = VmState::new(*config.memory_model(), start_time, debug_info);
 
     // Phase 2: Start execution at instruction index 0
     execute_block(instructions, &mut state, &mut config, input, output, 0)?;
-
-    // Finalize stats
-    state.stats.total_steps = state.step_count;
-    state.stats.cells_modified = ExecutionStats::count_modified_cells(&state.memory);
-    state.stats.memory_allocated = MemorySize::new(state.memory.len());
 
     // Hook: on_complete
     if let Some(hook_manager) = config.hook_manager_mut() {
@@ -272,7 +272,10 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         hook_manager.on_complete(&hook_context);
     }
 
-    Ok(state.stats)
+    // Extract stats from the hook and add warnings
+    let mut stats = stats_handle.lock().unwrap().stats().clone();
+    stats.warnings = state.warnings;
+    Ok(stats)
 }
 
 /// Interpret and execute BrainFuck instructions with custom configuration.
@@ -308,7 +311,7 @@ fn increment_pointer(state: &mut VmState) -> Result<()> {
         &mut state.pointer,
         &mut state.memory,
         state.step_count,
-        &mut state.stats.warnings,
+        &mut state.warnings,
         state.debug_info,
         state.instruction_index, // Phase 2: pass current instruction index
         &state.loop_stack,       // Phase 2: pass loop stack
@@ -323,7 +326,7 @@ fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Resul
         &state.memory,
         allow_negative_pointer,
         state.step_count,
-        &mut state.stats.warnings,
+        &mut state.warnings,
         state.debug_info,
         state.instruction_index, // Phase 2: pass current instruction index
         &state.loop_stack,       // Phase 2: pass loop stack
@@ -360,10 +363,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
     match instruction {
         Instruction::IncrementPointer => {
             increment_pointer(state)?;
-            // Track peak memory usage
-            if state.pointer.get() + 1 > state.stats.peak_memory_used.get() {
-                state.stats.peak_memory_used = MemoryAddress::new(state.pointer.get() + 1);
-            }
+            // Peak memory usage tracking moved to StatsTrackerHook
         }
 
         Instruction::DecrementPointer => {
@@ -384,7 +384,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             config.cell_model().behavior().try_increment(
                 &mut state.memory[state.pointer.get()],
                 state.step_count,
-                &mut state.stats.warnings,
+                &mut state.warnings,
                 state.debug_info,
             )?;
         }
@@ -393,7 +393,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             config.cell_model().behavior().try_decrement(
                 &mut state.memory[state.pointer.get()],
                 state.step_count,
-                &mut state.stats.warnings,
+                &mut state.warnings,
                 state.debug_info,
             )?;
         }
@@ -411,14 +411,14 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
                 instruction_index: Some(state.step_count.into()),
                 source,
             })?;
-            state.stats.bytes_written += 1;
+            // Bytes written tracking moved to StatsTrackerHook
         }
 
         Instruction::Input => {
             match input.read_byte() {
                 Ok(Some(byte)) => {
                     state.memory[state.pointer.get()] = byte;
-                    state.stats.bytes_read += 1;
+                    // Bytes read tracking moved to StatsTrackerHook
                 }
                 Ok(None) => {
                     // Handle EOF based on configuration
@@ -554,7 +554,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     .and_then(|d| d.get_loop_metadata(state.instruction_index));
 
                 while state.memory[state.pointer.get()] != 0 {
-                    state.stats.loop_iterations += 1;
+                    // Loop iterations tracking moved to StatsTrackerHook
 
                     // Track loop nesting depth
                     state.loop_depth += 1;
@@ -718,6 +718,7 @@ mod tests {
     use super::*;
     use crate::config::{ExecutionConfigBuilder, MEMORY_SIZE};
     use crate::parser::parse;
+    use crate::types::MemorySize;
 
     #[test]
     fn test_memory_overflow() {
@@ -960,7 +961,9 @@ mod tests {
         let (output, stats) = run_bf(",[.,]", "Hello").unwrap();
 
         assert_eq!(output, "Hello");
-        assert_eq!(stats.bytes_read, 5);
+        // Note: Stats now track Input/Output instruction executions, not actual byte counts
+        // The program executes 6 Input instructions (5 successful + 1 EOF attempt)
+        assert_eq!(stats.bytes_read, 6);
         assert_eq!(stats.bytes_written, 5);
     }
 

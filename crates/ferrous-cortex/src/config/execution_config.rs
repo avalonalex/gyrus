@@ -87,6 +87,30 @@ impl ExecutionConfig {
         self.hook_manager.as_mut()
     }
 
+    /// Register a hook for execution monitoring and control.
+    ///
+    /// This creates a HookManager if one doesn't exist and registers the hook.
+    /// Multiple hooks can be registered and will be called in registration order.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use ferrous_cortex::{ExecutionConfigBuilder, ExecutionConfig};
+    /// use ferrous_cortex::hooks::builtin::StatsTrackerHook;
+    ///
+    /// let mut config = ExecutionConfigBuilder::new()
+    ///     .with_memory_size(1000)
+    ///     .build();
+    ///
+    /// // Register a custom hook after building
+    /// config.register_hook(Box::new(StatsTrackerHook::new()));
+    /// ```
+    pub fn register_hook(&mut self, hook: BoxedHook) {
+        self.hook_manager
+            .get_or_insert_with(HookManager::new)
+            .register(hook);
+    }
+
     /// Check if hooks are enabled
     #[inline]
     pub fn has_hooks(&self) -> bool {
