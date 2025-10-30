@@ -21,8 +21,8 @@ pub trait MemoryBehavior {
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2: current instruction in flat index
-        loop_stack: &[LoopContext],      // Phase 2: active loop contexts
+        instruction_index: usize, // Phase 2: current instruction in flat index
+        loop_stack: &[LoopContext], // Phase 2: active loop contexts
     ) -> Result<()>;
 
     /// Try to decrement the pointer by 1
@@ -38,8 +38,8 @@ pub trait MemoryBehavior {
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2: current instruction in flat index
-        loop_stack: &[LoopContext],      // Phase 2: active loop contexts
+        instruction_index: usize, // Phase 2: current instruction in flat index
+        loop_stack: &[LoopContext], // Phase 2: active loop contexts
     ) -> Result<()>;
 
     /// Get the initial memory size for this model
@@ -69,8 +69,8 @@ impl MemoryBehavior for FixedMemory {
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2: use this directly
-        loop_stack: &[LoopContext],      // Phase 2: active loop contexts
+        instruction_index: usize,   // Phase 2: use this directly
+        loop_stack: &[LoopContext], // Phase 2: active loop contexts
     ) -> Result<()> {
         pointer.increment();
 
@@ -122,8 +122,8 @@ impl MemoryBehavior for FixedMemory {
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2: use this directly
-        loop_stack: &[LoopContext],      // Phase 2: active loop contexts
+        instruction_index: usize,   // Phase 2: use this directly
+        loop_stack: &[LoopContext], // Phase 2: active loop contexts
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
@@ -205,8 +205,8 @@ impl MemoryBehavior for UnboundedMemory {
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2: use this directly
-        loop_stack: &[LoopContext],      // Phase 2: active loop contexts
+        instruction_index: usize,   // Phase 2: use this directly
+        loop_stack: &[LoopContext], // Phase 2: active loop contexts
     ) -> Result<()> {
         pointer.increment();
 
@@ -274,8 +274,8 @@ impl MemoryBehavior for UnboundedMemory {
         step_count: StepCount,
         _warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2: use this directly
-        loop_stack: &[LoopContext],      // Phase 2: active loop contexts
+        instruction_index: usize,   // Phase 2: use this directly
+        loop_stack: &[LoopContext], // Phase 2: active loop contexts
     ) -> Result<()> {
         if pointer.get() == 0 && !allow_negative {
             let dump = MemoryDump::from_memory(memory, *pointer);
@@ -386,16 +386,28 @@ impl MemoryModel {
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2
-        loop_stack: &[LoopContext],      // Phase 2
+        instruction_index: usize,   // Phase 2
+        loop_stack: &[LoopContext], // Phase 2
     ) -> Result<()> {
         match self {
-            MemoryModel::Fixed(m) => {
-                m.try_increment_pointer(pointer, memory, step_count, warnings, debug_info, instruction_index, loop_stack)
-            }
-            MemoryModel::Unbounded(m) => {
-                m.try_increment_pointer(pointer, memory, step_count, warnings, debug_info, instruction_index, loop_stack)
-            }
+            MemoryModel::Fixed(m) => m.try_increment_pointer(
+                pointer,
+                memory,
+                step_count,
+                warnings,
+                debug_info,
+                instruction_index,
+                loop_stack,
+            ),
+            MemoryModel::Unbounded(m) => m.try_increment_pointer(
+                pointer,
+                memory,
+                step_count,
+                warnings,
+                debug_info,
+                instruction_index,
+                loop_stack,
+            ),
         }
     }
 
@@ -413,8 +425,8 @@ impl MemoryModel {
         step_count: StepCount,
         warnings: &mut Vec<RuntimeWarning>,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize,        // Phase 2
-        loop_stack: &[LoopContext],      // Phase 2
+        instruction_index: usize,   // Phase 2
+        loop_stack: &[LoopContext], // Phase 2
     ) -> Result<()> {
         match self {
             MemoryModel::Fixed(m) => m.try_decrement_pointer(

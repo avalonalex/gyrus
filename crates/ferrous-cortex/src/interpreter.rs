@@ -169,7 +169,7 @@ impl<'a> VmState<'a> {
             memory_model,
             debug_info,
             // Phase 2: Initialize loop tracking
-            instruction_index: 0, // Start at instruction 0
+            instruction_index: 0,   // Start at instruction 0
             loop_stack: Vec::new(), // No active loops initially
         }
     }
@@ -294,8 +294,8 @@ fn increment_pointer(state: &mut VmState) -> Result<()> {
         state.step_count,
         &mut state.stats.warnings,
         state.debug_info,
-        state.instruction_index,   // Phase 2: pass current instruction index
-        &state.loop_stack,          // Phase 2: pass loop stack
+        state.instruction_index, // Phase 2: pass current instruction index
+        &state.loop_stack,       // Phase 2: pass loop stack
     )
 }
 
@@ -309,8 +309,8 @@ fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Resul
         state.step_count,
         &mut state.stats.warnings,
         state.debug_info,
-        state.instruction_index,   // Phase 2: pass current instruction index
-        &state.loop_stack,          // Phase 2: pass loop stack
+        state.instruction_index, // Phase 2: pass current instruction index
+        &state.loop_stack,       // Phase 2: pass loop stack
     )
 }
 
@@ -2209,25 +2209,34 @@ mod tests {
         let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
         // Use tiny memory (4 cells: 0, 1, 2, 3) to trigger error on second iteration
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(4)
-            .build();
+        let config = ExecutionConfigBuilder::new().with_memory_size(4).build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
         // Should fail with MemoryOutOfBounds
-        assert!(result.is_err(), "Program should error when accessing cell 4");
+        assert!(
+            result.is_err(),
+            "Program should error when accessing cell 4"
+        );
 
         match result {
-            Err(BfError::MemoryOutOfBounds { source_location, .. }) => {
+            Err(BfError::MemoryOutOfBounds {
+                source_location, ..
+            }) => {
                 // Phase 2 SUCCESS: We have a source location!
-                assert!(source_location.is_some(), "Phase 2 should provide source location");
+                assert!(
+                    source_location.is_some(),
+                    "Phase 2 should provide source location"
+                );
 
                 let loc = source_location.unwrap();
                 // The error happens at the second '>' instruction (column 5)
                 // This occurs on the SECOND iteration of the loop
                 assert_eq!(loc.line, 1);
-                assert_eq!(loc.column, 5, "Error should point to second '>' at column 5");
+                assert_eq!(
+                    loc.column, 5,
+                    "Error should point to second '>' at column 5"
+                );
             }
             other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
         }
@@ -2250,14 +2259,19 @@ mod tests {
         let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
-            .with_memory_size(5)  // Cells 0-4 exist
+            .with_memory_size(5) // Cells 0-4 exist
             .build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
         match result {
-            Err(BfError::MemoryOutOfBounds { source_location, .. }) => {
-                assert!(source_location.is_some(), "Phase 2 should track location even in nested loops");
+            Err(BfError::MemoryOutOfBounds {
+                source_location, ..
+            }) => {
+                assert!(
+                    source_location.is_some(),
+                    "Phase 2 should track location even in nested loops"
+                );
 
                 let loc = source_location.unwrap();
                 assert_eq!(loc.line, 1);
@@ -2288,12 +2302,15 @@ mod tests {
         let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
-            .with_memory_size(5)  // Cells 0-4 exist, accessing cell[5] fails
+            .with_memory_size(5) // Cells 0-4 exist, accessing cell[5] fails
             .build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
-        assert!(result.is_err(), "Program should error when accessing cell 5");
+        assert!(
+            result.is_err(),
+            "Program should error when accessing cell 5"
+        );
 
         match result {
             Err(BfError::MemoryOutOfBounds {
@@ -2302,7 +2319,10 @@ mod tests {
                 ..
             }) => {
                 // Verify source location
-                assert!(source_location.is_some(), "Phase 2 should provide source location");
+                assert!(
+                    source_location.is_some(),
+                    "Phase 2 should provide source location"
+                );
                 let loc = source_location.unwrap();
                 assert_eq!(loc.line, 1);
                 // Error at second '>' inside inner loop (column 9)
@@ -2311,7 +2331,10 @@ mod tests {
                 assert_eq!(loc.column, 9, "Error at second '>' inside inner loop");
 
                 // Phase 2 SUCCESS: Verify loop call stack exists
-                assert!(loop_call_stack.is_some(), "Phase 2 should provide loop call stack");
+                assert!(
+                    loop_call_stack.is_some(),
+                    "Phase 2 should provide loop call stack"
+                );
 
                 let stack = loop_call_stack.unwrap();
                 assert_eq!(stack.len(), 2, "Should have 2 frames: outer and inner loop");
@@ -2324,7 +2347,10 @@ mod tests {
                 // Frame 1: Inner loop (starts at '[' which is column 7)
                 assert_eq!(stack[1].source_location.line, 1);
                 assert_eq!(stack[1].source_location.column, 7);
-                assert!(stack[1].iteration >= 1, "Inner loop should have at least 1 iteration");
+                assert!(
+                    stack[1].iteration >= 1,
+                    "Inner loop should have at least 1 iteration"
+                );
             }
             other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
         }
@@ -2345,19 +2371,24 @@ mod tests {
         let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
-            .with_memory_size(10)  // Small memory to trigger error quickly
+            .with_memory_size(10) // Small memory to trigger error quickly
             .build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
-        assert!(result.is_err(), "Program should error when moving out of bounds");
+        assert!(
+            result.is_err(),
+            "Program should error when moving out of bounds"
+        );
 
         match result {
             Err(BfError::MemoryOutOfBounds {
-                loop_call_stack,
-                ..
+                loop_call_stack, ..
             }) => {
-                assert!(loop_call_stack.is_some(), "Phase 2 should provide loop call stack");
+                assert!(
+                    loop_call_stack.is_some(),
+                    "Phase 2 should provide loop call stack"
+                );
 
                 let stack = loop_call_stack.unwrap();
                 assert_eq!(stack.len(), 1, "Should have 1 frame: the loop");
@@ -2382,9 +2413,7 @@ mod tests {
         let source = "++[>++[>>]<-]";
         let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(5)
-            .build();
+        let config = ExecutionConfigBuilder::new().with_memory_size(5).build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
@@ -2425,15 +2454,15 @@ mod tests {
         let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
-            .with_memory_size(10)  // Small memory to trigger error
+            .with_memory_size(10) // Small memory to trigger error
             .build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
         if let Err(BfError::MemoryOutOfBounds {
-            loop_call_stack,
-            ..
-        }) = result {
+            loop_call_stack, ..
+        }) = result
+        {
             if let Some(stack) = loop_call_stack {
                 // Should have 3 frames for 3 nested loops
                 assert_eq!(stack.len(), 3, "Should have 3 frames for triple nesting");
@@ -2487,7 +2516,7 @@ mod tests {
         let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
         let config = ExecutionConfigBuilder::new()
-            .with_memory_size(100)  // Cells 0-99 exist
+            .with_memory_size(100) // Cells 0-99 exist
             .build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
@@ -2516,19 +2545,27 @@ mod tests {
 
                 // Print stack for debugging
                 for (i, frame) in stack.iter().enumerate() {
-                    println!("    Frame {}: line {}, col {}, iteration {}",
-                        i, frame.source_location.line,
+                    println!(
+                        "    Frame {}: line {}, col {}, iteration {}",
+                        i,
+                        frame.source_location.line,
                         frame.source_location.column,
                         frame.iteration
                     );
                 }
 
                 // Outer loop should be first iteration or second
-                assert!(stack[0].iteration >= 1 && stack[0].iteration <= 2,
-                    "Outer loop iteration should be 1 or 2, got {}", stack[0].iteration);
+                assert!(
+                    stack[0].iteration >= 1 && stack[0].iteration <= 2,
+                    "Outer loop iteration should be 1 or 2, got {}",
+                    stack[0].iteration
+                );
 
                 // Inner loop should be first iteration (first time it overflows)
-                assert_eq!(stack[1].iteration, 1, "Inner loop should be on first iteration when overflow occurs");
+                assert_eq!(
+                    stack[1].iteration, 1,
+                    "Inner loop should be on first iteration when overflow occurs"
+                );
             }
             Ok(_) => panic!("Expected MemoryOutOfBounds error, but program completed successfully"),
             Err(other) => panic!("Expected MemoryOutOfBounds, got {:?}", other),
@@ -2553,9 +2590,7 @@ mod tests {
 
         let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(100)
-            .build();
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
@@ -2580,12 +2615,17 @@ mod tests {
                 assert_eq!(stack.len(), 3, "Should have 3 nested loops in call stack");
 
                 for (i, frame) in stack.iter().enumerate() {
-                    println!("    Frame {}: line {}, col {}, iteration {}",
-                        i, frame.source_location.line,
+                    println!(
+                        "    Frame {}: line {}, col {}, iteration {}",
+                        i,
+                        frame.source_location.line,
                         frame.source_location.column,
                         frame.iteration
                     );
-                    assert!(frame.iteration >= 1, "Each loop should have at least 1 iteration");
+                    assert!(
+                        frame.iteration >= 1,
+                        "Each loop should have at least 1 iteration"
+                    );
                 }
             }
             Ok(_) => panic!("Expected overflow, program completed"),
@@ -2607,9 +2647,7 @@ mod tests {
 
         let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(100)
-            .build();
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
@@ -2634,12 +2672,17 @@ mod tests {
                 assert_eq!(stack.len(), 4, "Should have 4 nested loops in call stack");
 
                 for (i, frame) in stack.iter().enumerate() {
-                    println!("    Frame {}: line {}, col {}, iteration {}",
-                        i, frame.source_location.line,
+                    println!(
+                        "    Frame {}: line {}, col {}, iteration {}",
+                        i,
+                        frame.source_location.line,
                         frame.source_location.column,
                         frame.iteration
                     );
-                    assert!(frame.iteration >= 1, "Each loop should have at least 1 iteration");
+                    assert!(
+                        frame.iteration >= 1,
+                        "Each loop should have at least 1 iteration"
+                    );
                 }
             }
             Ok(_) => panic!("Expected overflow, program completed"),
@@ -2672,9 +2715,7 @@ mod tests {
 
         let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(100)
-            .build();
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
@@ -2695,8 +2736,11 @@ mod tests {
                 println!("  Loop iteration count: {}", stack[0].iteration);
 
                 // Should overflow somewhere around iteration 5
-                assert!(stack[0].iteration >= 3 && stack[0].iteration <= 6,
-                    "Should overflow around iteration 5, got {}", stack[0].iteration);
+                assert!(
+                    stack[0].iteration >= 3 && stack[0].iteration <= 6,
+                    "Should overflow around iteration 5, got {}",
+                    stack[0].iteration
+                );
             }
             Ok(_) => panic!("Expected overflow, program completed"),
             Err(other) => panic!("Expected MemoryOutOfBounds, got {:?}", other),
@@ -2715,14 +2759,12 @@ mod tests {
         //   This creates a more complex execution pattern
 
         let setup = ">>>>".repeat(22); // 88
-        let complex_loop = "+++[>++[>+>>>]<-]";  // Multiple nested operations
+        let complex_loop = "+++[>++[>+>>>]<-]"; // Multiple nested operations
         let source = format!("{}{}", setup, complex_loop);
 
         let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(100)
-            .build();
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
 
         let result = interpret_with_config(&instructions, config, Some(&debug_info));
 
@@ -2741,8 +2783,10 @@ mod tests {
                 if let Some(stack) = loop_call_stack {
                     println!("  Loop call stack:");
                     for (i, frame) in stack.iter().enumerate() {
-                        println!("    #{}: Loop at col {} (iteration {})",
-                            i, frame.source_location.column, frame.iteration);
+                        println!(
+                            "    #{}: Loop at col {} (iteration {})",
+                            i, frame.source_location.column, frame.iteration
+                        );
                     }
 
                     // This should have nested loops
