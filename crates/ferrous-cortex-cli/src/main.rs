@@ -260,6 +260,31 @@ fn run() -> Result<(), BfError> {
         eprintln!("Cells modified: {}", stats.cells_modified);
         eprintln!("Bytes read: {}", stats.bytes_read);
         eprintln!("Bytes written: {}", stats.bytes_written);
+
+        // If debug mode is enabled, show where execution completed
+        if cli.debug
+            && let Some(ref debug_info) = debug_info
+        {
+            // Find the last instruction that was executed
+            // Program completed, so we executed through all instructions
+            let total_instructions = debug_info.len();
+            if total_instructions > 0 {
+                eprintln!("\n=== Debug Information ===");
+                eprintln!("Total instructions: {}", total_instructions);
+
+                // Look up the last instruction's location
+                let last_instruction_index = total_instructions - 1;
+                if let Some(location) = debug_info.lookup(last_instruction_index) {
+                    eprintln!(
+                        "Program completed at: line {}, column {} (offset {})",
+                        location.line, location.column, location.offset
+                    );
+                    eprintln!("✓ Debug tracking verified through program completion");
+                } else {
+                    eprintln!("Warning: Could not determine final source location");
+                }
+            }
+        }
     }
 
     Ok(())

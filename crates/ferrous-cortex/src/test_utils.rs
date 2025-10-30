@@ -3,8 +3,6 @@
 //! This module provides helper functions and utilities for writing tests.
 //! Only available in test builds.
 
-#![cfg(test)]
-
 use crate::config::{EofBehavior, ExecutionConfig, ExecutionConfigBuilder, MemoryModel};
 use crate::error::BfError;
 use crate::interpreter::interpret_with_io;

@@ -3,7 +3,10 @@
 //! These tests verify invariants that should hold for ALL programs,
 //! not just specific test cases.
 
-use ferrous_cortex::{io::{DebugIo, StringIo}, *};
+use ferrous_cortex::{
+    io::{DebugIo, StringIo},
+    *,
+};
 use proptest::prelude::*;
 
 /// Generate a random sequence of non-bracket BF commands
@@ -35,7 +38,7 @@ fn arb_bf_program() -> impl Strategy<Value = String> {
                 }
                 s
             })
-        }
+        },
     )
 }
 
