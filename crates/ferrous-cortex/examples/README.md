@@ -147,6 +147,187 @@ let minified = minify(&instructions);
 
 ---
 
+## Hook System Examples
+
+The **hook system** allows you to observe and control BrainFuck program execution in real-time. Hooks enable building debuggers, profilers, tracers, and other analysis tools without modifying the interpreter.
+
+**Hook capabilities:**
+- Pause execution at any point (breakpoints)
+- Inspect state (memory, pointer, step count)
+- Collect statistics (instruction counts, loop iterations)
+- Monitor changes (memory watchpoints)
+- Control flow (skip instructions)
+
+See the [hooks module documentation](https://docs.rs/ferrous-cortex/latest/ferrous_cortex/hooks/) for complete API details.
+
+---
+
+### 6. `hooks_step_breakpoint.rs` - Debugger: Breakpoints
+
+**Learn:** How to pause execution at specific steps using hooks
+
+```bash
+cargo run --example hooks_step_breakpoint
+```
+
+**Demonstrates:**
+- Creating a breakpoint hook
+- Using `before_instruction` hook point
+- Returning `HookDecision::Break` to pause execution
+- Handling `BfError::ExecutionPaused`
+- Accessing execution context (step count, pointer, cell values, loop depth)
+- Source location tracking with debug info
+
+**Use this when:** Building debuggers, implementing step-by-step execution
+
+**Key pattern:**
+```rust
+impl ExecutionHook for StepBreakpoint {
+    fn before_instruction(&mut self, _: &Instruction, context: &HookContext) -> HookDecision {
+        if context.step_count().get() >= self.target_step {
+            println!("Breakpoint hit at step {}", context.step_count().get());
+            HookDecision::Break  // Pause execution
+        } else {
+            HookDecision::Continue
+        }
+    }
+}
+```
+
+---
+
+### 7. `hooks_instruction_counter.rs` - Statistics Collection
+
+**Learn:** How to collect and report execution statistics
+
+```bash
+cargo run --example hooks_instruction_counter
+```
+
+**Demonstrates:**
+- Counting instructions by type using `HashMap`
+- Using `after_instruction` hook point
+- Using `on_complete` hook for reporting
+- Calculating percentages and summaries
+- Running on real programs (Hello World)
+
+**Use this when:** Profiling programs, gathering execution metrics, analyzing code complexity
+
+**Key pattern:**
+```rust
+impl ExecutionHook for InstructionCounter {
+    fn after_instruction(&mut self, instruction: &Instruction, _: &HookContext) -> HookDecision {
+        let instruction_name = match instruction {
+            Instruction::IncrementValue => "IncrementValue (+)",
+            // ... other types
+        };
+        *self.counts.entry(instruction_name.to_string()).or_insert(0) += 1;
+        HookDecision::Continue
+    }
+
+    fn on_complete(&mut self, _: &HookContext) {
+        // Print statistics sorted by frequency
+        let mut sorted: Vec<_> = self.counts.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1));
+        for (instruction, count) in sorted {
+            println!("{}: {}", instruction, count);
+        }
+    }
+}
+```
+
+---
+
+### 8. `hooks_memory_watcher.rs` - Memory Watchpoints
+
+**Learn:** How to monitor memory changes like a debugger watchpoint
+
+```bash
+cargo run --example hooks_memory_watcher
+```
+
+**Demonstrates:**
+- Watching specific memory addresses for changes
+- Tracking value history over time
+- Using multiple hooks together (`MemoryWatchpoint` + `MemoryChangeTracker`)
+- Real-time change notifications with source location
+- Detecting memory corruption and side effects
+- Summary reports (top 5 most modified cells)
+
+**Use this when:** Debugging memory issues, tracking variable lifetime, finding unintended side effects
+
+**Key pattern:**
+```rust
+impl ExecutionHook for MemoryWatchpoint {
+    fn after_instruction(&mut self, instruction: &Instruction, context: &HookContext) -> HookDecision {
+        if context.pointer().get() == self.watch_address {
+            let current = context.current_cell();
+            if let Some(last) = self.last_value {
+                if current != last {
+                    println!("⚠️  Watchpoint triggered at step {}!", context.step_count().get());
+                    println!("   Cell {}: {} -> {}", self.watch_address, last, current);
+                    println!("   Instruction: {:?}", instruction);
+                }
+            }
+            self.last_value = Some(current);
+        }
+        HookDecision::Continue
+    }
+}
+```
+
+---
+
+### 9. `hooks_execution_tracer.rs` - Detailed Execution Trace
+
+**Learn:** How to log every instruction with full state information
+
+```bash
+cargo run --example hooks_execution_tracer
+```
+
+**Demonstrates:**
+- Comprehensive execution logging (every instruction)
+- Memory context visualization around pointer: `[cell-2] [cell-1] [current] [cell+1] [cell+2]`
+- Loop enter/exit tracking with depth
+- Trace limiting (prevent memory overflow)
+- Source location tracking (line, column)
+- Foundation for time-travel debugging
+
+**Use this when:** Understanding complex algorithms, debugging program flow, performance analysis, test case generation
+
+**Key pattern:**
+```rust
+impl ExecutionHook for ExecutionTracer {
+    fn after_instruction(&mut self, instruction: &Instruction, context: &HookContext) -> HookDecision {
+        let entry = format!(
+            "Step {:4} | {} | @{} = {} | depth:{} | mem:[{}] | {}:{}",
+            context.step_count().get(),
+            format_instruction(instruction),
+            context.pointer().get(),
+            context.current_cell(),
+            context.loop_depth(),
+            format_memory_context(context),
+            loc.line, loc.column
+        );
+        self.log.push(entry);
+        HookDecision::Continue
+    }
+
+    fn on_loop_enter(&mut self, context: &HookContext) -> HookDecision {
+        self.log.push(format!(">>> LOOP ENTER (depth {})", context.loop_depth()));
+        HookDecision::Continue
+    }
+
+    fn on_loop_exit(&mut self, context: &HookContext) -> HookDecision {
+        self.log.push(format!("<<< LOOP EXIT (depth {})", context.loop_depth()));
+        HookDecision::Continue
+    }
+}
+```
+
+---
+
 ## Integration Patterns
 
 ### Pattern 1: Simple Execution
@@ -206,6 +387,39 @@ let mut input = MyInput::new();
 let mut output = MyOutput::new();
 
 interpret_with_io(&instructions, config, &mut input, &mut output)?;
+```
+
+### Pattern 5: Using Hooks
+
+```rust
+use ferrous_cortex::hooks::{ExecutionHook, HookContext, HookDecision};
+use std::sync::{Arc, Mutex};
+
+// Define your hook
+struct MyHook {
+    state: Arc<Mutex<SomeState>>,
+}
+
+impl ExecutionHook for MyHook {
+    fn after_instruction(&mut self, instruction: &Instruction, context: &HookContext) -> HookDecision {
+        // Observe or control execution
+        let mut state = self.state.lock().unwrap();
+        // ... your logic ...
+        HookDecision::Continue
+    }
+}
+
+// Register hook with config
+let state = Arc::new(Mutex::new(SomeState::new()));
+let config = ExecutionConfigBuilder::new()
+    .with_hook(Box::new(MyHook { state: state.clone() }))
+    .build();
+
+// Run with hook
+interpret_with_config(&instructions, config, Some(&debug_info))?;
+
+// Access collected state after execution
+let final_state = state.lock().unwrap();
 ```
 
 ## Future Example Ideas

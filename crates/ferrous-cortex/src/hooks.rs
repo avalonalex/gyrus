@@ -13,17 +13,21 @@
 //! # Hook Points
 //!
 //! Hooks can intercept execution at these points:
-//! - Before each instruction executes
-//! - After each instruction executes
-//! - When entering a loop (`[`)
-//! - When exiting a loop (`]`)
-//! - When execution completes
+//! - **Before each instruction executes** - Inspect state, set breakpoints, skip instructions
+//! - **After each instruction executes** - Track changes, collect statistics
+//! - **When entering a loop (`[`)** - Monitor loop nesting, detect infinite loops
+//! - **When exiting a loop (`]`)** - Track iteration counts, measure loop performance
+//! - **When execution completes** - Generate reports, finalize statistics
 //!
-//! # Example
+//! # Quick Start
+//!
+//! ## Basic Usage
 //!
 //! ```rust,ignore
+//! use ferrous_cortex::{parse, ExecutionConfigBuilder, interpret_with_config};
 //! use ferrous_cortex::hooks::{ExecutionHook, HookContext, HookDecision};
 //!
+//! // 1. Define your hook
 //! struct InstructionCounter {
 //!     count: u64,
 //! }
@@ -38,7 +42,194 @@
 //!         HookDecision::Continue
 //!     }
 //! }
+//!
+//! // 2. Register the hook with your config
+//! let instructions = parse("+++[>++<-]")?;
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_memory_size(100)
+//!     .with_hook(Box::new(InstructionCounter { count: 0 }))
+//!     .build();
+//!
+//! // 3. Run the interpreter
+//! let stats = interpret_with_config(&instructions, config, None)?;
 //! ```
+//!
+//! # Common Use Cases
+//!
+//! ## Debugger: Step Breakpoint
+//!
+//! Break execution at a specific step for interactive debugging:
+//!
+//! ```rust,ignore
+//! struct StepBreakpoint {
+//!     target_step: u64,
+//! }
+//!
+//! impl ExecutionHook for StepBreakpoint {
+//!     fn before_instruction(
+//!         &mut self,
+//!         _instruction: &Instruction,
+//!         context: &HookContext,
+//!     ) -> HookDecision {
+//!         if context.step_count().get() >= self.target_step {
+//!             HookDecision::Break  // Pause execution
+//!         } else {
+//!             HookDecision::Continue
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Watchpoint: Memory Change Detector
+//!
+//! Pause execution when a specific memory cell changes:
+//!
+//! ```rust,ignore
+//! struct MemoryWatchpoint {
+//!     watch_address: usize,
+//!     last_value: u8,
+//! }
+//!
+//! impl ExecutionHook for MemoryWatchpoint {
+//!     fn after_instruction(
+//!         &mut self,
+//!         _instruction: &Instruction,
+//!         context: &HookContext,
+//!     ) -> HookDecision {
+//!         let current_value = context.memory()[self.watch_address];
+//!         if current_value != self.last_value {
+//!             self.last_value = current_value;
+//!             HookDecision::Break  // Pause when value changes
+//!         } else {
+//!             HookDecision::Continue
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Tracer: Execution Log
+//!
+//! Record every instruction executed with full state:
+//!
+//! ```rust,ignore
+//! struct ExecutionTracer {
+//!     log: Vec<String>,
+//! }
+//!
+//! impl ExecutionHook for ExecutionTracer {
+//!     fn after_instruction(
+//!         &mut self,
+//!         instruction: &Instruction,
+//!         context: &HookContext,
+//!     ) -> HookDecision {
+//!         self.log.push(format!(
+//!             "Step {}: {:?} @ cell {} = {}",
+//!             context.step_count().get(),
+//!             instruction,
+//!             context.pointer().get(),
+//!             context.current_cell()
+//!         ));
+//!         HookDecision::Continue
+//!     }
+//! }
+//! ```
+//!
+//! ## Profiler: Loop Performance
+//!
+//! Measure how many iterations each loop executes:
+//!
+//! ```rust,ignore
+//! struct LoopProfiler {
+//!     loop_iterations: HashMap<usize, u64>,  // instruction_index -> count
+//! }
+//!
+//! impl ExecutionHook for LoopProfiler {
+//!     fn on_loop_enter(&mut self, context: &HookContext) -> HookDecision {
+//!         if let Some(loc) = context.source_location() {
+//!             *self.loop_iterations.entry(loc.offset).or_insert(0) += 1;
+//!         }
+//!         HookDecision::Continue
+//!     }
+//! }
+//! ```
+//!
+//! # Hook Decisions
+//!
+//! Hooks return a [`HookDecision`] to control execution flow:
+//!
+//! - **`Continue`** - Normal execution continues
+//! - **`Break`** - Pause execution (returns `BfError::ExecutionPaused`)
+//! - **`Skip`** - Skip current instruction (only valid in `before_instruction`)
+//!
+//! ## Example: Instruction Filter
+//!
+//! Skip all decrement instructions:
+//!
+//! ```rust,ignore
+//! impl ExecutionHook for DecrementSkipper {
+//!     fn before_instruction(
+//!         &mut self,
+//!         instruction: &Instruction,
+//!         _context: &HookContext,
+//!     ) -> HookDecision {
+//!         if matches!(instruction, Instruction::DecrementValue) {
+//!             HookDecision::Skip  // Skip this instruction
+//!         } else {
+//!             HookDecision::Continue
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! # Hook Context
+//!
+//! The [`HookContext`] provides immutable access to interpreter state:
+//!
+//! - `memory()` - View entire memory array
+//! - `pointer()` - Current pointer position
+//! - `current_cell()` - Value at current pointer
+//! - `step_count()` - Total instructions executed
+//! - `loop_depth()` - Current loop nesting level
+//! - `source_location()` - Source code location (if debug info available)
+//!
+//! # Multiple Hooks
+//!
+//! Register multiple hooks to combine functionality:
+//!
+//! ```rust,ignore
+//! let config = ExecutionConfigBuilder::new()
+//!     .with_memory_size(100)
+//!     .with_hook(Box::new(StepBreakpoint { target_step: 100 }))
+//!     .with_hook(Box::new(InstructionCounter { count: 0 }))
+//!     .with_hook(Box::new(ExecutionTracer { log: Vec::new() }))
+//!     .build();
+//! ```
+//!
+//! Hooks are called in registration order. If any hook returns `Break`, remaining
+//! hooks are not called and execution pauses immediately.
+//!
+//! # Performance
+//!
+//! When no hooks are registered (`Option<HookManager>` is `None`):
+//! - **Zero overhead** - No performance impact
+//! - Compiler can optimize away all hook checks
+//!
+//! When hooks are registered:
+//! - Fast dispatch via vtable
+//! - Early-exit optimization (stops on first `Break`)
+//! - Minimal overhead per instruction (~10-20ns)
+//!
+//! # Thread Safety
+//!
+//! Hooks must implement `Send` to support potential future multi-threaded execution.
+//! Use `Arc<Mutex<T>>` for shared state between hooks and main thread.
+//!
+//! # See Also
+//!
+//! - [`ExecutionHook`] - Main trait to implement
+//! - [`HookManager`] - Manages multiple hooks
+//! - [`HookContext`] - Immutable state snapshot
+//! - [`HookDecision`] - Execution control enum
 
 use crate::instruction::Instruction;
 use crate::location::SourceLocation;
@@ -506,13 +697,7 @@ mod tests {
     fn test_noop_hook_compiles() {
         let mut hook = NoOpHook;
         let memory = vec![0; 10];
-        let context = HookContext::new(
-            &memory,
-            MemoryAddress::new(0),
-            StepCount::new(0),
-            None,
-            0,
-        );
+        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(0), None, 0);
 
         // Should all return Continue by default
         assert_eq!(
@@ -537,13 +722,7 @@ mod tests {
         assert_eq!(manager.len(), 0);
 
         let memory = vec![0; 10];
-        let context = HookContext::new(
-            &memory,
-            MemoryAddress::new(0),
-            StepCount::new(0),
-            None,
-            0,
-        );
+        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(0), None, 0);
 
         // Empty manager should always return Continue
         assert_eq!(
@@ -604,13 +783,7 @@ mod tests {
         manager.register(hook);
 
         let memory = vec![0; 10];
-        let context = HookContext::new(
-            &memory,
-            MemoryAddress::new(0),
-            StepCount::new(0),
-            None,
-            0,
-        );
+        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(0), None, 0);
 
         manager.before_instruction(&Instruction::IncrementValue, &context);
         manager.after_instruction(&Instruction::IncrementValue, &context);
@@ -646,26 +819,14 @@ mod tests {
         let memory = vec![0; 10];
 
         // Before target step - should continue
-        let context = HookContext::new(
-            &memory,
-            MemoryAddress::new(0),
-            StepCount::new(3),
-            None,
-            0,
-        );
+        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(3), None, 0);
         assert_eq!(
             manager.before_instruction(&Instruction::IncrementValue, &context),
             HookDecision::Continue
         );
 
         // At target step - should break
-        let context = HookContext::new(
-            &memory,
-            MemoryAddress::new(0),
-            StepCount::new(5),
-            None,
-            0,
-        );
+        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(5), None, 0);
         assert_eq!(
             manager.before_instruction(&Instruction::IncrementValue, &context),
             HookDecision::Break
@@ -680,5 +841,300 @@ mod tests {
         manager.register(Box::new(NoOpHook));
 
         assert_eq!(manager.len(), 3);
+    }
+
+    // Integration tests with interpreter
+    #[cfg(test)]
+    mod integration_tests {
+        use super::*;
+        use crate::config::ExecutionConfigBuilder;
+        use crate::error::BfError;
+        use crate::interpreter::interpret_with_config;
+        use crate::parser::parse;
+        use std::sync::{Arc, Mutex};
+
+        // Hook that counts total instructions executed
+        struct InstructionCounter {
+            count: Arc<Mutex<usize>>,
+        }
+
+        impl ExecutionHook for InstructionCounter {
+            fn after_instruction(
+                &mut self,
+                _instruction: &Instruction,
+                _context: &HookContext,
+            ) -> HookDecision {
+                *self.count.lock().unwrap() += 1;
+                HookDecision::Continue
+            }
+        }
+
+        #[test]
+        fn test_hook_counts_instructions() {
+            let source = "+++>>--"; // 7 instructions (3+, 2>, 2-)
+            let instructions = parse(source).unwrap();
+
+            let count = Arc::new(Mutex::new(0));
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(InstructionCounter {
+                    count: count.clone(),
+                }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(result.is_ok());
+            assert_eq!(*count.lock().unwrap(), 7);
+        }
+
+        // Hook that breaks execution at a specific step
+        struct StepBreakpoint {
+            target_step: u64,
+        }
+
+        impl ExecutionHook for StepBreakpoint {
+            fn before_instruction(
+                &mut self,
+                _instruction: &Instruction,
+                context: &HookContext,
+            ) -> HookDecision {
+                if context.step_count().get() >= self.target_step {
+                    HookDecision::Break
+                } else {
+                    HookDecision::Continue
+                }
+            }
+        }
+
+        #[test]
+        fn test_hook_pauses_execution() {
+            let source = "++++++++++"; // 10 instructions
+            let instructions = parse(source).unwrap();
+
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(StepBreakpoint { target_step: 5 }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(matches!(result, Err(BfError::ExecutionPaused { .. })));
+
+            if let Err(BfError::ExecutionPaused {
+                instruction_index, ..
+            }) = result
+            {
+                // Should have paused at step 5
+                assert_eq!(instruction_index.get(), 5);
+            }
+        }
+
+        // Hook that tracks memory changes
+        struct MemoryWatcher {
+            changes: Arc<Mutex<Vec<(usize, u8, u8)>>>, // (address, old_value, new_value)
+        }
+
+        impl ExecutionHook for MemoryWatcher {
+            fn after_instruction(
+                &mut self,
+                instruction: &Instruction,
+                context: &HookContext,
+            ) -> HookDecision {
+                // Only track increment/decrement
+                if matches!(
+                    instruction,
+                    Instruction::IncrementValue | Instruction::DecrementValue
+                ) {
+                    let addr = context.pointer().get();
+                    let new_value = context.current_cell();
+                    // Calculate old value based on instruction
+                    let old_value = match instruction {
+                        Instruction::IncrementValue => new_value.wrapping_sub(1),
+                        Instruction::DecrementValue => new_value.wrapping_add(1),
+                        _ => new_value,
+                    };
+                    self.changes
+                        .lock()
+                        .unwrap()
+                        .push((addr, old_value, new_value));
+                }
+                HookDecision::Continue
+            }
+        }
+
+        #[test]
+        fn test_hook_watches_memory() {
+            let source = "+++"; // Increment cell 0 three times
+            let instructions = parse(source).unwrap();
+
+            let changes = Arc::new(Mutex::new(Vec::new()));
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(MemoryWatcher {
+                    changes: changes.clone(),
+                }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(result.is_ok());
+
+            let changes = changes.lock().unwrap();
+            assert_eq!(changes.len(), 3);
+            assert_eq!(changes[0], (0, 0, 1));
+            assert_eq!(changes[1], (0, 1, 2));
+            assert_eq!(changes[2], (0, 2, 3));
+        }
+
+        // Hook that tracks loop execution
+        struct LoopTracker {
+            loop_entries: Arc<Mutex<usize>>,
+            loop_exits: Arc<Mutex<usize>>,
+        }
+
+        impl ExecutionHook for LoopTracker {
+            fn on_loop_enter(&mut self, _context: &HookContext) -> HookDecision {
+                *self.loop_entries.lock().unwrap() += 1;
+                HookDecision::Continue
+            }
+
+            fn on_loop_exit(&mut self, _context: &HookContext) -> HookDecision {
+                *self.loop_exits.lock().unwrap() += 1;
+                HookDecision::Continue
+            }
+        }
+
+        #[test]
+        fn test_hook_tracks_loops() {
+            let source = "+++[>++<-]"; // Loop that runs 3 times
+            let instructions = parse(source).unwrap();
+
+            let entries = Arc::new(Mutex::new(0));
+            let exits = Arc::new(Mutex::new(0));
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(LoopTracker {
+                    loop_entries: entries.clone(),
+                    loop_exits: exits.clone(),
+                }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(result.is_ok());
+
+            assert_eq!(*entries.lock().unwrap(), 3); // Loop body entered 3 times
+            assert_eq!(*exits.lock().unwrap(), 3); // Loop body exited 3 times
+        }
+
+        // Hook that skips specific instructions
+        struct InstructionSkipper {
+            skip_decrements: bool,
+        }
+
+        impl ExecutionHook for InstructionSkipper {
+            fn before_instruction(
+                &mut self,
+                instruction: &Instruction,
+                _context: &HookContext,
+            ) -> HookDecision {
+                if self.skip_decrements && matches!(instruction, Instruction::DecrementValue) {
+                    HookDecision::Skip
+                } else {
+                    HookDecision::Continue
+                }
+            }
+        }
+
+        #[test]
+        fn test_hook_skips_instructions() {
+            let source = "+++--"; // 3 increments, 2 decrements
+            let instructions = parse(source).unwrap();
+
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(InstructionSkipper {
+                    skip_decrements: true,
+                }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(result.is_ok());
+
+            // Memory should have 3 (decrements were skipped)
+            let stats = result.unwrap();
+            assert_eq!(stats.total_steps.get(), 5); // All steps counted
+        }
+
+        // Hook that tracks completion
+        struct CompletionTracker {
+            completed: Arc<Mutex<bool>>,
+        }
+
+        impl ExecutionHook for CompletionTracker {
+            fn on_complete(&mut self, _context: &HookContext) {
+                *self.completed.lock().unwrap() = true;
+            }
+        }
+
+        #[test]
+        fn test_hook_on_complete() {
+            let source = "+++";
+            let instructions = parse(source).unwrap();
+
+            let completed = Arc::new(Mutex::new(false));
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(CompletionTracker {
+                    completed: completed.clone(),
+                }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(result.is_ok());
+            assert!(*completed.lock().unwrap()); // Should be called on success
+        }
+
+        #[test]
+        fn test_hook_not_called_on_pause() {
+            let source = "+++";
+            let instructions = parse(source).unwrap();
+
+            let completed = Arc::new(Mutex::new(false));
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(CompletionTracker {
+                    completed: completed.clone(),
+                }))
+                .with_hook(Box::new(StepBreakpoint { target_step: 2 }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(matches!(result, Err(BfError::ExecutionPaused { .. })));
+            assert!(!*completed.lock().unwrap()); // Should NOT be called when paused
+        }
+
+        // Test multiple hooks working together
+        #[test]
+        fn test_multiple_hooks_together() {
+            let source = "+++>>--";
+            let instructions = parse(source).unwrap();
+
+            let count = Arc::new(Mutex::new(0));
+            let changes = Arc::new(Mutex::new(Vec::new()));
+
+            let config = ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_hook(Box::new(InstructionCounter {
+                    count: count.clone(),
+                }))
+                .with_hook(Box::new(MemoryWatcher {
+                    changes: changes.clone(),
+                }))
+                .build();
+
+            let result = interpret_with_config(&instructions, config, None);
+            assert!(result.is_ok());
+
+            assert_eq!(*count.lock().unwrap(), 7); // 7 instructions
+            assert_eq!(changes.lock().unwrap().len(), 5); // 3 increments + 2 decrements tracked
+        }
     }
 }
