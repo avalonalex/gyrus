@@ -19,17 +19,19 @@ This directory contains Product Requirements Documents (PRDs) for FerrousCortex 
 
 ### Performance & Optimization
 
-**performance-optimizations.md**
-- **Status**: ❌ Not Started
-- **Summary**: JIT/AOT compiler backend, instruction fusion, I/O buffering
+**optimization-and-advanced-features.md**
+- **Status**: ❌ Not Started (Design Complete ✅)
+- **Summary**: Comprehensive optimization roadmap with hook integration
+- **Key Features**:
+  - Three-tier optimization strategy (parse-time, adaptive, AOT/JIT)
+  - RLE, clear loops, scan loops, copy/multiply optimizations
+  - I/O buffering and memory optimizations
+  - Hook compatibility and debug symbol preservation
+  - Language extensions (# debug, @ breakpoint)
+  - Developer tools (REPL, debugger, profiler)
 - **Priority**: High (next major milestone)
 - **Dependencies**: Hook system ✅ complete
-
-**optimization-and-advanced-features.md**
-- **Status**: ❌ Not Started
-- **Summary**: Advanced compiler optimizations (loop analysis, dead code elimination)
-- **Priority**: Medium
-- **Dependencies**: JIT/AOT compiler backend
+- **Note**: Merged from performance-optimizations.md (October 2025)
 
 ### Language Extensions
 
@@ -57,6 +59,7 @@ See `archived/README.md` for completed features:
 - ✅ **Architectural Improvements** - Workspace migration, I/O abstraction
 - ✅ **Hook Refactoring** - Moved stats/limits to hooks, simplified VmState
 - ✅ **Testing Strategy** - Property-based testing for debug symbols implemented
+- ✅ **PRD Consolidation** - Merged performance-optimizations.md into optimization-and-advanced-features.md
 
 ### Previously Completed (October 2024)
 - ✅ **Cell Model** - Fixed validator and documented wrapping behavior
