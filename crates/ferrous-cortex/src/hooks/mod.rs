@@ -237,6 +237,31 @@ use crate::instruction::Instruction;
 use crate::location::SourceLocation;
 use crate::types::{MemoryAddress, StepCount};
 
+/// Loop structural information passed to hooks when entering a loop.
+///
+/// This provides the structural details about a loop that hooks need
+/// for accurate tracking and debugging, especially for building loop call stacks.
+#[derive(Debug, Clone, Copy)]
+pub struct LoopInfo {
+    /// Flat index of the '[' instruction that starts this loop
+    pub loop_instruction_index: usize,
+    /// Flat index of the first instruction inside the loop body
+    pub body_start_index: usize,
+    /// Number of instructions in the loop body
+    pub body_size: usize,
+}
+
+impl LoopInfo {
+    /// Create new loop information
+    pub fn new(loop_instruction_index: usize, body_start_index: usize, body_size: usize) -> Self {
+        Self {
+            loop_instruction_index,
+            body_start_index,
+            body_size,
+        }
+    }
+}
+
 /// Immutable snapshot of interpreter state exposed to hooks.
 ///
 /// This provides a read-only view of the interpreter's current state,
@@ -258,6 +283,11 @@ pub struct HookContext<'a> {
     source_location: Option<&'a SourceLocation>,
     /// Current loop nesting depth (0 = not in loop)
     loop_depth: usize,
+    /// Current position in the flat instruction list (0-indexed)
+    ///
+    /// This tracks the position in the flattened instruction stream,
+    /// which is useful for debug symbol lookups and error reporting.
+    instruction_index: usize,
 }
 
 impl<'a> HookContext<'a> {
@@ -268,6 +298,7 @@ impl<'a> HookContext<'a> {
         step_count: StepCount,
         source_location: Option<&'a SourceLocation>,
         loop_depth: usize,
+        instruction_index: usize,
     ) -> Self {
         Self {
             memory,
@@ -275,6 +306,7 @@ impl<'a> HookContext<'a> {
             step_count,
             source_location,
             loop_depth,
+            instruction_index,
         }
     }
 
@@ -310,6 +342,14 @@ impl<'a> HookContext<'a> {
     /// Returns 0 if not currently inside any loop, 1 for the outermost loop, etc.
     pub fn loop_depth(&self) -> usize {
         self.loop_depth
+    }
+
+    /// Get the current instruction index in the flat instruction list
+    ///
+    /// This is the position in the flattened instruction stream (0-indexed),
+    /// useful for debug symbol lookups and accurate error reporting.
+    pub fn instruction_index(&self) -> usize {
+        self.instruction_index
     }
 }
 
@@ -433,12 +473,18 @@ pub trait ExecutionHook: Send {
     /// # Parameters
     ///
     /// - `context`: Current interpreter state at loop entry
+    /// - `loop_info`: Structural information about this loop (indices and size), if available
+    ///                Only present when debug symbols are enabled.
     ///
     /// # Note
     ///
     /// This is called once per loop entry. For loops that iterate multiple times,
     /// this is called at the start of each iteration (when evaluating the `[`).
-    fn on_loop_enter(&mut self, _context: &HookContext) -> HookDecision {
+    fn on_loop_enter(
+        &mut self,
+        _context: &HookContext,
+        _loop_info: Option<&LoopInfo>,
+    ) -> HookDecision {
         HookDecision::Continue
     }
 
@@ -612,13 +658,17 @@ impl HookManager {
     /// Returns the aggregated decision from all hooks. If any hook returns
     /// `Break`, that decision is returned immediately without calling remaining hooks.
     #[inline]
-    pub fn on_loop_enter(&mut self, context: &HookContext) -> HookDecision {
+    pub fn on_loop_enter(
+        &mut self,
+        context: &HookContext,
+        loop_info: Option<&LoopInfo>,
+    ) -> HookDecision {
         if !self.has_loop_hooks {
             return HookDecision::Continue;
         }
 
         for hook in &mut self.hooks {
-            match hook.on_loop_enter(context) {
+            match hook.on_loop_enter(context, loop_info) {
                 HookDecision::Continue => continue,
                 decision => return decision,
             }
@@ -671,7 +721,7 @@ mod tests {
         let step_count = StepCount::new(100);
         let loc = SourceLocation::new(1, 5, 4);
 
-        let context = HookContext::new(&memory, pointer, step_count, Some(&loc), 1);
+        let context = HookContext::new(&memory, pointer, step_count, Some(&loc), 1, 0);
 
         assert_eq!(context.memory(), &[1, 2, 3, 4, 5]);
         assert_eq!(context.pointer().get(), 2);
@@ -699,7 +749,14 @@ mod tests {
     fn test_noop_hook_compiles() {
         let mut hook = NoOpHook;
         let memory = vec![0; 10];
-        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(0), None, 0);
+        let context = HookContext::new(
+            &memory,
+            MemoryAddress::new(0),
+            StepCount::new(0),
+            None,
+            0,
+            0,
+        );
 
         // Should all return Continue by default
         assert_eq!(
@@ -710,7 +767,7 @@ mod tests {
             hook.after_instruction(&Instruction::IncrementValue, &context),
             HookDecision::Continue
         );
-        assert_eq!(hook.on_loop_enter(&context), HookDecision::Continue);
+        assert_eq!(hook.on_loop_enter(&context, None), HookDecision::Continue);
         assert_eq!(hook.on_loop_exit(&context), HookDecision::Continue);
         hook.on_complete(&context); // Doesn't return anything
     }
@@ -724,7 +781,14 @@ mod tests {
         assert_eq!(manager.len(), 0);
 
         let memory = vec![0; 10];
-        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(0), None, 0);
+        let context = HookContext::new(
+            &memory,
+            MemoryAddress::new(0),
+            StepCount::new(0),
+            None,
+            0,
+            0,
+        );
 
         // Empty manager should always return Continue
         assert_eq!(
@@ -735,7 +799,10 @@ mod tests {
             manager.after_instruction(&Instruction::IncrementValue, &context),
             HookDecision::Continue
         );
-        assert_eq!(manager.on_loop_enter(&context), HookDecision::Continue);
+        assert_eq!(
+            manager.on_loop_enter(&context, None),
+            HookDecision::Continue
+        );
         assert_eq!(manager.on_loop_exit(&context), HookDecision::Continue);
         manager.on_complete(&context); // Shouldn't panic
     }
@@ -785,7 +852,14 @@ mod tests {
         manager.register(hook);
 
         let memory = vec![0; 10];
-        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(0), None, 0);
+        let context = HookContext::new(
+            &memory,
+            MemoryAddress::new(0),
+            StepCount::new(0),
+            None,
+            0,
+            0,
+        );
 
         manager.before_instruction(&Instruction::IncrementValue, &context);
         manager.after_instruction(&Instruction::IncrementValue, &context);
@@ -821,14 +895,28 @@ mod tests {
         let memory = vec![0; 10];
 
         // Before target step - should continue
-        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(3), None, 0);
+        let context = HookContext::new(
+            &memory,
+            MemoryAddress::new(0),
+            StepCount::new(3),
+            None,
+            0,
+            0,
+        );
         assert_eq!(
             manager.before_instruction(&Instruction::IncrementValue, &context),
             HookDecision::Continue
         );
 
         // At target step - should break
-        let context = HookContext::new(&memory, MemoryAddress::new(0), StepCount::new(5), None, 0);
+        let context = HookContext::new(
+            &memory,
+            MemoryAddress::new(0),
+            StepCount::new(5),
+            None,
+            0,
+            0,
+        );
         assert_eq!(
             manager.before_instruction(&Instruction::IncrementValue, &context),
             HookDecision::Break
@@ -993,7 +1081,11 @@ mod tests {
         }
 
         impl ExecutionHook for LoopTracker {
-            fn on_loop_enter(&mut self, _context: &HookContext) -> HookDecision {
+            fn on_loop_enter(
+                &mut self,
+                _context: &HookContext,
+                _loop_info: Option<&LoopInfo>,
+            ) -> HookDecision {
                 *self.loop_entries.lock().unwrap() += 1;
                 HookDecision::Continue
             }

@@ -66,8 +66,8 @@
 //!     fn after_instruction(&mut self, inst: &Instruction, ctx: &HookContext) -> HookDecision {
 //!         self.shared.lock().unwrap().after_instruction(inst, ctx)
 //!     }
-//!     fn on_loop_enter(&mut self, ctx: &HookContext) -> HookDecision {
-//!         self.shared.lock().unwrap().on_loop_enter(ctx)
+//!     fn on_loop_enter(&mut self, ctx: &HookContext, loop_info: Option<&ferrous_cortex::hooks::LoopInfo>) -> HookDecision {
+//!         self.shared.lock().unwrap().on_loop_enter(ctx, loop_info)
 //!     }
 //!     fn on_complete(&mut self, ctx: &HookContext) {
 //!         self.shared.lock().unwrap().on_complete(ctx)
@@ -225,8 +225,15 @@ impl ExecutionHook for SharedStatsHook {
             .after_instruction(instruction, context)
     }
 
-    fn on_loop_enter(&mut self, context: &HookContext) -> HookDecision {
-        self.shared.lock().unwrap().on_loop_enter(context)
+    fn on_loop_enter(
+        &mut self,
+        context: &HookContext,
+        loop_info: Option<&super::LoopInfo>,
+    ) -> HookDecision {
+        self.shared
+            .lock()
+            .unwrap()
+            .on_loop_enter(context, loop_info)
     }
 
     fn on_complete(&mut self, context: &HookContext) {
@@ -261,7 +268,11 @@ impl ExecutionHook for StatsTrackerHook {
         HookDecision::Continue
     }
 
-    fn on_loop_enter(&mut self, _context: &HookContext) -> HookDecision {
+    fn on_loop_enter(
+        &mut self,
+        _context: &HookContext,
+        _loop_info: Option<&super::LoopInfo>,
+    ) -> HookDecision {
         // Track loop iterations
         self.stats.loop_iterations += 1;
         HookDecision::Continue

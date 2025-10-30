@@ -84,7 +84,11 @@ impl ExecutionHook for ExecutionTracer {
         HookDecision::Continue
     }
 
-    fn on_loop_enter(&mut self, context: &HookContext) -> HookDecision {
+    fn on_loop_enter(
+        &mut self,
+        context: &HookContext,
+        _loop_info: Option<&ferrous_cortex::hooks::LoopInfo>,
+    ) -> HookDecision {
         let mut log = self.log.lock().unwrap();
 
         if log.len() < self.max_entries {
