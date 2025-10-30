@@ -111,15 +111,13 @@ use crate::error::{BfError, Result};
 use crate::hooks::{HookContext, HookDecision}; // Hook system integration
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
-use crate::location::SourceLocation;
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, StepCount};
 use std::io;
 
 use crate::config::MemoryModel;
-use crate::debug::LoopContext; // Phase 2: Import LoopContext from debug module
 
-struct VmState<'a> {
+struct VmState {
     /// Memory tape (array of cells)
     memory: Vec<u8>,
     /// Current memory pointer position
@@ -132,25 +130,11 @@ struct VmState<'a> {
     loop_depth: usize,
     /// Memory model that dictates how memory operations behave
     memory_model: MemoryModel,
-    /// Debug information for mapping step indices to source locations
-    debug_info: Option<&'a DebugInfo>,
-
-    // Phase 2: Loop tracking fields
-    /// Current position in the flat instruction list (0-N)
-    /// This cycles through loop bodies as loops iterate, unlike step_count which always increments.
-    /// For example, in a loop [>+<-], instruction_index cycles through the body indices
-    /// on each iteration, while step_count keeps incrementing.
-    instruction_index: usize,
-
-    /// Stack of active loop contexts (for nested loops)
-    /// Each entry represents a loop we're currently inside.
-    /// The last entry is the innermost active loop.
-    loop_stack: Vec<LoopContext>,
 }
 
-impl<'a> VmState<'a> {
+impl VmState {
     /// Create a new VM state with the given memory model
-    fn new(memory_model: MemoryModel, debug_info: Option<&'a DebugInfo>) -> Self {
+    fn new(memory_model: MemoryModel) -> Self {
         let memory_size = memory_model.initial_size().get();
         Self {
             memory: vec![0u8; memory_size],
@@ -158,10 +142,6 @@ impl<'a> VmState<'a> {
             step_count: StepCount::new(0),
             loop_depth: 0, // Start at top level (not inside any loops)
             memory_model,
-            debug_info,
-            // Phase 2: Initialize loop tracking
-            instruction_index: 0,   // Start at instruction 0
-            loop_stack: Vec::new(), // No active loops initially
         }
     }
 
@@ -183,20 +163,6 @@ impl<'a> VmState<'a> {
     #[allow(dead_code)] // Will be used by hooks in the future
     fn memory_slice(&self) -> &[u8] {
         &self.memory
-    }
-
-    /// Get the current source location based on step count
-    ///
-    /// Returns `None` if debug info is not available or if the step count
-    /// is out of bounds in the debug info map.
-    ///
-    /// Note: This uses step_count for now. In the future, this may use a
-    /// separate instruction_index field for more accurate source mapping.
-    #[inline]
-    #[allow(dead_code)] // Will be used by hooks in the future
-    fn current_source_location(&self) -> Option<SourceLocation> {
-        self.debug_info
-            .and_then(|di| di.lookup(self.step_count.get() as usize))
     }
 }
 
@@ -234,13 +200,24 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     output: &mut O,
     debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
-    use crate::hooks::builtin::{SharedLimitHook, SharedStatsHook, SharedWarningHook};
+    use crate::hooks::builtin::{
+        SharedDebugTrackingHook, SharedLimitHook, SharedStatsHook, SharedWarningHook,
+    };
 
     // Auto-register built-in hooks
     let (stats_hook, stats_handle) = SharedStatsHook::new();
     let (warning_hook, warning_handle) = SharedWarningHook::new();
     config.register_hook(Box::new(stats_hook));
     config.register_hook(Box::new(warning_hook));
+
+    // Register debug tracking hook if debug info is provided
+    let debug_hook_handle = if let Some(debug_info) = debug_info {
+        let (debug_hook, handle) = SharedDebugTrackingHook::new(debug_info.clone());
+        config.register_hook(Box::new(debug_hook));
+        Some(handle)
+    } else {
+        None
+    };
 
     // Register limit enforcement hook if limits are configured
     let limit_hook_handle = if config.max_steps().is_some() || config.timeout_ms().is_some() {
@@ -251,10 +228,25 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         None
     };
 
-    let mut state = VmState::new(*config.memory_model(), debug_info);
+    let mut state = VmState::new(*config.memory_model());
+
+    // Get debug_info clone if debug hook is registered
+    // IMPORTANT: Clone it before execution to avoid holding the lock during execution
+    // (the hook is also registered in config and will be called during execution)
+    let debug_info_clone = debug_hook_handle
+        .as_ref()
+        .map(|handle| handle.lock().unwrap().debug_info().clone());
 
     // Phase 2: Start execution at instruction index 0
-    let execute_result = execute_block(instructions, &mut state, &mut config, input, output, 0);
+    let execute_result = execute_block(
+        instructions,
+        &mut state,
+        &mut config,
+        input,
+        output,
+        0,
+        debug_info_clone.as_ref(),
+    );
 
     // Check if limit hook stopped execution with an error
     // This takes precedence over ExecutionPaused since limits are more specific
@@ -264,21 +256,35 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         }
     }
 
-    // If there was an error and it wasn't from the limit hook, return it
-    execute_result?;
+    // If there was an error and it wasn't from the limit hook, enrich it with loop_call_stack
+    if let Err(error) = execute_result {
+        // If we have a debug hook, extract the loop_stack and attach it to the error
+        if let Some(handle) = &debug_hook_handle {
+            let loop_stack = handle.lock().unwrap().loop_stack().to_vec();
+            // Convert Vec<LoopContext> to Vec<LoopStackFrame>
+            let loop_call_stack: Vec<crate::error::LoopStackFrame> = loop_stack
+                .into_iter()
+                .map(|ctx| crate::error::LoopStackFrame {
+                    source_location: ctx.source_location,
+                    iteration: ctx.iteration,
+                })
+                .collect();
+            return Err(error.with_loop_call_stack(loop_call_stack));
+        }
+        return Err(error);
+    }
 
     // Hook: on_complete
     if let Some(hook_manager) = config.hook_manager_mut() {
-        let source_loc = state
-            .debug_info
-            .and_then(|d| d.lookup(state.instruction_index));
+        // Note: on_complete is called after execution finishes, so source location
+        // and instruction_index are not meaningful. We pass None and 0 respectively.
         let hook_context = HookContext::new(
             &state.memory,
             state.pointer,
             state.step_count,
-            source_loc.as_ref(),
+            None, // No source location at completion
             state.loop_depth,
-            state.instruction_index,
+            0, // No meaningful instruction index after completion
         );
         hook_manager.on_complete(&hook_context);
     }
@@ -317,28 +323,37 @@ pub fn interpret_with_config(
 
 /// Handle pointer increment based on memory model
 #[inline]
-fn increment_pointer(state: &mut VmState) -> Result<()> {
+fn increment_pointer(
+    state: &mut VmState,
+    instruction_index: usize,
+    debug_info: Option<&DebugInfo>,
+) -> Result<()> {
     state.memory_model.try_increment_pointer(
         &mut state.pointer,
         &mut state.memory,
         state.step_count,
-        state.debug_info,
-        state.instruction_index, // Phase 2: pass current instruction index
-        &state.loop_stack,       // Phase 2: pass loop stack
+        debug_info,
+        instruction_index,
+        &[], // Loop stack tracked by hooks now
     )
 }
 
 /// Handle pointer decrement based on memory model
 #[inline]
-fn decrement_pointer(state: &mut VmState, allow_negative_pointer: bool) -> Result<()> {
+fn decrement_pointer(
+    state: &mut VmState,
+    allow_negative_pointer: bool,
+    instruction_index: usize,
+    debug_info: Option<&DebugInfo>,
+) -> Result<()> {
     state.memory_model.try_decrement_pointer(
         &mut state.pointer,
         &state.memory,
         allow_negative_pointer,
         state.step_count,
-        state.debug_info,
-        state.instruction_index, // Phase 2: pass current instruction index
-        &state.loop_stack,       // Phase 2: pass loop stack
+        debug_info,
+        instruction_index,
+        &[], // Loop stack tracked by hooks now
     )
 }
 
@@ -368,15 +383,22 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
     config: &ExecutionConfig,
     input: &mut I,
     output: &mut O,
+    instruction_index: usize, // Current instruction index for error reporting
+    debug_info: Option<&DebugInfo>, // Optional debug info for error messages
 ) -> Result<()> {
     match instruction {
         Instruction::IncrementPointer => {
-            increment_pointer(state)?;
+            increment_pointer(state, instruction_index, debug_info)?;
             // Peak memory usage tracking moved to StatsTrackerHook
         }
 
         Instruction::DecrementPointer => {
-            decrement_pointer(state, config.allow_negative_pointer())?;
+            decrement_pointer(
+                state,
+                config.allow_negative_pointer(),
+                instruction_index,
+                debug_info,
+            )?;
         }
 
         // Cell arithmetic: Delegated to CellModel (now configurable!)
@@ -393,7 +415,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             config.cell_model().behavior().try_increment(
                 &mut state.memory[state.pointer.get()],
                 state.step_count,
-                state.debug_info,
+                debug_info,
             )?;
         }
 
@@ -401,7 +423,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             config.cell_model().behavior().try_decrement(
                 &mut state.memory[state.pointer.get()],
                 state.step_count,
-                state.debug_info,
+                debug_info,
             )?;
         }
 
@@ -466,33 +488,44 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
     Ok(())
 }
 
+/// Count the total number of instructions in a block, including nested loops.
+/// This is used to compute loop body sizes for LoopInfo.
+fn count_instructions(instructions: &[Instruction]) -> usize {
+    let mut count = 0;
+    for instruction in instructions {
+        count += 1; // Count this instruction
+        if let Instruction::Loop(body) = instruction {
+            count += count_instructions(body); // Recursively count loop body
+        }
+    }
+    count
+}
+
 fn execute_block<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
     state: &mut VmState,
     config: &mut ExecutionConfig,
     input: &mut I,
     output: &mut O,
-    start_index: usize, // Phase 2: flat index where this block starts
+    start_index: usize,             // flat index where this block starts
+    debug_info: Option<&DebugInfo>, // Optional debug info for error messages
 ) -> Result<()> {
-    let mut local_index = 0; // Phase 2: index within current block
+    let mut local_index = 0;
 
     for instruction in instructions {
-        // Phase 2: Update global instruction_index before executing
-        state.instruction_index = start_index + local_index;
+        // Compute current instruction index
+        let instruction_index = start_index + local_index;
         state.step_count.increment();
 
         // Hook: before_instruction
         if let Some(hook_manager) = config.hook_manager_mut() {
-            let source_loc = state
-                .debug_info
-                .and_then(|d| d.lookup(state.instruction_index));
             let hook_context = HookContext::new(
                 &state.memory,
                 state.pointer,
                 state.step_count,
-                source_loc.as_ref(),
+                None, // Source locations tracked by DebugTrackingHook
                 state.loop_depth,
-                state.instruction_index,
+                instruction_index,
             );
 
             match hook_manager.before_instruction(instruction, &hook_context) {
@@ -500,7 +533,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 HookDecision::Break => {
                     return Err(BfError::ExecutionPaused {
                         instruction_index: state.step_count.into(),
-                        source_location: source_loc,
+                        source_location: None, // Debug hook can provide this
                         message: Some(format!(
                             "Execution paused by hook at instruction {}",
                             state.step_count.get()
@@ -519,72 +552,39 @@ fn execute_block<I: BfInput, O: BfOutput>(
         match instruction {
             // Loops require special handling for recursion and depth tracking
             Instruction::Loop(body) => {
-                // Phase 2: Get loop metadata for tracking
-                let loop_metadata = state
-                    .debug_info
-                    .and_then(|d| d.get_loop_metadata(state.instruction_index));
+                // Compute loop body information for hooks
+                // The body starts at instruction_index + 1, and has body.len() flattened instructions
+                let body_start_index = instruction_index + 1;
+                let body_size = count_instructions(body);
 
                 while state.memory[state.pointer.get()] != 0 {
-                    // Loop iterations tracking moved to StatsTrackerHook
-
                     // Track loop nesting depth
                     state.loop_depth += 1;
 
-                    // Phase 2: Push loop context onto stack
-                    if let Some(metadata) = loop_metadata {
-                        // Determine iteration number
-                        let iteration = if let Some(ctx) = state.loop_stack.last() {
-                            if ctx.loop_instruction_index == state.instruction_index {
-                                // Same loop, increment iteration
-                                ctx.iteration + 1
-                            } else {
-                                // Different loop (nested), start at 1
-                                1
-                            }
-                        } else {
-                            // No active loops, start at 1
-                            1
-                        };
-
-                        let context = LoopContext {
-                            loop_instruction_index: state.instruction_index,
-                            body_start_index: metadata.body_start_index,
-                            body_size: metadata.body_size,
-                            iteration,
-                            source_location: metadata.source_location,
-                        };
-                        state.loop_stack.push(context);
-                    }
-
                     // Hook: on_loop_enter
                     if let Some(hook_manager) = config.hook_manager_mut() {
-                        let source_loc = state
-                            .debug_info
-                            .and_then(|d| d.lookup(state.instruction_index));
                         let hook_context = HookContext::new(
                             &state.memory,
                             state.pointer,
                             state.step_count,
-                            source_loc.as_ref(),
+                            None, // Source location tracked by DebugTrackingHook
                             state.loop_depth,
-                            state.instruction_index,
+                            instruction_index,
                         );
 
-                        // Create LoopInfo from metadata if available
-                        let loop_info = loop_metadata.map(|metadata| {
-                            crate::hooks::LoopInfo::new(
-                                state.instruction_index,
-                                metadata.body_start_index,
-                                metadata.body_size,
-                            )
-                        });
+                        // Create LoopInfo with structural information
+                        let loop_info = crate::hooks::LoopInfo::new(
+                            instruction_index,
+                            body_start_index,
+                            body_size,
+                        );
 
-                        match hook_manager.on_loop_enter(&hook_context, loop_info.as_ref()) {
+                        match hook_manager.on_loop_enter(&hook_context, Some(&loop_info)) {
                             HookDecision::Continue => {}
                             HookDecision::Break => {
                                 return Err(BfError::ExecutionPaused {
                                     instruction_index: state.step_count.into(),
-                                    source_location: source_loc,
+                                    source_location: None, // Debug hook can provide this
                                     message: Some(format!(
                                         "Execution paused by hook at loop enter (instruction {})",
                                         state.step_count.get()
@@ -593,42 +593,34 @@ fn execute_block<I: BfInput, O: BfOutput>(
                             }
                             HookDecision::Skip => {
                                 // For loop hooks, Skip means skip the entire loop iteration
-                                // Pop the loop context and exit this iteration
-                                if loop_metadata.is_some() {
-                                    state.loop_stack.pop();
-                                }
                                 state.loop_depth -= 1;
                                 continue;
                             }
                         }
                     }
 
-                    // Execute loop body with correct start_index
-                    let body_start_index = loop_metadata
-                        .map(|m| m.body_start_index)
-                        .unwrap_or(start_index + local_index + 1);
-
-                    execute_block(body, state, config, input, output, body_start_index)?;
-
-                    // Phase 2: Pop loop context
-                    if loop_metadata.is_some() {
-                        state.loop_stack.pop();
-                    }
+                    // Execute loop body
+                    execute_block(
+                        body,
+                        state,
+                        config,
+                        input,
+                        output,
+                        body_start_index,
+                        debug_info,
+                    )?;
 
                     state.loop_depth -= 1;
 
                     // Hook: on_loop_exit
                     if let Some(hook_manager) = config.hook_manager_mut() {
-                        let source_loc = state
-                            .debug_info
-                            .and_then(|d| d.lookup(state.instruction_index));
                         let hook_context = HookContext::new(
                             &state.memory,
                             state.pointer,
                             state.step_count,
-                            source_loc.as_ref(),
+                            None, // Source location tracked by DebugTrackingHook
                             state.loop_depth,
-                            state.instruction_index,
+                            instruction_index,
                         );
 
                         match hook_manager.on_loop_exit(&hook_context) {
@@ -636,7 +628,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                             HookDecision::Break => {
                                 return Err(BfError::ExecutionPaused {
                                     instruction_index: state.step_count.into(),
-                                    source_location: source_loc,
+                                    source_location: None, // Debug hook can provide this
                                     message: Some(format!(
                                         "Execution paused by hook at loop exit (instruction {})",
                                         state.step_count.get()
@@ -653,22 +645,27 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
             // All other instructions are handled by execute_single_instruction
             non_loop_instruction => {
-                execute_single_instruction(non_loop_instruction, state, config, input, output)?;
+                execute_single_instruction(
+                    non_loop_instruction,
+                    state,
+                    config,
+                    input,
+                    output,
+                    instruction_index,
+                    debug_info,
+                )?;
             }
         }
 
         // Hook: after_instruction
         if let Some(hook_manager) = config.hook_manager_mut() {
-            let source_loc = state
-                .debug_info
-                .and_then(|d| d.lookup(state.instruction_index));
             let hook_context = HookContext::new(
                 &state.memory,
                 state.pointer,
                 state.step_count,
-                source_loc.as_ref(),
+                None, // Source location tracked by DebugTrackingHook
                 state.loop_depth,
-                state.instruction_index,
+                instruction_index,
             );
 
             match hook_manager.after_instruction(instruction, &hook_context) {
@@ -676,7 +673,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 HookDecision::Break => {
                     return Err(BfError::ExecutionPaused {
                         instruction_index: state.step_count.into(),
-                        source_location: source_loc,
+                        source_location: None, // Debug hook can provide this
                         message: Some(format!(
                             "Execution paused by hook after instruction {}",
                             state.step_count.get()
