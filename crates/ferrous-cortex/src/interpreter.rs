@@ -233,16 +233,31 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     // Check if limit hook stopped execution with an error
     // This takes precedence over ExecutionPaused since limits are more specific
     if let Some(handle) = &limit_hook_handle
-        && let Some(error) = handle.lock().unwrap().take_error() {
-            return Err(error);
+        && let Some(mut error) = handle.lock().unwrap().take_error()
+    {
+        // Enrich StepLimitExceeded with source_location before returning
+        if let Some(debug_handle) = &debug_hook_handle {
+            if let BfError::StepLimitExceeded {
+                instruction_index, ..
+            } = &error
+            {
+                let debug_hook = debug_handle.lock().unwrap();
+                if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
+                    error = error.with_step_limit_source_location(loc);
+                }
+            }
         }
+        return Err(error);
+    }
 
-    // If there was an error and it wasn't from the limit hook, enrich it with loop_call_stack
-    if let Err(error) = execute_result {
-        // If we have a debug hook, extract the loop_stack and attach it to the error
+    // If there was an error, enrich it with debug information
+    if let Err(mut error) = execute_result {
+        // If we have a debug hook, extract debug information and attach it to the error
         if let Some(handle) = &debug_hook_handle {
-            let loop_stack = handle.lock().unwrap().loop_stack().to_vec();
-            // Convert Vec<LoopContext> to Vec<LoopStackFrame>
+            let debug_hook = handle.lock().unwrap();
+
+            // Enrich MemoryOutOfBounds with loop_call_stack
+            let loop_stack = debug_hook.loop_stack().to_vec();
             let loop_call_stack: Vec<crate::error::LoopStackFrame> = loop_stack
                 .into_iter()
                 .map(|ctx| crate::error::LoopStackFrame {
@@ -250,7 +265,17 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
                     iteration: ctx.iteration,
                 })
                 .collect();
-            return Err(error.with_loop_call_stack(loop_call_stack));
+            error = error.with_loop_call_stack(loop_call_stack);
+
+            // Enrich StepLimitExceeded with source_location
+            if let BfError::StepLimitExceeded {
+                instruction_index, ..
+            } = &error
+            {
+                if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
+                    error = error.with_step_limit_source_location(loc);
+                }
+            }
         }
         return Err(error);
     }
@@ -2352,7 +2377,6 @@ mod tests {
         }
     }
 
-
     // Phase 2: Test loop call stack in nested loops
     #[test]
     fn test_phase2_loop_call_stack_nested_loops() {
@@ -2760,7 +2784,6 @@ mod tests {
             Err(other) => panic!("Expected MemoryOutOfBounds, got {:?}", other),
         }
     }
-
 
     #[test]
     fn test_phase2_debug_realistic_scenario() {
