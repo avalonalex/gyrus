@@ -259,7 +259,9 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
 
     // Hook: on_complete
     if let Some(hook_manager) = config.hook_manager_mut() {
-        let source_loc = state.debug_info.and_then(|d| d.lookup(state.instruction_index));
+        let source_loc = state
+            .debug_info
+            .and_then(|d| d.lookup(state.instruction_index));
         let hook_context = HookContext::new(
             &state.memory,
             state.pointer,
@@ -511,7 +513,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
         // Hook: before_instruction
         if let Some(hook_manager) = config.hook_manager_mut() {
-            let source_loc = state.debug_info.and_then(|d| d.lookup(state.instruction_index));
+            let source_loc = state
+                .debug_info
+                .and_then(|d| d.lookup(state.instruction_index));
             let hook_context = HookContext::new(
                 &state.memory,
                 state.pointer,
@@ -526,7 +530,10 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     return Err(BfError::ExecutionPaused {
                         instruction_index: state.step_count.into(),
                         source_location: source_loc,
-                        message: Some(format!("Execution paused by hook at instruction {}", state.step_count.get())),
+                        message: Some(format!(
+                            "Execution paused by hook at instruction {}",
+                            state.step_count.get()
+                        )),
                     });
                 }
                 HookDecision::Skip => {
@@ -580,7 +587,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
                     // Hook: on_loop_enter
                     if let Some(hook_manager) = config.hook_manager_mut() {
-                        let source_loc = state.debug_info.and_then(|d| d.lookup(state.instruction_index));
+                        let source_loc = state
+                            .debug_info
+                            .and_then(|d| d.lookup(state.instruction_index));
                         let hook_context = HookContext::new(
                             &state.memory,
                             state.pointer,
@@ -595,7 +604,10 @@ fn execute_block<I: BfInput, O: BfOutput>(
                                 return Err(BfError::ExecutionPaused {
                                     instruction_index: state.step_count.into(),
                                     source_location: source_loc,
-                                    message: Some(format!("Execution paused by hook at loop enter (instruction {})", state.step_count.get())),
+                                    message: Some(format!(
+                                        "Execution paused by hook at loop enter (instruction {})",
+                                        state.step_count.get()
+                                    )),
                                 });
                             }
                             HookDecision::Skip => {
@@ -626,7 +638,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
                     // Hook: on_loop_exit
                     if let Some(hook_manager) = config.hook_manager_mut() {
-                        let source_loc = state.debug_info.and_then(|d| d.lookup(state.instruction_index));
+                        let source_loc = state
+                            .debug_info
+                            .and_then(|d| d.lookup(state.instruction_index));
                         let hook_context = HookContext::new(
                             &state.memory,
                             state.pointer,
@@ -641,7 +655,10 @@ fn execute_block<I: BfInput, O: BfOutput>(
                                 return Err(BfError::ExecutionPaused {
                                     instruction_index: state.step_count.into(),
                                     source_location: source_loc,
-                                    message: Some(format!("Execution paused by hook at loop exit (instruction {})", state.step_count.get())),
+                                    message: Some(format!(
+                                        "Execution paused by hook at loop exit (instruction {})",
+                                        state.step_count.get()
+                                    )),
                                 });
                             }
                             HookDecision::Skip => {
@@ -660,7 +677,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
         // Hook: after_instruction
         if let Some(hook_manager) = config.hook_manager_mut() {
-            let source_loc = state.debug_info.and_then(|d| d.lookup(state.instruction_index));
+            let source_loc = state
+                .debug_info
+                .and_then(|d| d.lookup(state.instruction_index));
             let hook_context = HookContext::new(
                 &state.memory,
                 state.pointer,
@@ -675,7 +694,10 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     return Err(BfError::ExecutionPaused {
                         instruction_index: state.step_count.into(),
                         source_location: source_loc,
-                        message: Some(format!("Execution paused by hook after instruction {}", state.step_count.get())),
+                        message: Some(format!(
+                            "Execution paused by hook after instruction {}",
+                            state.step_count.get()
+                        )),
                     });
                 }
                 HookDecision::Skip => {
