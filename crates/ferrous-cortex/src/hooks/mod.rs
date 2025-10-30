@@ -231,6 +231,8 @@
 //! - [`HookContext`] - Immutable state snapshot
 //! - [`HookDecision`] - Execution control enum
 
+pub mod builtin;
+
 use crate::instruction::Instruction;
 use crate::location::SourceLocation;
 use crate::types::{MemoryAddress, StepCount};
