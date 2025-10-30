@@ -416,6 +416,37 @@ impl BfError {
             _ => self.format_detailed(),
         }
     }
+
+    /// Enrich this error with loop call stack information
+    ///
+    /// This method is used to attach loop call stack information to errors after they're
+    /// caught. Since errors are created deep in memory/cell model code without access to
+    /// the debug hook, we enrich them after catching them in the interpreter.
+    ///
+    /// Only errors that support loop_call_stack will be modified; others are returned unchanged.
+    pub fn with_loop_call_stack(self, loop_call_stack: Vec<LoopStackFrame>) -> Self {
+        match self {
+            BfError::MemoryOutOfBounds {
+                instruction_index,
+                attempted,
+                max,
+                memory_dump,
+                source_location,
+                loop_call_stack: _,
+                hint,
+            } => BfError::MemoryOutOfBounds {
+                instruction_index,
+                attempted,
+                max,
+                memory_dump,
+                source_location,
+                loop_call_stack: Some(loop_call_stack),
+                hint,
+            },
+            // Other error types don't support loop_call_stack (CellOverflow, CellUnderflow, etc.)
+            other => other,
+        }
+    }
 }
 
 /// Warnings for potentially problematic but valid BrainFuck code

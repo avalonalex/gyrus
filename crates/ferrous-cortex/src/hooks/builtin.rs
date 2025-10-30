@@ -553,6 +553,163 @@ impl ExecutionHook for SharedLimitHook {
     }
 }
 
+/// Built-in hook for tracking debug symbols and loop contexts.
+///
+/// This hook maintains debug information needed for rich error messages:
+/// - **DebugInfo**: Maps instruction indices to source locations
+/// - **Loop stack**: Tracks active loop contexts for nested loops
+///
+/// When debug symbols are enabled, this hook:
+/// 1. Stores the DebugInfo (passed during hook creation)
+/// 2. Builds a loop call stack by tracking loop entry/exit
+/// 3. Provides access to current instruction's source location
+///
+/// # Usage
+///
+/// This hook is automatically registered by the interpreter when debug symbols
+/// are provided to `interpret_with_io()`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use ferrous_cortex::hooks::builtin::DebugTrackingHook;
+/// use ferrous_cortex::debug::DebugInfo;
+///
+/// let debug_info = DebugInfo::from_source("[>+<-]");
+/// let hook = DebugTrackingHook::new(debug_info);
+/// // Hook will track loops and provide source locations
+/// ```
+#[derive(Debug)]
+pub struct DebugTrackingHook {
+    /// Debug information mapping instruction indices to source locations
+    debug_info: crate::debug::DebugInfo,
+
+    /// Stack of active loop contexts for nested loops
+    loop_stack: Vec<crate::debug::LoopContext>,
+}
+
+impl DebugTrackingHook {
+    /// Create a new debug tracking hook with the given debug info.
+    pub fn new(debug_info: crate::debug::DebugInfo) -> Self {
+        Self {
+            debug_info,
+            loop_stack: Vec::new(),
+        }
+    }
+
+    /// Get a reference to the debug info.
+    pub fn debug_info(&self) -> &crate::debug::DebugInfo {
+        &self.debug_info
+    }
+
+    /// Get a reference to the current loop stack.
+    pub fn loop_stack(&self) -> &[crate::debug::LoopContext] {
+        &self.loop_stack
+    }
+
+    /// Consume the hook and return the debug info and loop stack.
+    pub fn into_parts(self) -> (crate::debug::DebugInfo, Vec<crate::debug::LoopContext>) {
+        (self.debug_info, self.loop_stack)
+    }
+}
+
+impl ExecutionHook for DebugTrackingHook {
+    fn on_loop_enter(
+        &mut self,
+        _context: &HookContext,
+        loop_info: Option<&super::LoopInfo>,
+    ) -> HookDecision {
+        // Only track loops when loop_info is available (debug symbols enabled)
+        if let Some(info) = loop_info {
+            // Determine iteration number
+            let iteration = if let Some(ctx) = self.loop_stack.last() {
+                if ctx.loop_instruction_index == info.loop_instruction_index {
+                    // Same loop, increment iteration
+                    ctx.iteration + 1
+                } else {
+                    // Different loop (nested), start at 1
+                    1
+                }
+            } else {
+                // No active loops, start at 1
+                1
+            };
+
+            // Look up source location for the '[' instruction
+            let source_location = self
+                .debug_info
+                .lookup(info.loop_instruction_index)
+                .unwrap_or_else(|| {
+                    // Fallback if lookup fails (shouldn't happen)
+                    crate::location::SourceLocation::new(0, 0, info.loop_instruction_index)
+                });
+
+            let context = crate::debug::LoopContext {
+                loop_instruction_index: info.loop_instruction_index,
+                body_start_index: info.body_start_index,
+                body_size: info.body_size,
+                iteration,
+                source_location,
+            };
+
+            self.loop_stack.push(context);
+        }
+
+        HookDecision::Continue
+    }
+
+    fn on_loop_exit(&mut self, _context: &HookContext) -> HookDecision {
+        // Pop the loop context when exiting a loop
+        self.loop_stack.pop();
+        HookDecision::Continue
+    }
+}
+
+/// Wrapper for DebugTrackingHook with shared state.
+///
+/// This allows the interpreter to access debug info and loop stack after execution
+/// while the hook is moved into the config.
+///
+/// # Usage (Internal)
+///
+/// This is used internally by `interpret_with_io()` to automatically
+/// track debug information when debug symbols are provided.
+pub struct SharedDebugTrackingHook {
+    shared: Arc<Mutex<DebugTrackingHook>>,
+}
+
+impl SharedDebugTrackingHook {
+    /// Create a new shared debug tracking hook.
+    ///
+    /// Returns both the hook (to be registered) and a handle to access debug info later.
+    pub fn new(debug_info: crate::debug::DebugInfo) -> (Self, Arc<Mutex<DebugTrackingHook>>) {
+        let shared = Arc::new(Mutex::new(DebugTrackingHook::new(debug_info)));
+        (
+            Self {
+                shared: Arc::clone(&shared),
+            },
+            shared,
+        )
+    }
+}
+
+impl ExecutionHook for SharedDebugTrackingHook {
+    fn on_loop_enter(
+        &mut self,
+        context: &HookContext,
+        loop_info: Option<&super::LoopInfo>,
+    ) -> HookDecision {
+        self.shared
+            .lock()
+            .unwrap()
+            .on_loop_enter(context, loop_info)
+    }
+
+    fn on_loop_exit(&mut self, context: &HookContext) -> HookDecision {
+        self.shared.lock().unwrap().on_loop_exit(context)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
