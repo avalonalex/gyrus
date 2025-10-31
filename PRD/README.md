@@ -33,6 +33,22 @@ This directory contains Product Requirements Documents (PRDs) for FerrousCortex 
 - **Dependencies**: Hook system ✅ complete
 - **Note**: Merged from performance-optimizations.md (October 2025)
 
+### Code Quality & Architecture
+
+**interpreter-refactoring.md**
+- **Status**: ❌ Not Started (Design Complete ✅)
+- **Summary**: Break down "God methods" in interpreter for better maintainability
+- **Key Improvements**:
+  - Extract `HookDispatcher` to isolate hook logic (200 → ~100 lines)
+  - Extract `InterpreterContext` for hook setup/cleanup (140 → ~10 lines)
+  - Reduce cyclomatic complexity by ~40%
+  - Improve testability and extensibility
+- **Priority**: Medium
+- **Estimated Effort**: 3-5 hours
+- **Risk**: Medium (touches core execution loop, mitigated by comprehensive tests)
+- **Dependencies**: None (refactoring, not new features)
+- **Note**: Created from architectural analysis (October 2025)
+
 ### Language Extensions
 
 **macro-preprocessor-design.md**
