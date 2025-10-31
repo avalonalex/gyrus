@@ -732,21 +732,18 @@ mod proptest_tests {
     // Helper function to verify LoopCheck invariant recursively
     fn verify_loop_check_invariant(instructions: &[Instruction]) -> bool {
         for instruction in instructions {
-            match instruction {
-                Instruction::Loop(body) => {
-                    // Verify LoopCheck is the first instruction
-                    if body.is_empty() {
-                        return false; // Loops should never be empty (at minimum LoopCheck)
-                    }
-                    if !matches!(body[0], Instruction::LoopCheck) {
-                        return false; // First instruction must be LoopCheck
-                    }
-                    // Recursively verify nested loops
-                    if !verify_loop_check_invariant(body) {
-                        return false;
-                    }
+            if let Instruction::Loop(body) = instruction {
+                // Verify LoopCheck is the first instruction
+                if body.is_empty() {
+                    return false; // Loops should never be empty (at minimum LoopCheck)
                 }
-                _ => {}
+                if !matches!(body[0], Instruction::LoopCheck) {
+                    return false; // First instruction must be LoopCheck
+                }
+                // Recursively verify nested loops
+                if !verify_loop_check_invariant(body) {
+                    return false;
+                }
             }
         }
         true

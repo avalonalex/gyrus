@@ -316,75 +316,74 @@ fn run() -> Result<(), BfError> {
     }
 
     // Display profiling results if --profile flag was used (unless --quiet)
-    if !cli.quiet {
-        if let Some(profiler) = &profiler_handle {
-            let profiler = profiler.lock().unwrap();
-            eprintln!("\n{}", "=".repeat(80));
-            eprintln!(
-                "{}",
-                profiler.format_source_heatmap(&source, debug_info.as_ref())
-            );
-            eprintln!("{}", "=".repeat(80));
-            eprintln!();
-            eprintln!("{}", profiler.format_ascii_tree());
-            eprintln!("{}", "=".repeat(80));
-        }
+    if !cli.quiet
+        && let Some(profiler) = &profiler_handle
+    {
+        let profiler = profiler.lock().unwrap();
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(
+            "{}",
+            profiler.format_source_heatmap(&source, debug_info.as_ref())
+        );
+        eprintln!("{}", "=".repeat(80));
+        eprintln!();
+        eprintln!("{}", profiler.format_ascii_tree());
+        eprintln!("{}", "=".repeat(80));
     }
 
     // Generate flamegraph SVG if requested
-    if let Some(flamegraph_path) = &cli.flamegraph {
-        if let Some(profiler) = &profiler_handle {
-            let profiler = profiler.lock().unwrap();
-            let folded_stacks = profiler.generate_flamegraph_data();
+    if let Some(flamegraph_path) = &cli.flamegraph
+        && let Some(profiler) = &profiler_handle
+    {
+        let profiler = profiler.lock().unwrap();
+        let folded_stacks = profiler.generate_flamegraph_data();
 
-            // Generate SVG using inferno
-            use inferno::flamegraph;
-            let mut options = flamegraph::Options::default();
-            options.title = "BrainFuck Profile".to_string();
+        // Generate SVG using inferno
+        use inferno::flamegraph;
+        let mut options = flamegraph::Options::default();
+        options.title = "BrainFuck Profile".to_string();
 
-            let mut svg_output = Vec::new();
-            if let Err(e) =
-                flamegraph::from_lines(&mut options, folded_stacks.lines(), &mut svg_output)
-            {
-                eprintln!("Error generating flamegraph: {}", e);
-                std::process::exit(1);
-            }
+        let mut svg_output = Vec::new();
+        if let Err(e) = flamegraph::from_lines(&mut options, folded_stacks.lines(), &mut svg_output)
+        {
+            eprintln!("Error generating flamegraph: {}", e);
+            std::process::exit(1);
+        }
 
-            // Write to file
-            if let Err(e) = fs::write(flamegraph_path, svg_output) {
-                eprintln!(
-                    "Error writing flamegraph to {}: {}",
-                    flamegraph_path.display(),
-                    e
-                );
-                std::process::exit(1);
-            }
+        // Write to file
+        if let Err(e) = fs::write(flamegraph_path, svg_output) {
+            eprintln!(
+                "Error writing flamegraph to {}: {}",
+                flamegraph_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
 
-            if !cli.quiet {
-                eprintln!("\n✅ Flamegraph saved to: {}", flamegraph_path.display());
-            }
+        if !cli.quiet {
+            eprintln!("\n✅ Flamegraph saved to: {}", flamegraph_path.display());
         }
     }
 
     // Generate HTML heatmap if requested
-    if let Some(html_path) = &cli.profile_html {
-        if let Some(profiler) = &profiler_handle {
-            let profiler = profiler.lock().unwrap();
-            let html = profiler.generate_html_heatmap(&source, debug_info.as_ref());
+    if let Some(html_path) = &cli.profile_html
+        && let Some(profiler) = &profiler_handle
+    {
+        let profiler = profiler.lock().unwrap();
+        let html = profiler.generate_html_heatmap(&source, debug_info.as_ref());
 
-            // Write to file
-            if let Err(e) = fs::write(html_path, html) {
-                eprintln!(
-                    "Error writing HTML heatmap to {}: {}",
-                    html_path.display(),
-                    e
-                );
-                std::process::exit(1);
-            }
+        // Write to file
+        if let Err(e) = fs::write(html_path, html) {
+            eprintln!(
+                "Error writing HTML heatmap to {}: {}",
+                html_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
 
-            if !cli.quiet {
-                eprintln!("✅ HTML heatmap saved to: {}", html_path.display());
-            }
+        if !cli.quiet {
+            eprintln!("✅ HTML heatmap saved to: {}", html_path.display());
         }
     }
 
