@@ -237,11 +237,14 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
         .as_ref()
         .map(|handle| handle.lock().unwrap().debug_info().clone());
 
+    // Create hook dispatcher
+    let mut dispatcher = HookDispatcher::new(&mut config);
+
     // Start execution at instruction index 0
     let execute_result = execute_block(
         instructions,
         &mut state,
-        &mut config,
+        &mut dispatcher,
         input,
         output,
         0,
@@ -298,19 +301,7 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     }
 
     // Hook: on_complete
-    if let Some(hook_manager) = config.hook_manager_mut() {
-        // Note: on_complete is called after execution finishes, so source location
-        // and instruction_index are not meaningful. We pass None and 0 respectively.
-        let hook_context = HookContext::new(
-            &state.memory,
-            state.pointer,
-            state.step_count,
-            None, // No source location at completion
-            state.loop_depth,
-            0, // No meaningful instruction index after completion
-        );
-        hook_manager.on_complete(&hook_context);
-    }
+    dispatcher.dispatch_complete(&state);
 
     // Extract stats and warnings from hooks
     let mut stats = stats_handle.lock().unwrap().stats().clone();
@@ -519,6 +510,150 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
     Ok(ExecutionFlow::Continue)
 }
 
+/// Handles all hook dispatching for the interpreter.
+///
+/// This component centralizes hook-related logic, making it easier to:
+/// - Test hook behavior in isolation
+/// - Add new hook points without modifying execute_block
+/// - Maintain consistent hook behavior across the interpreter
+///
+/// The dispatcher creates HookContext snapshots and calls the appropriate
+/// hook methods on the HookManager, returning the HookDecision.
+struct HookDispatcher<'a> {
+    /// The execution config containing registered hooks
+    config: &'a mut ExecutionConfig,
+}
+
+impl<'a> HookDispatcher<'a> {
+    /// Create a new hook dispatcher
+    #[inline]
+    fn new(config: &'a mut ExecutionConfig) -> Self {
+        Self { config }
+    }
+
+    /// Get immutable access to the execution config
+    ///
+    /// This is safe because we only use it when not actively dispatching hooks
+    #[inline]
+    fn config(&self) -> &ExecutionConfig {
+        self.config
+    }
+
+    /// Dispatch before_instruction hook
+    ///
+    /// Returns HookDecision::Continue, Break, or Skip
+    #[inline]
+    fn dispatch_before(
+        &mut self,
+        instruction: &Instruction,
+        state: &VmState,
+        instruction_index: usize,
+    ) -> HookDecision {
+        if let Some(hook_manager) = self.config.hook_manager_mut() {
+            let context = HookContext::new(
+                &state.memory,
+                state.pointer,
+                state.step_count,
+                None, // Source location tracked by DebugTrackingHook
+                state.loop_depth,
+                instruction_index,
+            );
+            hook_manager.before_instruction(instruction, &context)
+        } else {
+            HookDecision::Continue
+        }
+    }
+
+    /// Dispatch after_instruction hook
+    ///
+    /// Returns HookDecision::Continue, Break, or Skip
+    #[inline]
+    fn dispatch_after(
+        &mut self,
+        instruction: &Instruction,
+        state: &VmState,
+        instruction_index: usize,
+    ) -> HookDecision {
+        if let Some(hook_manager) = self.config.hook_manager_mut() {
+            let context = HookContext::new(
+                &state.memory,
+                state.pointer,
+                state.step_count,
+                None, // Source location tracked by DebugTrackingHook
+                state.loop_depth,
+                instruction_index,
+            );
+            hook_manager.after_instruction(instruction, &context)
+        } else {
+            HookDecision::Continue
+        }
+    }
+
+    /// Dispatch on_loop_enter hook
+    ///
+    /// Returns HookDecision::Continue, Break, or Skip
+    #[inline]
+    fn dispatch_loop_enter(
+        &mut self,
+        state: &VmState,
+        loop_instruction_index: usize,
+        body_start_index: usize,
+        body_size: usize,
+    ) -> HookDecision {
+        if let Some(hook_manager) = self.config.hook_manager_mut() {
+            let context = HookContext::new(
+                &state.memory,
+                state.pointer,
+                state.step_count,
+                None, // Source location tracked by DebugTrackingHook
+                state.loop_depth,
+                loop_instruction_index,
+            );
+            let loop_info =
+                crate::hooks::LoopInfo::new(loop_instruction_index, body_start_index, body_size);
+            hook_manager.on_loop_enter(&context, Some(&loop_info))
+        } else {
+            HookDecision::Continue
+        }
+    }
+
+    /// Dispatch on_loop_exit hook
+    ///
+    /// Returns HookDecision::Continue, Break, or Skip
+    #[inline]
+    fn dispatch_loop_exit(&mut self, state: &VmState, instruction_index: usize) -> HookDecision {
+        if let Some(hook_manager) = self.config.hook_manager_mut() {
+            let context = HookContext::new(
+                &state.memory,
+                state.pointer,
+                state.step_count,
+                None, // Source location tracked by DebugTrackingHook
+                state.loop_depth,
+                instruction_index,
+            );
+            hook_manager.on_loop_exit(&context)
+        } else {
+            HookDecision::Continue
+        }
+    }
+
+    /// Dispatch on_complete hook (called after execution finishes)
+    #[inline]
+    fn dispatch_complete(&mut self, state: &VmState) {
+        if let Some(hook_manager) = self.config.hook_manager_mut() {
+            let context = HookContext::new(
+                &state.memory,
+                state.pointer,
+                state.step_count,
+                None, // No source location at completion
+                state.loop_depth,
+                0, // No meaningful instruction index after completion
+            );
+            hook_manager.on_complete(&context);
+        }
+    }
+}
+
 /// Count the total number of instructions in a block, including nested loops.
 /// This is used to compute loop body sizes for LoopInfo.
 fn count_instructions(instructions: &[Instruction]) -> usize {
@@ -535,7 +670,7 @@ fn count_instructions(instructions: &[Instruction]) -> usize {
 fn execute_block<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
     state: &mut VmState,
-    config: &mut ExecutionConfig,
+    dispatcher: &mut HookDispatcher,
     input: &mut I,
     output: &mut O,
     start_index: usize,             // flat index where this block starts
@@ -551,33 +686,22 @@ fn execute_block<I: BfInput, O: BfOutput>(
         state.step_count.increment();
 
         // Hook: before_instruction
-        if let Some(hook_manager) = config.hook_manager_mut() {
-            let hook_context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // Source locations tracked by DebugTrackingHook
-                state.loop_depth,
-                instruction_index,
-            );
-
-            match hook_manager.before_instruction(instruction, &hook_context) {
-                HookDecision::Continue => {}
-                HookDecision::Break => {
-                    return Err(BfError::ExecutionPaused {
-                        instruction_index: state.step_count.into(),
-                        source_location: None, // Debug hook can provide this
-                        message: Some(format!(
-                            "Execution paused by hook at instruction {}",
-                            state.step_count.get()
-                        )),
-                    });
-                }
-                HookDecision::Skip => {
-                    // Skip this instruction, increment local_index and continue
-                    local_index += 1;
-                    continue;
-                }
+        match dispatcher.dispatch_before(instruction, state, instruction_index) {
+            HookDecision::Continue => {}
+            HookDecision::Break => {
+                return Err(BfError::ExecutionPaused {
+                    instruction_index: state.step_count.into(),
+                    source_location: None, // Debug hook can provide this
+                    message: Some(format!(
+                        "Execution paused by hook at instruction {}",
+                        state.step_count.get()
+                    )),
+                });
+            }
+            HookDecision::Skip => {
+                // Skip this instruction, increment local_index and continue
+                local_index += 1;
+                continue;
             }
         }
 
@@ -602,31 +726,18 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     // Increment step counter (normally done in execute_block)
                     state.step_count.increment();
 
-                    // Call hooks for LoopCheck (needed for limit checking)
-                    // The limit check is in after_instruction, not before_instruction!
-                    if let Some(hook_manager) = config.hook_manager_mut() {
-                        let hook_context = HookContext::new(
-                            &state.memory,
-                            state.pointer,
-                            state.step_count,
-                            None,
-                            state.loop_depth,
-                            body_start_index,
-                        );
-                        match hook_manager.after_instruction(loop_check, &hook_context) {
-                            HookDecision::Continue => {}
-                            HookDecision::Break => {
-                                return Err(BfError::ExecutionPaused {
-                                    instruction_index: state.step_count.into(),
-                                    source_location: None,
-                                    message: Some(
-                                        "Execution paused by hook at LoopCheck".to_string(),
-                                    ),
-                                });
-                            }
-                            HookDecision::Skip => {
-                                // Can't skip LoopCheck - it's required
-                            }
+                    // Hook: after_instruction for LoopCheck (needed for limit checking)
+                    match dispatcher.dispatch_after(loop_check, state, body_start_index) {
+                        HookDecision::Continue => {}
+                        HookDecision::Break => {
+                            return Err(BfError::ExecutionPaused {
+                                instruction_index: state.step_count.into(),
+                                source_location: None,
+                                message: Some("Execution paused by hook at LoopCheck".to_string()),
+                            });
+                        }
+                        HookDecision::Skip => {
+                            // Can't skip LoopCheck - it's required
                         }
                     }
 
@@ -634,7 +745,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     match execute_single_instruction(
                         loop_check,
                         state,
-                        config,
+                        dispatcher.config(),
                         input,
                         output,
                         body_start_index, // LoopCheck is at body_start_index
@@ -653,40 +764,28 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     state.loop_depth += 1;
 
                     // Hook: on_loop_enter
-                    if let Some(hook_manager) = config.hook_manager_mut() {
-                        let hook_context = HookContext::new(
-                            &state.memory,
-                            state.pointer,
-                            state.step_count,
-                            None, // Source location tracked by DebugTrackingHook
-                            state.loop_depth,
-                            instruction_index,
-                        );
-
-                        // Create LoopInfo with structural information
-                        let loop_info = crate::hooks::LoopInfo::new(
-                            instruction_index,
-                            body_start_index,
-                            body_size,
-                        );
-
-                        match hook_manager.on_loop_enter(&hook_context, Some(&loop_info)) {
-                            HookDecision::Continue => {}
-                            HookDecision::Break => {
-                                return Err(BfError::ExecutionPaused {
-                                    instruction_index: state.step_count.into(),
-                                    source_location: None, // Debug hook can provide this
-                                    message: Some(format!(
-                                        "Execution paused by hook at loop enter (instruction {})",
-                                        state.step_count.get()
-                                    )),
-                                });
-                            }
-                            HookDecision::Skip => {
-                                // For loop hooks, Skip means skip the entire loop iteration
-                                state.loop_depth -= 1;
-                                continue;
-                            }
+                    match dispatcher.dispatch_loop_enter(
+                        state,
+                        instruction_index,
+                        body_start_index,
+                        body_size,
+                    ) {
+                        HookDecision::Continue => {}
+                        HookDecision::Break => {
+                            state.loop_depth -= 1;
+                            return Err(BfError::ExecutionPaused {
+                                instruction_index: state.step_count.into(),
+                                source_location: None, // Debug hook can provide this
+                                message: Some(format!(
+                                    "Execution paused by hook at loop enter (instruction {})",
+                                    state.step_count.get()
+                                )),
+                            });
+                        }
+                        HookDecision::Skip => {
+                            // For loop hooks, Skip means skip the entire loop iteration
+                            state.loop_depth -= 1;
+                            continue;
                         }
                     }
 
@@ -696,7 +795,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                         execute_block(
                             &body[1..],
                             state,
-                            config,
+                            dispatcher,
                             input,
                             output,
                             body_start_index + 1, // Skip LoopCheck
@@ -708,31 +807,20 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     state.loop_depth -= 1;
 
                     // Hook: on_loop_exit
-                    if let Some(hook_manager) = config.hook_manager_mut() {
-                        let hook_context = HookContext::new(
-                            &state.memory,
-                            state.pointer,
-                            state.step_count,
-                            None, // Source location tracked by DebugTrackingHook
-                            state.loop_depth,
-                            instruction_index,
-                        );
-
-                        match hook_manager.on_loop_exit(&hook_context) {
-                            HookDecision::Continue => {}
-                            HookDecision::Break => {
-                                return Err(BfError::ExecutionPaused {
-                                    instruction_index: state.step_count.into(),
-                                    source_location: None, // Debug hook can provide this
-                                    message: Some(format!(
-                                        "Execution paused by hook at loop exit (instruction {})",
-                                        state.step_count.get()
-                                    )),
-                                });
-                            }
-                            HookDecision::Skip => {
-                                // Skip doesn't make sense at loop exit, treat as Continue
-                            }
+                    match dispatcher.dispatch_loop_exit(state, instruction_index) {
+                        HookDecision::Continue => {}
+                        HookDecision::Break => {
+                            return Err(BfError::ExecutionPaused {
+                                instruction_index: state.step_count.into(),
+                                source_location: None, // Debug hook can provide this
+                                message: Some(format!(
+                                    "Execution paused by hook at loop exit (instruction {})",
+                                    state.step_count.get()
+                                )),
+                            });
+                        }
+                        HookDecision::Skip => {
+                            // Skip doesn't make sense at loop exit, treat as Continue
                         }
                     }
                 }
@@ -743,7 +831,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 match execute_single_instruction(
                     non_loop_instruction,
                     state,
-                    config,
+                    dispatcher.config(),
                     input,
                     output,
                     instruction_index,
@@ -761,31 +849,20 @@ fn execute_block<I: BfInput, O: BfOutput>(
         }
 
         // Hook: after_instruction
-        if let Some(hook_manager) = config.hook_manager_mut() {
-            let hook_context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // Source location tracked by DebugTrackingHook
-                state.loop_depth,
-                instruction_index,
-            );
-
-            match hook_manager.after_instruction(instruction, &hook_context) {
-                HookDecision::Continue => {}
-                HookDecision::Break => {
-                    return Err(BfError::ExecutionPaused {
-                        instruction_index: state.step_count.into(),
-                        source_location: None, // Debug hook can provide this
-                        message: Some(format!(
-                            "Execution paused by hook after instruction {}",
-                            state.step_count.get()
-                        )),
-                    });
-                }
-                HookDecision::Skip => {
-                    // Skip doesn't make sense after instruction has already executed, treat as Continue
-                }
+        match dispatcher.dispatch_after(instruction, state, instruction_index) {
+            HookDecision::Continue => {}
+            HookDecision::Break => {
+                return Err(BfError::ExecutionPaused {
+                    instruction_index: state.step_count.into(),
+                    source_location: None, // Debug hook can provide this
+                    message: Some(format!(
+                        "Execution paused by hook after instruction {}",
+                        state.step_count.get()
+                    )),
+                });
+            }
+            HookDecision::Skip => {
+                // Skip doesn't make sense after instruction has already executed, treat as Continue
             }
         }
 
