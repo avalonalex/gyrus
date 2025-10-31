@@ -30,6 +30,7 @@ impl ExecutionHook for InstructionCounter {
             Instruction::Output => "Output (.)",
             Instruction::Input => "Input (,)",
             Instruction::Loop(_) => "Loop ([...])",
+            Instruction::LoopCheck => "LoopCheck ([)", // Internal: loop condition check
         };
 
         *self

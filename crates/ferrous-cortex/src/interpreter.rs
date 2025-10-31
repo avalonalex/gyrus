@@ -482,6 +482,12 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
             }
         }
 
+        Instruction::LoopCheck => {
+            // LoopCheck is a no-op for execution - it only serves to count the `[` condition check as a step
+            // The step counter is already incremented in execute_block before this is called
+            // This ensures empty loops respect step limits
+        }
+
         Instruction::Loop(_) => {
             panic!("execute_single_instruction() cannot handle loops - use execute_block()");
         }
@@ -560,29 +566,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 let body_size = count_instructions(body);
 
                 while state.memory[state.pointer.get()] != 0 {
-                    // Count the `[` instruction execution (loop condition check)
-                    // In BrainFuck, `[` is an instruction that checks if the current cell is non-zero
-                    // This ensures empty loops (e.g., `[]`) respect step limits instead of hanging
-                    state.step_count.increment();
-
-                    // Check step limit after counting the `[` instruction
-                    if let Some(max_steps) = config.max_steps() {
-                        if state.step_count.get() > max_steps {
-                            return Err(BfError::StepLimitExceeded {
-                                actual_steps: state.step_count,
-                                limit: max_steps,
-                                instruction_index: instruction_index,
-                                source_location: debug_info
-                                    .and_then(|di| di.lookup(instruction_index)),
-                                hint: format!(
-                                    "Execution stopped after {} steps (limit: {}). Loop condition check exceeded limit.",
-                                    state.step_count.get(),
-                                    max_steps
-                                ),
-                            });
-                        }
-                    }
-
+                    // No manual step counting here - the LoopCheck instruction (first in body) handles it
                     // Track loop nesting depth
                     state.loop_depth += 1;
 
@@ -1607,8 +1591,8 @@ mod tests {
                 assert_eq!(loc.line, 1);
                 // Error at the 256th + instruction (the one that causes overflow)
                 // Counting: 2 (++) + 1 ([) + 1 (>) + 256 (+'s) = column 260
-                // But we also count the `[` instruction check, so +1 = column 261
-                assert_eq!(loc.column, 261, "Error should be at 256th + inside loop");
+                // Column mapping: ++ at 1-2, [ at 3, > at 4, first + at 5, 256th + at 260
+                assert_eq!(loc.column, 260, "Error should be at 256th + inside loop");
             }
             other => panic!("Expected CellOverflow, got {:?}", other),
         }
@@ -2330,7 +2314,7 @@ mod tests {
         assert_eq!(debug_info.loop_count(), 1);
         let loop_meta = debug_info.get_loop_metadata(2).unwrap();
         assert_eq!(loop_meta.body_start_index, 3);
-        assert_eq!(loop_meta.body_size, 4);
+        assert_eq!(loop_meta.body_size, 5); // LoopCheck + >+<- = 5 instructions
     }
 
     #[test]
@@ -2354,8 +2338,8 @@ mod tests {
         assert_eq!(outer.body_start_index, 2);
         assert_eq!(outer.parent_loop, None);
 
-        let inner = debug_info.get_loop_metadata(4).unwrap();
-        assert_eq!(inner.body_start_index, 5);
+        let inner = debug_info.get_loop_metadata(5).unwrap();
+        assert_eq!(inner.body_start_index, 6);
         assert_eq!(inner.parent_loop, Some(1));
     }
 
@@ -2935,21 +2919,21 @@ mod tests {
 
         let profiler = profiler.lock().unwrap();
 
-        // Indices: 0-4 are +++++, 5 is [, 6-9 are >++<, 10 is -, 11 is >, 12 is .
-        // Loop body (>++<-) should all have same count (5 iterations)
-        let loop_body_hits: Vec<u64> = (6..=10)
+        // Indices: 0-4 are +++++, 5 is [, 6 is LoopCheck, 7-10 are >++<, 11 is -, 12 is >, 13 is .
+        // LoopCheck and loop body (>++<-) should all have same count (5 iterations)
+        let loop_body_hits: Vec<u64> = (6..=11)
             .map(|idx| *profiler.instruction_hits().get(&idx).unwrap_or(&0))
             .collect();
 
         assert_eq!(
             loop_body_hits,
-            vec![5, 5, 5, 5, 5],
-            "All instructions in loop body should execute same number of times (5)"
+            vec![5, 5, 5, 5, 5, 5],
+            "LoopCheck and all instructions in loop body should execute same number of times (5)"
         );
 
         // Instructions after loop should execute once
-        assert_eq!(*profiler.instruction_hits().get(&11).unwrap(), 1);
         assert_eq!(*profiler.instruction_hits().get(&12).unwrap(), 1);
+        assert_eq!(*profiler.instruction_hits().get(&13).unwrap(), 1);
     }
 
     #[test]
@@ -2975,19 +2959,19 @@ mod tests {
 
         let profiler = profiler.lock().unwrap();
 
-        // Indices: 0-2 are +++, 3 is outer[, 4 is >, 5-6 are ++, 7 is inner[,
-        // 8-11 are <+>-, 12 is ], 13 is <, 14 is -, 15 is ]
+        // Indices: 0-2 are +++, 3 is outer[, 4 is LoopCheck(outer), 5 is >, 6-7 are ++,
+        // 8 is inner[, 9 is LoopCheck(inner), 10-13 are <+>-, 14 is <, 15 is -
 
-        // Inner loop body (<+>-) should all have same count
-        let inner_body_hits: Vec<u64> = (8..=11)
+        // Inner loop LoopCheck + body (<+>-) should all have same count
+        let inner_body_hits: Vec<u64> = (9..=13)
             .map(|idx| *profiler.instruction_hits().get(&idx).unwrap_or(&0))
             .collect();
 
-        // All instructions in inner loop body should have identical hit counts
+        // All instructions in inner loop (LoopCheck + body) should have identical hit counts
         let first_count = inner_body_hits[0];
         assert!(
             inner_body_hits.iter().all(|&count| count == first_count),
-            "Inner loop body instructions should all have same count: {:?}",
+            "Inner loop LoopCheck and body instructions should all have same count: {:?}",
             inner_body_hits
         );
 

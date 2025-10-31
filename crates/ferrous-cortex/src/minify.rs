@@ -56,6 +56,9 @@ fn minify_instructions(instructions: &[Instruction], output: &mut String) {
                 minify_instructions(body, output);
                 output.push(']');
             }
+            Instruction::LoopCheck => {
+                // Skip LoopCheck when minifying (it's internal, added by parser)
+            }
         }
     }
 }
