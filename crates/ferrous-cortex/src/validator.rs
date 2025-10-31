@@ -126,7 +126,11 @@ fn validate_instructions(
     for instruction in instructions {
         if let Instruction::Loop(body) = instruction {
             // Check for empty loops
-            if body.is_empty() {
+            // A loop is considered empty if it has no instructions OR only has LoopCheck
+            let is_empty =
+                body.is_empty() || (body.len() == 1 && matches!(body[0], Instruction::LoopCheck));
+
+            if is_empty {
                 warnings.push(BfWarning::EmptyLoop { location });
             } else {
                 // Check for suspicious patterns (assumes u8 wrapping)
@@ -157,50 +161,56 @@ fn check_suspicious_loop_patterns(
     // Note: [>] and [<] are common patterns for seeking in BF, so we don't warn about them
     // Note: [-] is a common pattern for clearing a cell, so we don't warn about it
 
+    // Filter out LoopCheck when analyzing patterns (it's internal bookkeeping)
+    let real_body: Vec<&Instruction> = body
+        .iter()
+        .filter(|i| !matches!(i, Instruction::LoopCheck))
+        .collect();
+
     // Check for [+] and variants - assumes u8 wrapping (production target)
-    let all_increments = body
+    let all_increments = real_body
         .iter()
         .all(|i| matches!(i, Instruction::IncrementValue));
-    if all_increments && !body.is_empty() {
+    if all_increments && !real_body.is_empty() {
         // With u8 wrapping arithmetic, termination depends on GCD
-        let gcd_value = gcd(body.len(), 256);
-        let reason = if body.len() == 1 {
+        let gcd_value = gcd(real_body.len(), 256);
+        let reason = if real_body.len() == 1 {
             "Inefficient pattern: loops ~256 times before reaching zero. Use [-] to clear a cell."
                 .to_string()
         } else if gcd_value > 1 {
             format!(
                 "Suspicious pattern: may be infinite or inefficient depending on starting cell value. \
                  Increment by {} only visits multiples of {} (gcd={}).",
-                body.len(),
+                real_body.len(),
                 gcd_value,
                 gcd_value
             )
         } else {
             format!(
                 "Inefficient pattern: loops ~{} times before reaching zero. Use [-] to clear a cell.",
-                256 / body.len()
+                256 / real_body.len()
             )
         };
 
         warnings.push(BfWarning::SuspiciousPattern {
             location,
-            pattern: format!("[{}]", "+".repeat(body.len())),
+            pattern: format!("[{}]", "+".repeat(real_body.len())),
             reason,
         });
     }
 
     // Check for [--] and variants - inefficient compared to [-]
-    let all_decrements = body
+    let all_decrements = real_body
         .iter()
         .all(|i| matches!(i, Instruction::DecrementValue));
-    if all_decrements && body.len() > 1 {
+    if all_decrements && real_body.len() > 1 {
         let reason =
             "Multiple decrements in a loop is inefficient. Consider using [-] to clear the cell."
                 .to_string();
 
         warnings.push(BfWarning::SuspiciousPattern {
             location,
-            pattern: format!("[{}]", "-".repeat(body.len())),
+            pattern: format!("[{}]", "-".repeat(real_body.len())),
             reason,
         });
     }

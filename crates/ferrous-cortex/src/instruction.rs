@@ -34,6 +34,7 @@ pub enum Instruction {
     Output,                 // .
     Input,                  // ,
     Loop(Vec<Instruction>), // [ ... ]
+    LoopCheck, // Internal: represents the `[` condition check (always first instruction in loop body)
 }
 
 impl fmt::Display for Instruction {
@@ -48,10 +49,14 @@ impl fmt::Display for Instruction {
             Instruction::Loop(body) => {
                 write!(f, "[")?;
                 for instruction in body {
-                    write!(f, "{}", instruction)?;
+                    // Skip LoopCheck when displaying (it's internal)
+                    if !matches!(instruction, Instruction::LoopCheck) {
+                        write!(f, "{}", instruction)?;
+                    }
                 }
                 write!(f, "]")
             }
+            Instruction::LoopCheck => Ok(()), // Internal instruction, no output
         }
     }
 }

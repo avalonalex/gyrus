@@ -26,6 +26,7 @@ impl ExecutionTracer {
             Instruction::Output => ".",
             Instruction::Input => ",",
             Instruction::Loop(_) => "[...]",
+            Instruction::LoopCheck => "[", // Internal: loop condition check
         }
     }
 
