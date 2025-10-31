@@ -982,7 +982,7 @@ impl ProfilingHook {
             // Build stack trace based on depth
             // For now, simplified: just show the loop itself
             // In a full implementation, we'd track parent-child relationships
-            let stack_frames = vec![
+            let stack_frames = [
                 "bf_program".to_string(),
                 format!(
                     "Loop@{} ({})",
@@ -1057,8 +1057,8 @@ impl ProfilingHook {
         // Header
         writeln!(
             &mut output,
-            "{:>5} | {:>5} | {:<20} | {:>10} | {}",
-            "Idx", "Instr", "Location", "Hits", "Heat"
+            "{:>5} | {:>5} | {:<20} | {:>10} | Heat",
+            "Idx", "Instr", "Location", "Hits"
         )
         .unwrap();
         writeln!(&mut output, "{}", "-".repeat(80)).unwrap();

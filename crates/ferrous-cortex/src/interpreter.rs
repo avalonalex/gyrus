@@ -116,6 +116,7 @@ use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, StepCount};
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use crate::config::MemoryModel;
 
@@ -176,6 +177,163 @@ pub fn interpret(instructions: &[Instruction]) -> Result<()> {
     interpret_with_config(instructions, ExecutionConfig::default(), None).map(|_| ())
 }
 
+/// Context for interpreter execution with auto-registered hooks.
+///
+/// This struct handles the lifecycle of auto-registered hooks:
+/// 1. Setup: Register built-in hooks (stats, warnings, debug, limits)
+/// 2. Execution: Run the program
+/// 3. Cleanup: Extract results and enrich errors
+///
+/// This centralizes hook management and error enrichment logic,
+/// making the interpreter more maintainable and testable.
+struct InterpreterContext {
+    config: ExecutionConfig,
+
+    // Hook handles for extracting results after execution
+    stats_handle: Arc<Mutex<crate::hooks::builtin::StatsTrackerHook>>,
+    warning_handle: Arc<Mutex<crate::hooks::builtin::WarningCollectorHook>>,
+    debug_handle: Option<Arc<Mutex<crate::hooks::builtin::DebugTrackingHook>>>,
+    limit_handle: Option<Arc<Mutex<crate::hooks::builtin::LimitEnforcerHook>>>,
+}
+
+impl InterpreterContext {
+    /// Create a new interpreter context with auto-registered hooks
+    fn new(mut config: ExecutionConfig, debug_info: Option<&DebugInfo>) -> Self {
+        use crate::hooks::builtin::{
+            SharedDebugTrackingHook, SharedLimitHook, SharedStatsHook, SharedWarningHook,
+        };
+
+        // Auto-register built-in hooks
+        let (stats_hook, stats_handle) = SharedStatsHook::new();
+        let (warning_hook, warning_handle) = SharedWarningHook::new();
+        config.register_hook(Box::new(stats_hook));
+        config.register_hook(Box::new(warning_hook));
+
+        // Register debug tracking hook if debug info is provided
+        let debug_handle = debug_info.map(|info| {
+            let (debug_hook, handle) = SharedDebugTrackingHook::new(info.clone());
+            config.register_hook(Box::new(debug_hook));
+            handle
+        });
+
+        // Register limit enforcement hook if limits are configured
+        let limit_handle = if config.max_steps().is_some() || config.timeout_ms().is_some() {
+            let (limit_hook, handle) =
+                SharedLimitHook::new(config.max_steps(), config.timeout_ms());
+            config.register_hook(Box::new(limit_hook));
+            Some(handle)
+        } else {
+            None
+        };
+
+        Self {
+            config,
+            stats_handle,
+            warning_handle,
+            debug_handle,
+            limit_handle,
+        }
+    }
+
+    /// Execute the program and return statistics
+    fn execute<I: BfInput, O: BfOutput>(
+        self,
+        instructions: &[Instruction],
+        input: &mut I,
+        output: &mut O,
+    ) -> Result<ExecutionStats> {
+        // Create VM state
+        let mut state = VmState::new(*self.config.memory_model());
+
+        // Get debug info clone if needed
+        let debug_info_clone = self
+            .debug_handle
+            .as_ref()
+            .map(|handle| handle.lock().unwrap().debug_info().clone());
+
+        // Destructure self to avoid borrowing conflicts
+        let Self {
+            mut config,
+            stats_handle,
+            warning_handle,
+            debug_handle,
+            limit_handle,
+        } = self;
+
+        // Create hook dispatcher
+        let mut dispatcher = HookDispatcher::new(&mut config);
+
+        // Execute the program
+        let execute_result = execute_block(
+            instructions,
+            &mut state,
+            &mut dispatcher,
+            input,
+            output,
+            0,
+            debug_info_clone.as_ref(),
+        );
+
+        // Check for limit errors (takes precedence over ExecutionPaused)
+        if let Some(handle) = &limit_handle
+            && let Some(mut error) = handle.lock().unwrap().take_error()
+        {
+            // Enrich StepLimitExceeded with source_location
+            if let Some(debug_handle) = &debug_handle
+                && let BfError::StepLimitExceeded {
+                    instruction_index, ..
+                } = &error
+            {
+                let debug_hook = debug_handle.lock().unwrap();
+                if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
+                    error = error.with_step_limit_source_location(loc);
+                }
+            }
+            return Err(error);
+        }
+
+        // Handle execution result
+        match execute_result {
+            Ok(_) => {
+                // Only call on_complete if execution succeeded (not paused or errored)
+                dispatcher.dispatch_complete(&state);
+
+                // Extract statistics
+                let mut stats = stats_handle.lock().unwrap().stats().clone();
+                stats.warnings = warning_handle.lock().unwrap().warnings().to_vec();
+                Ok(stats)
+            }
+            Err(mut error) => {
+                // Enrich error with debug information
+                if let Some(handle) = &debug_handle {
+                    let debug_hook = handle.lock().unwrap();
+
+                    // Add loop call stack
+                    let loop_stack = debug_hook.loop_stack().to_vec();
+                    let loop_call_stack: Vec<crate::error::LoopStackFrame> = loop_stack
+                        .into_iter()
+                        .map(|ctx| crate::error::LoopStackFrame {
+                            source_location: ctx.source_location,
+                            iteration: ctx.iteration,
+                        })
+                        .collect();
+                    error = error.with_loop_call_stack(loop_call_stack);
+
+                    // Add source location for step limit errors
+                    if let BfError::StepLimitExceeded {
+                        instruction_index, ..
+                    } = &error
+                        && let Some(loc) = debug_hook.debug_info().lookup(*instruction_index)
+                    {
+                        error = error.with_step_limit_source_location(loc);
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+}
+
 /// Interpret and execute BrainFuck instructions with custom I/O.
 ///
 /// This is the primary interpreter function that allows custom input and output.
@@ -195,118 +353,13 @@ pub fn interpret(instructions: &[Instruction]) -> Result<()> {
 /// ```
 pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     instructions: &[Instruction],
-    mut config: ExecutionConfig,
+    config: ExecutionConfig,
     input: &mut I,
     output: &mut O,
     debug_info: Option<&DebugInfo>,
 ) -> Result<ExecutionStats> {
-    use crate::hooks::builtin::{
-        SharedDebugTrackingHook, SharedLimitHook, SharedStatsHook, SharedWarningHook,
-    };
-
-    // Auto-register built-in hooks
-    let (stats_hook, stats_handle) = SharedStatsHook::new();
-    let (warning_hook, warning_handle) = SharedWarningHook::new();
-    config.register_hook(Box::new(stats_hook));
-    config.register_hook(Box::new(warning_hook));
-
-    // Register debug tracking hook if debug info is provided
-    let debug_hook_handle = if let Some(debug_info) = debug_info {
-        let (debug_hook, handle) = SharedDebugTrackingHook::new(debug_info.clone());
-        config.register_hook(Box::new(debug_hook));
-        Some(handle)
-    } else {
-        None
-    };
-
-    // Register limit enforcement hook if limits are configured
-    let limit_hook_handle = if config.max_steps().is_some() || config.timeout_ms().is_some() {
-        let (limit_hook, handle) = SharedLimitHook::new(config.max_steps(), config.timeout_ms());
-        config.register_hook(Box::new(limit_hook));
-        Some(handle)
-    } else {
-        None
-    };
-
-    let mut state = VmState::new(*config.memory_model());
-
-    // Get debug_info clone if debug hook is registered
-    // IMPORTANT: Clone it before execution to avoid holding the lock during execution
-    // (the hook is also registered in config and will be called during execution)
-    let debug_info_clone = debug_hook_handle
-        .as_ref()
-        .map(|handle| handle.lock().unwrap().debug_info().clone());
-
-    // Create hook dispatcher
-    let mut dispatcher = HookDispatcher::new(&mut config);
-
-    // Start execution at instruction index 0
-    let execute_result = execute_block(
-        instructions,
-        &mut state,
-        &mut dispatcher,
-        input,
-        output,
-        0,
-        debug_info_clone.as_ref(),
-    );
-
-    // Check if limit hook stopped execution with an error
-    // This takes precedence over ExecutionPaused since limits are more specific
-    if let Some(handle) = &limit_hook_handle
-        && let Some(mut error) = handle.lock().unwrap().take_error()
-    {
-        // Enrich StepLimitExceeded with source_location before returning
-        if let Some(debug_handle) = &debug_hook_handle
-            && let BfError::StepLimitExceeded {
-                instruction_index, ..
-            } = &error
-        {
-            let debug_hook = debug_handle.lock().unwrap();
-            if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
-                error = error.with_step_limit_source_location(loc);
-            }
-        }
-        return Err(error);
-    }
-
-    // If there was an error, enrich it with debug information
-    // Note: At the top level, we ignore ExecutionFlow (LoopExit shouldn't happen here)
-    if let Err(mut error) = execute_result {
-        // If we have a debug hook, extract debug information and attach it to the error
-        if let Some(handle) = &debug_hook_handle {
-            let debug_hook = handle.lock().unwrap();
-
-            // Enrich MemoryOutOfBounds with loop_call_stack
-            let loop_stack = debug_hook.loop_stack().to_vec();
-            let loop_call_stack: Vec<crate::error::LoopStackFrame> = loop_stack
-                .into_iter()
-                .map(|ctx| crate::error::LoopStackFrame {
-                    source_location: ctx.source_location,
-                    iteration: ctx.iteration,
-                })
-                .collect();
-            error = error.with_loop_call_stack(loop_call_stack);
-
-            // Enrich StepLimitExceeded with source_location
-            if let BfError::StepLimitExceeded {
-                instruction_index, ..
-            } = &error
-                && let Some(loc) = debug_hook.debug_info().lookup(*instruction_index)
-            {
-                error = error.with_step_limit_source_location(loc);
-            }
-        }
-        return Err(error);
-    }
-
-    // Hook: on_complete
-    dispatcher.dispatch_complete(&state);
-
-    // Extract stats and warnings from hooks
-    let mut stats = stats_handle.lock().unwrap().stats().clone();
-    stats.warnings = warning_handle.lock().unwrap().warnings().to_vec();
-    Ok(stats)
+    let context = InterpreterContext::new(config, debug_info);
+    context.execute(instructions, input, output)
 }
 
 /// Interpret and execute BrainFuck instructions with custom configuration.
