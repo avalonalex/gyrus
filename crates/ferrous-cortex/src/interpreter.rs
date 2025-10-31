@@ -119,6 +119,24 @@ use std::io;
 
 use crate::config::MemoryModel;
 
+/// Control flow result from executing an instruction
+///
+/// Instructions return this to signal normal execution vs. loop exit.
+/// This is NOT an error - loop exit is a normal control flow outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionFlow {
+    /// Continue normal execution
+    Continue,
+    /// Exit the current loop (LoopCheck instruction returns this when cell is zero)
+    LoopExit,
+}
+
+/// Result type for instruction execution
+///
+/// `Ok(ExecutionFlow)` indicates successful execution with control flow decision
+/// `Err(BfError)` indicates an actual error occurred
+type ExecutionResult = std::result::Result<ExecutionFlow, BfError>;
+
 struct VmState {
     /// Memory tape (array of cells)
     memory: Vec<u8>,
@@ -250,6 +268,7 @@ pub fn interpret_with_io<I: BfInput, O: BfOutput>(
     }
 
     // If there was an error, enrich it with debug information
+    // Note: At the top level, we ignore ExecutionFlow (LoopExit shouldn't happen here)
     if let Err(mut error) = execute_result {
         // If we have a debug hook, extract debug information and attach it to the error
         if let Some(handle) = &debug_hook_handle {
@@ -387,7 +406,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
     output: &mut O,
     instruction_index: usize, // Current instruction index for error reporting
     debug_info: Option<&DebugInfo>, // Optional debug info for error messages
-) -> Result<()> {
+) -> ExecutionResult {
     match instruction {
         Instruction::IncrementPointer => {
             increment_pointer(state, instruction_index, debug_info)?;
@@ -483,9 +502,13 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
         }
 
         Instruction::LoopCheck => {
-            // LoopCheck is a no-op for execution - it only serves to count the `[` condition check as a step
+            // LoopCheck checks the loop condition and exits if cell is zero
+            // This is the BrainFuck '[' instruction logic
             // The step counter is already incremented in execute_block before this is called
-            // This ensures empty loops respect step limits
+            if state.memory[state.pointer.get()] == 0 {
+                return Ok(ExecutionFlow::LoopExit);
+            }
+            // If cell is non-zero, continue with the rest of the loop body
         }
 
         Instruction::Loop(_) => {
@@ -493,7 +516,7 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
         }
     }
 
-    Ok(())
+    Ok(ExecutionFlow::Continue)
 }
 
 /// Count the total number of instructions in a block, including nested loops.
@@ -517,12 +540,14 @@ fn execute_block<I: BfInput, O: BfOutput>(
     output: &mut O,
     start_index: usize,             // flat index where this block starts
     debug_info: Option<&DebugInfo>, // Optional debug info for error messages
-) -> Result<()> {
+) -> ExecutionResult {
     let mut local_index = 0;
 
     for instruction in instructions {
         // Compute current instruction index
         let instruction_index = start_index + local_index;
+
+        // Increment step counter BEFORE calling hooks so hooks see the updated count
         state.step_count.increment();
 
         // Hook: before_instruction
@@ -565,9 +590,66 @@ fn execute_block<I: BfInput, O: BfOutput>(
                 let body_start_index = instruction_index + 1;
                 let body_size = count_instructions(body);
 
-                while state.memory[state.pointer.get()] != 0 {
-                    // No manual step counting here - the LoopCheck instruction (first in body) handles it
-                    // Track loop nesting depth
+                // The loop body always starts with LoopCheck (parser invariant)
+                // We execute LoopCheck first to determine if we should enter the loop
+                // This avoids calling on_loop_enter when the loop immediately exits
+                loop {
+                    // Execute LoopCheck instruction (first in body)
+                    // We need to manually increment step counter and call hooks since we're bypassing execute_block
+                    let loop_check = &body[0];
+                    debug_assert!(matches!(loop_check, Instruction::LoopCheck));
+
+                    // Increment step counter (normally done in execute_block)
+                    state.step_count.increment();
+
+                    // Call hooks for LoopCheck (needed for limit checking)
+                    // The limit check is in after_instruction, not before_instruction!
+                    if let Some(hook_manager) = config.hook_manager_mut() {
+                        let hook_context = HookContext::new(
+                            &state.memory,
+                            state.pointer,
+                            state.step_count,
+                            None,
+                            state.loop_depth,
+                            body_start_index,
+                        );
+                        match hook_manager.after_instruction(loop_check, &hook_context) {
+                            HookDecision::Continue => {}
+                            HookDecision::Break => {
+                                return Err(BfError::ExecutionPaused {
+                                    instruction_index: state.step_count.into(),
+                                    source_location: None,
+                                    message: Some(
+                                        "Execution paused by hook at LoopCheck".to_string(),
+                                    ),
+                                });
+                            }
+                            HookDecision::Skip => {
+                                // Can't skip LoopCheck - it's required
+                            }
+                        }
+                    }
+
+                    // Execute LoopCheck to determine if we should continue
+                    match execute_single_instruction(
+                        loop_check,
+                        state,
+                        config,
+                        input,
+                        output,
+                        body_start_index, // LoopCheck is at body_start_index
+                        debug_info,
+                    )? {
+                        ExecutionFlow::Continue => {
+                            // Cell is non-zero, enter loop body
+                        }
+                        ExecutionFlow::LoopExit => {
+                            // Cell is zero, exit loop without calling on_loop_enter
+                            break;
+                        }
+                    }
+
+                    // Now we know we're actually entering the loop body
                     state.loop_depth += 1;
 
                     // Hook: on_loop_enter
@@ -608,16 +690,20 @@ fn execute_block<I: BfInput, O: BfOutput>(
                         }
                     }
 
-                    // Execute loop body
-                    execute_block(
-                        body,
-                        state,
-                        config,
-                        input,
-                        output,
-                        body_start_index,
-                        debug_info,
-                    )?;
+                    // Execute rest of loop body (skip LoopCheck since we already executed it)
+                    // body[1..] contains everything after LoopCheck
+                    if body.len() > 1 {
+                        execute_block(
+                            &body[1..],
+                            state,
+                            config,
+                            input,
+                            output,
+                            body_start_index + 1, // Skip LoopCheck
+                            debug_info,
+                        )?;
+                        // execute_block returns Continue (LoopExit already handled above)
+                    }
 
                     state.loop_depth -= 1;
 
@@ -654,7 +740,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
             // All other instructions are handled by execute_single_instruction
             non_loop_instruction => {
-                execute_single_instruction(
+                match execute_single_instruction(
                     non_loop_instruction,
                     state,
                     config,
@@ -662,7 +748,15 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     output,
                     instruction_index,
                     debug_info,
-                )?;
+                )? {
+                    ExecutionFlow::Continue => {
+                        // Normal execution, continue
+                    }
+                    ExecutionFlow::LoopExit => {
+                        // LoopCheck returned LoopExit, propagate it up
+                        return Ok(ExecutionFlow::LoopExit);
+                    }
+                }
             }
         }
 
@@ -707,7 +801,8 @@ fn execute_block<I: BfInput, O: BfOutput>(
         }
     }
 
-    Ok(())
+    // Block completed normally (no LoopExit encountered)
+    Ok(ExecutionFlow::Continue)
 }
 
 #[cfg(test)]
@@ -2888,10 +2983,11 @@ mod tests {
             .map(|idx| *profiler.instruction_hits().get(&idx).unwrap_or(&0))
             .collect();
 
-        // All loop body instructions should have same hit count (3 iterations)
+        // All loop body instructions should have same hit count (3 iterations) except for the LoopCheck
+        // which has one more hit.
         assert_eq!(
             loop_body_hits,
-            vec![3, 3, 3, 3],
+            vec![4, 3, 3, 3],
             "All instructions in simple loop should execute same number of times"
         );
     }
@@ -2925,9 +3021,10 @@ mod tests {
             .map(|idx| *profiler.instruction_hits().get(&idx).unwrap_or(&0))
             .collect();
 
+        // Note LoopCheck is always executed one more time than the rest of the body
         assert_eq!(
             loop_body_hits,
-            vec![5, 5, 5, 5, 5, 5],
+            vec![6, 5, 5, 5, 5, 5],
             "LoopCheck and all instructions in loop body should execute same number of times (5)"
         );
 
@@ -2962,24 +3059,45 @@ mod tests {
         // Indices: 0-2 are +++, 3 is outer[, 4 is LoopCheck(outer), 5 is >, 6-7 are ++,
         // 8 is inner[, 9 is LoopCheck(inner), 10-13 are <+>-, 14 is <, 15 is -
 
-        // Inner loop LoopCheck + body (<+>-) should all have same count
-        let inner_body_hits: Vec<u64> = (9..=13)
+        // Get inner loop LoopCheck and body instruction counts
+        let inner_loopcheck = *profiler.instruction_hits().get(&9).unwrap_or(&0);
+        let inner_body_hits: Vec<u64> = (10..=13)
             .map(|idx| *profiler.instruction_hits().get(&idx).unwrap_or(&0))
             .collect();
 
-        // All instructions in inner loop (LoopCheck + body) should have identical hit counts
-        let first_count = inner_body_hits[0];
+        // All body instructions should have identical hit counts
+        let body_count = inner_body_hits[0];
         assert!(
-            inner_body_hits.iter().all(|&count| count == first_count),
-            "Inner loop LoopCheck and body instructions should all have same count: {:?}",
+            inner_body_hits.iter().all(|&count| count == body_count),
+            "All inner loop body instructions should have same count: {:?}",
             inner_body_hits
         );
 
+        // Note: LoopCheck is executed more times than body in nested loops
+        // Relationship: inner_loopcheck = body_count + outer_loop_iterations
+        // Each time the outer loop runs, we enter the inner loop and do one extra check to exit
+        assert!(
+            inner_loopcheck > body_count,
+            "Inner LoopCheck ({}) should be > body count ({})",
+            inner_loopcheck,
+            body_count
+        );
+
+        // The difference tells us how many times the outer loop executed
+        let outer_iterations = inner_loopcheck - body_count;
+
         // Should execute multiple times (exact count depends on loop logic)
         assert!(
-            first_count > 10,
-            "Inner loop should execute many times, got {}",
-            first_count
+            body_count > 10,
+            "Inner loop body should execute many times, got {}",
+            body_count
+        );
+
+        // Outer loop should also execute multiple times
+        assert!(
+            outer_iterations > 1,
+            "Outer loop should execute multiple times, got {}",
+            outer_iterations
         );
     }
 
