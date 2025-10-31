@@ -10,3 +10,4 @@ path = "src/main.rs"
 [dependencies]
 ferrous-cortex.workspace = true
 clap.workspace = true
+inferno = "0.11"

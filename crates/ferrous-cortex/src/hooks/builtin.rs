@@ -849,30 +849,29 @@ mod tests {
 ///
 /// ```rust
 /// use ferrous_cortex::{parse, ExecutionConfigBuilder, interpret_with_io};
-/// use ferrous_cortex::hooks::builtin::ProfilingHook;
+/// use ferrous_cortex::hooks::builtin::SharedProfilingHook;
 /// use ferrous_cortex::io::StringIo;
-/// use std::sync::{Arc, Mutex};
 ///
 /// # fn main() -> Result<(), ferrous_cortex::BfError> {
 /// let source = "+++[>++[<.>-]<-]";
 /// let instructions = parse(source)?;
 ///
-/// let profiler = Arc::new(Mutex::new(ProfilingHook::new()));
-/// let profiler_clone = Arc::clone(&profiler);
+/// // Create shared profiler
+/// let (profiler_hook, profiler_handle) = SharedProfilingHook::new();
 ///
 /// let mut config = ExecutionConfigBuilder::new()
 ///     .with_memory_size(1000)
 ///     .build();
 ///
 /// // Register profiler hook
-/// config.register_hook(Box::new(SharedProfilingHook::new_with_shared(profiler_clone)));
+/// config.register_hook(Box::new(profiler_hook));
 ///
 /// let mut input = StringIo::empty();
 /// let mut output = StringIo::empty();
 /// interpret_with_io(&instructions, config, &mut input, &mut output, None)?;
 ///
 /// // Print profiling results
-/// let profiler = profiler.lock().unwrap();
+/// let profiler = profiler_handle.lock().unwrap();
 /// println!("{}", profiler.format_ascii_tree());
 /// # Ok(())
 /// # }
@@ -884,6 +883,9 @@ pub struct ProfilingHook {
 
     /// Completed loop executions with profiling data
     completed_loops: Vec<CompletedLoop>,
+
+    /// Instruction hit counts (instruction_index -> hit_count)
+    instruction_hits: std::collections::HashMap<usize, u64>,
 
     /// Total execution time
     start_time: std::time::Instant,
@@ -934,6 +936,7 @@ impl ProfilingHook {
         Self {
             loop_stack: Vec::new(),
             completed_loops: Vec::new(),
+            instruction_hits: std::collections::HashMap::new(),
             start_time: std::time::Instant::now(),
             total_time: std::time::Duration::ZERO,
         }
@@ -947,6 +950,379 @@ impl ProfilingHook {
     /// Get the total execution time.
     pub fn total_time(&self) -> std::time::Duration {
         self.total_time
+    }
+
+    /// Get the instruction hit counts.
+    ///
+    /// Returns a reference to the HashMap mapping instruction indices to hit counts.
+    pub fn instruction_hits(&self) -> &std::collections::HashMap<usize, u64> {
+        &self.instruction_hits
+    }
+
+    /// Generate flamegraph data in folded stack format.
+    ///
+    /// This format is compatible with flamegraph visualization tools.
+    /// Each line represents a stack frame with a sample count (microseconds).
+    ///
+    /// # Format
+    ///
+    /// ```text
+    /// bf_program;Loop@5 1234
+    /// bf_program;Loop@5;Loop@15 567
+    /// ```
+    ///
+    /// The numbers represent microseconds spent in that stack frame.
+    pub fn generate_flamegraph_data(&self) -> String {
+        let mut lines = Vec::new();
+
+        // Group loops by depth to build hierarchical stacks
+        for completed in &self.completed_loops {
+            let time_us = completed.total_time.as_micros() as u64;
+
+            // Build stack trace based on depth
+            // For now, simplified: just show the loop itself
+            // In a full implementation, we'd track parent-child relationships
+            let stack_frames = vec![
+                "bf_program".to_string(),
+                format!(
+                    "Loop@{} ({})",
+                    completed.loop_instruction_index,
+                    if let Some(loc) = &completed.source_location {
+                        format!("{}:{}", loc.line, loc.column)
+                    } else {
+                        format!("idx{}", completed.loop_instruction_index)
+                    }
+                ),
+            ];
+
+            let stack = stack_frames.join(";");
+            lines.push(format!("{} {}", stack, time_us));
+        }
+
+        lines.join("\n")
+    }
+
+    /// Format source code with execution heatmap showing hit counts per instruction.
+    ///
+    /// This creates a detailed view showing each BrainFuck instruction with its
+    /// execution count and source location, making it easy to identify hot spots.
+    ///
+    /// # Parameters
+    ///
+    /// - `source`: The original BrainFuck source code
+    /// - `debug_info`: Debug information for mapping instruction indices to source locations
+    ///
+    /// # Output Format
+    ///
+    /// ```text
+    /// Execution Heatmap (per instruction)
+    /// Idx | Instr | Location       |       Hits | Heat
+    ///   0 | +     | line 1, col 1  |          1 | █
+    ///   1 | +     | line 1, col 2  |          1 | █
+    ///   5 | [     | line 2, col 1  |          5 | █████
+    ///   6 | >     | line 3, col 3  |         15 | ███████████████
+    /// ```
+    pub fn format_source_heatmap(
+        &self,
+        source: &str,
+        debug_info: Option<&crate::debug::DebugInfo>,
+    ) -> String {
+        use std::fmt::Write;
+
+        let mut output = String::new();
+        writeln!(&mut output, "Execution Heatmap (per instruction)").unwrap();
+        writeln!(&mut output).unwrap();
+
+        // If no debug info, we can't map back to source
+        let Some(debug_info) = debug_info else {
+            writeln!(&mut output, "Debug information not available.").unwrap();
+            writeln!(
+                &mut output,
+                "Run with --debug flag to enable source heatmap."
+            )
+            .unwrap();
+            return output;
+        };
+
+        // Find the maximum hit count for bar scaling
+        let max_hits = self.instruction_hits.values().copied().max().unwrap_or(1);
+
+        // Convert source to bytes for character lookup
+        let source_bytes = source.as_bytes();
+
+        // Get all instruction indices and sort them
+        let mut instruction_indices: Vec<usize> = self.instruction_hits.keys().copied().collect();
+        instruction_indices.sort_unstable();
+
+        // Header
+        writeln!(
+            &mut output,
+            "{:>5} | {:>5} | {:<20} | {:>10} | {}",
+            "Idx", "Instr", "Location", "Hits", "Heat"
+        )
+        .unwrap();
+        writeln!(&mut output, "{}", "-".repeat(80)).unwrap();
+
+        // Display each instruction with hit counts
+        for &instruction_index in &instruction_indices {
+            let hits = self
+                .instruction_hits
+                .get(&instruction_index)
+                .copied()
+                .unwrap_or(0);
+
+            if let Some(location) = debug_info.lookup(instruction_index) {
+                // Get the actual character from source
+                let instr_char = if location.offset < source_bytes.len() {
+                    source_bytes[location.offset] as char
+                } else {
+                    '?'
+                };
+
+                // Generate bar chart (max 40 chars wide)
+                let bar_width = if max_hits > 0 {
+                    ((hits as f64 / max_hits as f64) * 40.0) as usize
+                } else {
+                    0
+                };
+                let bar = "█".repeat(bar_width);
+
+                let location_str = format!("line {}, col {}", location.line, location.column);
+
+                writeln!(
+                    &mut output,
+                    "{:>5} | {:>5} | {:<20} | {:>10} | {}",
+                    instruction_index, instr_char, location_str, hits, bar
+                )
+                .unwrap();
+            }
+        }
+
+        writeln!(&mut output).unwrap();
+        writeln!(
+            &mut output,
+            "Total instructions executed: {}",
+            self.instruction_hits.values().sum::<u64>()
+        )
+        .unwrap();
+
+        output
+    }
+
+    /// Generate HTML heatmap with color-coded execution frequencies.
+    ///
+    /// Creates a self-contained HTML file with embedded CSS that shows
+    /// each instruction with color-coded heat levels and detailed statistics.
+    ///
+    /// # Parameters
+    ///
+    /// - `source`: The original BrainFuck source code
+    /// - `debug_info`: Debug information for mapping instruction indices to source locations
+    ///
+    /// # Returns
+    ///
+    /// A complete HTML document ready to be written to a file
+    pub fn generate_html_heatmap(
+        &self,
+        source: &str,
+        debug_info: Option<&crate::debug::DebugInfo>,
+    ) -> String {
+        let mut html = String::new();
+
+        html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
+        html.push_str("    <meta charset=\"UTF-8\">\n");
+        html.push_str(
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n",
+        );
+        html.push_str("    <title>BrainFuck Execution Heatmap</title>\n");
+        html.push_str("    <style>\n");
+        html.push_str("        body { font-family: 'Consolas', 'Monaco', monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }\n");
+        html.push_str("        h1 { color: #4ec9b0; }\n");
+        html.push_str("        h2 { color: #9cdcfe; margin-top: 30px; }\n");
+        html.push_str("        .stats { background: #2d2d2d; padding: 15px; border-radius: 5px; margin-bottom: 20px; }\n");
+        html.push_str("        .stats p { margin: 5px 0; }\n");
+        html.push_str(
+            "        table { border-collapse: collapse; width: 100%; background: #2d2d2d; }\n",
+        );
+        html.push_str("        th { background: #3c3c3c; color: #4ec9b0; padding: 10px; text-align: left; position: sticky; top: 0; }\n");
+        html.push_str("        td { padding: 8px; border-bottom: 1px solid #3c3c3c; }\n");
+        html.push_str("        .instr { font-weight: bold; font-size: 1.2em; text-align: center; width: 50px; }\n");
+        html.push_str("        .idx { color: #858585; text-align: right; width: 80px; }\n");
+        html.push_str("        .location { color: #9cdcfe; width: 150px; }\n");
+        html.push_str("        .hits { text-align: right; font-weight: bold; width: 100px; }\n");
+        html.push_str("        .bar { width: 300px; }\n");
+        html.push_str(
+            "        .bar-fill { height: 20px; border-radius: 3px; transition: width 0.3s; }\n",
+        );
+        html.push_str("        tr:hover { background: #383838; }\n");
+        html.push_str(
+            "        .heat-0 { background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-1 { background: linear-gradient(90deg, #0f3460 0%, #16537e 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-2 { background: linear-gradient(90deg, #16537e 0%, #1f6f8b 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-3 { background: linear-gradient(90deg, #1f6f8b 0%, #18978f 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-4 { background: linear-gradient(90deg, #18978f 0%, #f6be00 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-5 { background: linear-gradient(90deg, #f6be00 0%, #fd7f20 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-6 { background: linear-gradient(90deg, #fd7f20 0%, #fc2e20 100%); }\n",
+        );
+        html.push_str(
+            "        .heat-7 { background: linear-gradient(90deg, #fc2e20 0%, #c41e3a 100%); }\n",
+        );
+        html.push_str(
+            "        .legend { display: flex; gap: 10px; margin: 20px 0; flex-wrap: wrap; }\n",
+        );
+        html.push_str("        .legend-item { display: flex; align-items: center; gap: 5px; }\n");
+        html.push_str("        .legend-box { width: 30px; height: 20px; border-radius: 3px; }\n");
+        html.push_str("        .source-view { background: #2d2d2d; padding: 15px; border-radius: 5px; margin-top: 20px; white-space: pre; overflow-x: auto; }\n");
+        html.push_str("    </style>\n");
+        html.push_str("</head>\n<body>\n");
+
+        html.push_str("    <h1>🔥 BrainFuck Execution Heatmap</h1>\n");
+
+        // Statistics section
+        html.push_str("    <div class=\"stats\">\n");
+        html.push_str(&format!(
+            "        <p><strong>Total instructions executed:</strong> {}</p>\n",
+            self.instruction_hits.values().sum::<u64>()
+        ));
+        html.push_str(&format!(
+            "        <p><strong>Total execution time:</strong> {:.2}ms</p>\n",
+            self.total_time.as_secs_f64() * 1000.0
+        ));
+        html.push_str(&format!(
+            "        <p><strong>Unique instructions:</strong> {}</p>\n",
+            self.instruction_hits.len()
+        ));
+        html.push_str("    </div>\n");
+
+        if debug_info.is_none() {
+            html.push_str("    <p style=\"color: #f48771;\">⚠️ Debug information not available. Run with --debug flag to enable heatmap.</p>\n");
+            html.push_str("</body>\n</html>");
+            return html;
+        }
+
+        let debug_info = debug_info.unwrap();
+
+        // Legend
+        html.push_str("    <div class=\"legend\">\n");
+        html.push_str("        <span><strong>Heat Level:</strong></span>\n");
+        html.push_str("        <div class=\"legend-item\"><div class=\"legend-box heat-0\"></div><span>Cold (1x)</span></div>\n");
+        html.push_str("        <div class=\"legend-item\"><div class=\"legend-box heat-3\"></div><span>Warm (25%)</span></div>\n");
+        html.push_str("        <div class=\"legend-item\"><div class=\"legend-box heat-5\"></div><span>Hot (50%)</span></div>\n");
+        html.push_str("        <div class=\"legend-item\"><div class=\"legend-box heat-7\"></div><span>Very Hot (100%)</span></div>\n");
+        html.push_str("    </div>\n");
+
+        // Main heatmap table
+        html.push_str("    <h2>Instruction Heatmap</h2>\n");
+        html.push_str("    <table>\n");
+        html.push_str("        <thead>\n");
+        html.push_str("            <tr>\n");
+        html.push_str("                <th class=\"idx\">Index</th>\n");
+        html.push_str("                <th class=\"instr\">Instruction</th>\n");
+        html.push_str("                <th class=\"location\">Location</th>\n");
+        html.push_str("                <th class=\"hits\">Hit Count</th>\n");
+        html.push_str("                <th class=\"bar\">Heat</th>\n");
+        html.push_str("            </tr>\n");
+        html.push_str("        </thead>\n");
+        html.push_str("        <tbody>\n");
+
+        // Find max hits for scaling
+        let max_hits = self.instruction_hits.values().copied().max().unwrap_or(1);
+        let source_bytes = source.as_bytes();
+
+        // Get sorted instruction indices
+        let mut instruction_indices: Vec<usize> = self.instruction_hits.keys().copied().collect();
+        instruction_indices.sort_unstable();
+
+        for &instruction_index in &instruction_indices {
+            let hits = self
+                .instruction_hits
+                .get(&instruction_index)
+                .copied()
+                .unwrap_or(0);
+
+            if let Some(location) = debug_info.lookup(instruction_index) {
+                let instr_char = if location.offset < source_bytes.len() {
+                    let ch = source_bytes[location.offset] as char;
+                    match ch {
+                        '<' => "&lt;",
+                        '>' => "&gt;",
+                        _ => {
+                            // For other chars, we'll use the char itself
+                            // This is a bit hacky but works for single chars
+                            ""
+                        }
+                    }
+                } else {
+                    "?"
+                };
+
+                // Calculate heat level (0-7)
+                let heat_percentage = (hits as f64) / (max_hits as f64);
+                let heat_level = (heat_percentage * 7.0) as usize;
+
+                // Calculate bar width (0-100%)
+                let bar_width = (heat_percentage * 100.0) as usize;
+
+                html.push_str("            <tr>\n");
+                html.push_str(&format!(
+                    "                <td class=\"idx\">{}</td>\n",
+                    instruction_index
+                ));
+
+                // Handle instruction character display
+                if instr_char.is_empty() {
+                    let ch = source_bytes
+                        .get(location.offset)
+                        .map(|&b| b as char)
+                        .unwrap_or('?');
+                    html.push_str(&format!(
+                        "                <td class=\"instr\">{}</td>\n",
+                        ch
+                    ));
+                } else {
+                    html.push_str(&format!(
+                        "                <td class=\"instr\">{}</td>\n",
+                        instr_char
+                    ));
+                }
+
+                html.push_str(&format!(
+                    "                <td class=\"location\">line {}, col {}</td>\n",
+                    location.line, location.column
+                ));
+                html.push_str(&format!(
+                    "                <td class=\"hits\">{}</td>\n",
+                    hits
+                ));
+                html.push_str(&format!("                <td class=\"bar\"><div class=\"bar-fill heat-{}\" style=\"width: {}%;\"></div></td>\n",
+                    heat_level, bar_width));
+                html.push_str("            </tr>\n");
+            }
+        }
+
+        html.push_str("        </tbody>\n");
+        html.push_str("    </table>\n");
+
+        // Source code view
+        html.push_str("    <h2>Source Code</h2>\n");
+        html.push_str("    <div class=\"source-view\">");
+        html.push_str(&source.replace("<", "&lt;").replace(">", "&gt;"));
+        html.push_str("</div>\n");
+
+        html.push_str("</body>\n</html>");
+        html
     }
 
     /// Format profiling results as an ASCII tree.
@@ -1142,6 +1518,19 @@ impl ExecutionHook for ProfilingHook {
         HookDecision::Continue
     }
 
+    fn after_instruction(
+        &mut self,
+        _instruction: &crate::instruction::Instruction,
+        context: &HookContext,
+    ) -> HookDecision {
+        // Track instruction hits
+        *self
+            .instruction_hits
+            .entry(context.instruction_index())
+            .or_insert(0) += 1;
+        HookDecision::Continue
+    }
+
     fn on_complete(&mut self, _context: &HookContext) {
         self.total_time = self.start_time.elapsed();
     }
@@ -1188,6 +1577,17 @@ impl ExecutionHook for SharedProfilingHook {
 
     fn on_loop_exit(&mut self, context: &HookContext) -> HookDecision {
         self.shared.lock().unwrap().on_loop_exit(context)
+    }
+
+    fn after_instruction(
+        &mut self,
+        instruction: &crate::instruction::Instruction,
+        context: &HookContext,
+    ) -> HookDecision {
+        self.shared
+            .lock()
+            .unwrap()
+            .after_instruction(instruction, context)
     }
 
     fn on_complete(&mut self, context: &HookContext) {

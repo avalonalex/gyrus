@@ -211,10 +211,11 @@ mod unit_tests {
                 assert_eq!(loc.line, 1); // Single line program
                 assert!(loc.column >= 1); // Valid column
                 assert!(loc.offset < source.len()); // Within source bounds
-                // instruction_index should be in the loop body (> or + instruction)
+                // instruction_index can be at `[` (checking loop condition) or in loop body (> or + instruction)
+                // With the fix that counts `[` instruction checks, we can hit the limit at the `[` itself
                 assert!(
-                    instruction_index == 2 || instruction_index == 3,
-                    "Should be at > or + in loop body, got {}",
+                    instruction_index == 1 || instruction_index == 2 || instruction_index == 3,
+                    "Should be at [ or in loop body (> or +), got {}",
                     instruction_index
                 );
             }
