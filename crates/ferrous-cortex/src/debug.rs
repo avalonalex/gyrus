@@ -17,8 +17,8 @@
 //!
 //! The flat indices in execution order would be:
 //! - `0` → first `+`
-//! - `1` → `[` loop start
-//! - `2` → `>` inside loop (first instruction in loop body)
+//! - `1` → first `[` start of the loop
+//! - `2` → `>` inside loop
 //! - `3` → `+` inside loop
 //! - `4` → `<` inside loop (back to index 1 if cell != 0, else continue)
 //! - `5` → `-` after loop
@@ -43,12 +43,11 @@ use std::collections::HashMap;
 /// through the loop body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopMetadata {
-    /// Flat index of the '[' instruction that starts this loop
+    /// Flat index of the '[' instruction that starts this loop.
+    ///
+    /// After the loop parsing refactoring, this points to the LoopCheck instruction,
+    /// which implements the '[' bracket's condition check.
     pub loop_start_index: usize,
-
-    /// Flat index of the first instruction inside the loop body
-    /// This is `loop_start_index + 1`
-    pub body_start_index: usize,
 
     /// Number of instructions in the loop body (excluding the '[' and ']')
     pub body_size: usize,
@@ -221,7 +220,6 @@ mod tests {
         // Simple loop: +[>+<-] at indices 0,1,2,3,4,5
         let metadata = LoopMetadata {
             loop_start_index: 1,
-            body_start_index: 2,
             body_size: 4,
             parent_loop: None,
             source_location: SourceLocation::new(1, 2, 1),
@@ -241,7 +239,6 @@ mod tests {
         // Outer loop: +[>+[<.>-]<-] at indices 0,1,2,3,4,5,6,7,8,9
         let outer = LoopMetadata {
             loop_start_index: 1,
-            body_start_index: 2,
             body_size: 8,
             parent_loop: None,
             source_location: SourceLocation::new(1, 2, 1),
@@ -250,7 +247,6 @@ mod tests {
         // Inner loop: [<.>-] at indices 4,5,6,7
         let inner = LoopMetadata {
             loop_start_index: 4,
-            body_start_index: 5,
             body_size: 3,
             parent_loop: Some(1),
             source_location: SourceLocation::new(1, 5, 4),
@@ -275,7 +271,6 @@ mod tests {
         // Triple nested: +++[>+[>+[>+<-]<-]<-]
         let outer = LoopMetadata {
             loop_start_index: 3,
-            body_start_index: 4,
             body_size: 14,
             parent_loop: None,
             source_location: SourceLocation::new(1, 4, 3),
@@ -283,7 +278,6 @@ mod tests {
 
         let middle = LoopMetadata {
             loop_start_index: 6,
-            body_start_index: 7,
             body_size: 9,
             parent_loop: Some(3),
             source_location: SourceLocation::new(1, 7, 6),
@@ -291,7 +285,6 @@ mod tests {
 
         let inner = LoopMetadata {
             loop_start_index: 9,
-            body_start_index: 10,
             body_size: 4,
             parent_loop: Some(6),
             source_location: SourceLocation::new(1, 10, 9),
