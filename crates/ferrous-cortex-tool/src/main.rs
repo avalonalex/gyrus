@@ -3,8 +3,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use ferrous_cortex::{
-    BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells, minify, parse_with_debug,
+    BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
+    codegen::compile_string,
+    minify, parse_with_debug,
     syntax::{ColorTheme, SyntaxHighlighter},
+    test_utils::random::{RandomProgramConfig, generate_random_program},
     validate,
 };
 
@@ -86,6 +89,43 @@ enum Commands {
         #[arg(long)]
         plain: bool,
     },
+
+    /// Generate random BrainFuck program
+    Generate {
+        /// Average number of commands in the program
+        #[arg(short = 'l', long, default_value = "50")]
+        length: usize,
+
+        /// Maximum loop nesting depth
+        #[arg(short = 'd', long, default_value = "3")]
+        max_depth: usize,
+
+        /// Probability of adding loops (0.0 to 1.0)
+        #[arg(short = 'p', long, default_value = "0.3")]
+        loop_probability: f64,
+
+        /// Output file (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Show generation statistics
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Compile string to BrainFuck program
+    Compile {
+        /// Text to compile into a BrainFuck program
+        text: String,
+
+        /// Output file (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Show compilation statistics
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 fn main() {
@@ -121,6 +161,18 @@ fn run() -> Result<(), BfError> {
             theme,
             plain,
         } => run_view(file, line_numbers, theme, plain),
+        Commands::Generate {
+            length,
+            max_depth,
+            loop_probability,
+            output,
+            verbose,
+        } => run_generate(length, max_depth, loop_probability, output, verbose),
+        Commands::Compile {
+            text,
+            output,
+            verbose,
+        } => run_compile(text, output, verbose),
     }
 }
 
@@ -315,6 +367,105 @@ fn run_view(file: PathBuf, line_numbers: bool, theme: String, plain: bool) -> Re
         print!("{}", highlighted.to_plain());
     } else {
         print!("{}", highlighted.to_ansi());
+    }
+
+    Ok(())
+}
+
+fn run_generate(
+    length: usize,
+    max_depth: usize,
+    loop_probability: f64,
+    output: Option<PathBuf>,
+    verbose: bool,
+) -> Result<(), BfError> {
+    // Validate parameters
+    if !(0.0..=1.0).contains(&loop_probability) {
+        eprintln!(
+            "Error: loop-probability must be between 0.0 and 1.0, got {}",
+            loop_probability
+        );
+        std::process::exit(1);
+    }
+
+    // Create configuration
+    let config = RandomProgramConfig {
+        max_depth,
+        avg_commands: length,
+        loop_probability,
+    };
+
+    if verbose {
+        eprintln!("Generating random BrainFuck program...");
+        eprintln!("  Length: {} commands (average)", length);
+        eprintln!("  Max depth: {} levels", max_depth);
+        eprintln!("  Loop probability: {:.1}%", loop_probability * 100.0);
+    }
+
+    // Generate the program
+    let mut rng = rand::thread_rng();
+    let program = generate_random_program(&mut rng, &config);
+
+    // Output
+    if let Some(output_path) = &output {
+        // Write to file
+        fs::write(output_path, &program).map_err(|source_err| BfError::FileError {
+            path: output_path.clone(),
+            source: source_err,
+            hint: format!(
+                "Make sure you have write permission for: {}",
+                output_path.display()
+            ),
+        })?;
+
+        if verbose {
+            eprintln!("Generated {} bytes", program.len());
+            eprintln!("Output written to: {}", output_path.display());
+        }
+    } else {
+        // Write to stdout
+        println!("{}", program);
+
+        if verbose {
+            eprintln!("Generated {} bytes", program.len());
+        }
+    }
+
+    Ok(())
+}
+
+fn run_compile(text: String, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {
+    if verbose {
+        eprintln!("Compiling string to BrainFuck...");
+        eprintln!("  Input: {} characters", text.len());
+    }
+
+    // Compile to BF
+    let program = compile_string(&text);
+
+    // Output
+    if let Some(output_path) = &output {
+        // Write to file
+        fs::write(output_path, &program).map_err(|source_err| BfError::FileError {
+            path: output_path.clone(),
+            source: source_err,
+            hint: format!(
+                "Make sure you have write permission for: {}",
+                output_path.display()
+            ),
+        })?;
+
+        if verbose {
+            eprintln!("Generated {} bytes of BrainFuck code", program.len());
+            eprintln!("Output written to: {}", output_path.display());
+        }
+    } else {
+        // Write to stdout
+        println!("{}", program);
+
+        if verbose {
+            eprintln!("Generated {} bytes of BrainFuck code", program.len());
+        }
     }
 
     Ok(())
