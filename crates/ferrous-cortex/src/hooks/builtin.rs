@@ -105,7 +105,9 @@ use crate::error::RuntimeWarning;
 use crate::instruction::Instruction;
 use crate::stats::ExecutionStats;
 use crate::types::{InstructionIndex, MemoryAddress, MemorySize};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
+use termcolor::{Ansi, Color, ColorSpec, WriteColor};
 
 /// Built-in hook for tracking execution statistics.
 ///
@@ -1053,20 +1055,20 @@ impl ProfilingHook {
                 // Not executed: dim blue
                 (50, 50, 150)
             } else if heat < 0.2 {
-                // Cold: blue
-                (0, 150, 255)
-            } else if heat < 0.4 {
-                // Cool: cyan
+                // Cold: cyan
                 (0, 200, 200)
-            } else if heat < 0.6 {
-                // Warm: green-yellow
+            } else if heat < 0.4 {
+                // Cool: green-yellow
                 (150, 200, 0)
-            } else if heat < 0.8 {
-                // Hot: yellow-orange
+            } else if heat < 0.6 {
+                // Warm: yellow
                 (255, 200, 0)
-            } else {
-                // Very hot: red
+            } else if heat < 0.8 {
+                // Hot: red
                 (255, 50, 0)
+            } else {
+                // Very hot: white (for clear distinction from hot)
+                (255, 255, 255)
             }
         };
 
@@ -1099,7 +1101,15 @@ impl ProfilingHook {
 
                 if in_line_comment || !matches!(ch, '>' | '<' | '+' | '-' | ',' | '.' | '[' | ']') {
                     // Comment or non-BF character: gray it out
-                    write!(&mut output, "\x1b[38;2;100;100;100m{}\x1b[0m", ch).unwrap();
+                    let mut buffer = Vec::new();
+                    {
+                        let mut writer = Ansi::new(&mut buffer);
+                        let mut color_spec = ColorSpec::new();
+                        color_spec.set_fg(Some(Color::Rgb(100, 100, 100)));
+                        writer.set_color(&color_spec).unwrap();
+                        write!(writer, "{}", ch).unwrap();
+                    } // writer is dropped here, flushing to buffer
+                    output.push_str(&String::from_utf8(buffer).unwrap());
                 } else {
                     // BF instruction: apply heat color
                     if let Some(&instruction_index) = char_to_instruction.get(&char_offset) {
@@ -1121,11 +1131,27 @@ impl ProfilingHook {
                         };
 
                         let (r, g, b) = heat_to_color(heat);
-                        write!(&mut output, "\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, ch).unwrap();
+                        let mut buffer = Vec::new();
+                        {
+                            let mut writer = Ansi::new(&mut buffer);
+                            let mut color_spec = ColorSpec::new();
+                            color_spec.set_fg(Some(Color::Rgb(r, g, b)));
+                            writer.set_color(&color_spec).unwrap();
+                            write!(writer, "{}", ch).unwrap();
+                        } // writer is dropped here, flushing to buffer
+                        output.push_str(&String::from_utf8(buffer).unwrap());
                     } else {
                         // BF instruction but no hit data: treat as unexecuted (dim blue)
                         let (r, g, b) = heat_to_color(0.0);
-                        write!(&mut output, "\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, ch).unwrap();
+                        let mut buffer = Vec::new();
+                        {
+                            let mut writer = Ansi::new(&mut buffer);
+                            let mut color_spec = ColorSpec::new();
+                            color_spec.set_fg(Some(Color::Rgb(r, g, b)));
+                            writer.set_color(&color_spec).unwrap();
+                            write!(writer, "{}", ch).unwrap();
+                        } // writer is dropped here, flushing to buffer
+                        output.push_str(&String::from_utf8(buffer).unwrap());
                     }
                 }
             }
@@ -1153,45 +1179,82 @@ impl ProfilingHook {
             }
         };
 
-        let legend_steps = vec![
-            (0.0, "not executed (0 hits)".to_string()),
-            (0.2, format!("cold (1-{} hits)", hits_at_heat(0.2))),
+        // Build legend items with labels and hit counts
+        // Use mid-range heat values for accurate color representation in legend
+        let legend_items = vec![
+            (0.0, "not executed", "(0 hits)".to_string()),
+            (0.1, "cold", format!("(1-{} hits)", hits_at_heat(0.2))),
             (
-                0.4,
-                format!(
-                    "cool ({}-{} hits)",
-                    hits_at_heat(0.2) + 1,
-                    hits_at_heat(0.4)
-                ),
+                0.3,
+                "cool",
+                format!("({}-{} hits)", hits_at_heat(0.2) + 1, hits_at_heat(0.4)),
             ),
             (
-                0.6,
-                format!(
-                    "warm ({}-{} hits)",
-                    hits_at_heat(0.4) + 1,
-                    hits_at_heat(0.6)
-                ),
+                0.5,
+                "warm",
+                format!("({}-{} hits)", hits_at_heat(0.4) + 1, hits_at_heat(0.6)),
             ),
             (
-                0.8,
-                format!("hot ({}-{} hits)", hits_at_heat(0.6) + 1, hits_at_heat(0.8)),
+                0.7,
+                "hot",
+                format!("({}-{} hits)", hits_at_heat(0.6) + 1, hits_at_heat(0.8)),
             ),
             (
-                1.0,
-                format!("very hot ({}-{} hits)", hits_at_heat(0.8) + 1, max_hits_u64),
+                0.9,
+                "very hot",
+                format!("({}-{} hits)", hits_at_heat(0.8) + 1, max_hits_u64),
             ),
         ];
 
-        for (heat, label) in legend_steps {
-            let (r, g, b) = heat_to_color(heat);
+        // Calculate max widths for dynamic spacing
+        let max_label_width = legend_items
+            .iter()
+            .map(|(_, label, _)| label.len())
+            .max()
+            .unwrap_or(0);
+        let max_hits_width = legend_items
+            .iter()
+            .map(|(_, _, hits)| hits.len())
+            .max()
+            .unwrap_or(0);
+
+        // Determine layout based on hit string length
+        // If hit counts are long (e.g., "(8007-75735 hits)"), use 2 per row (3 rows)
+        // Otherwise use 3 per row (2 rows)
+        let items_per_row = if max_hits_width > 16 { 2 } else { 3 };
+
+        for (i, (heat, label, hits)) in legend_items.iter().enumerate() {
+            let (r, g, b) = heat_to_color(*heat);
+
+            // Write colored dot using termcolor
+            let mut buffer = Vec::new();
+            let mut writer = Ansi::new(&mut buffer);
+            let mut color_spec = ColorSpec::new();
+            color_spec.set_fg(Some(Color::Rgb(r, g, b)));
+            writer.set_color(&color_spec).unwrap();
+            write!(writer, "●").unwrap();
+            writer.reset().unwrap();
+            output.push_str("  ");
+            output.push_str(&String::from_utf8(buffer).unwrap());
+
+            // Write label and hits without color
             write!(
                 &mut output,
-                "  \x1b[38;2;{};{};{}m●\x1b[0m {}",
-                r, g, b, label
+                " {:<width_label$} {:<width_hits$}",
+                label,
+                hits,
+                width_label = max_label_width,
+                width_hits = max_hits_width
             )
             .unwrap();
-            if heat < 1.0 {
-                write!(&mut output, "   ").unwrap();
+
+            // Add spacing or newline
+            if (i + 1) % items_per_row == 0 && i < legend_items.len() - 1 {
+                // End of row, start new line
+                writeln!(&mut output).unwrap();
+            } else if i < legend_items.len() - 1 {
+                // Between items on same line, add consistent spacing
+                write!(&mut output, "     ").unwrap();
             }
         }
         writeln!(&mut output).unwrap();

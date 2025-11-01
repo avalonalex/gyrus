@@ -136,6 +136,7 @@ pub(crate) fn extract_source_context(source: &str, location: SourceLocation) -> 
 /// Extract source context with syntax highlighting
 pub(crate) fn extract_source_context_highlighted(source: &str, location: SourceLocation) -> String {
     use crate::syntax::SyntaxHighlighter;
+    use termcolor::{Ansi, Color, ColorSpec, WriteColor};
 
     // Highlight the entire source
     let highlighter = SyntaxHighlighter::new().show_line_numbers(true);
@@ -157,7 +158,18 @@ pub(crate) fn extract_source_context_highlighted(source: &str, location: SourceL
     // Point at the instruction before the error (the last successful one)
     // Column is 1-indexed: (column-2) for prev char + 8 for prefix = column + 6
     let spaces = " ".repeat(location.column + 6);
-    writeln!(buffer, "{}\x1b[1;31m^\x1b[0m", spaces).expect("write to Vec should not fail");
+    let mut ansi_writer = Ansi::new(&mut buffer);
+    write!(ansi_writer, "{}", spaces).expect("write to Vec should not fail");
+
+    let mut caret_spec = ColorSpec::new();
+    caret_spec.set_fg(Some(Color::Red));
+    caret_spec.set_bold(true);
+    ansi_writer
+        .set_color(&caret_spec)
+        .expect("set color should not fail");
+    write!(ansi_writer, "^").expect("write to Vec should not fail");
+    ansi_writer.reset().expect("reset should not fail");
+    writeln!(ansi_writer).expect("write to Vec should not fail");
 
     // Write remaining lines after the error line
     if line_idx + 1 < end_line {
