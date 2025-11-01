@@ -17,6 +17,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 thiserror.workspace = true
 termcolor = "1.4"  # Cross-platform terminal colors
+rand = "0.8"  # Random program generation for fuzzing/testing
 
 [dev-dependencies]
 proptest = "1.5"  # Property-based testing
