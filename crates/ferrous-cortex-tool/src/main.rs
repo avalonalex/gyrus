@@ -403,7 +403,7 @@ fn run_generate(
     }
 
     // Generate the program
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let program = generate_random_program(&mut rng, &config);
 
     // Output

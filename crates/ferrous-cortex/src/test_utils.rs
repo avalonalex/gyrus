@@ -146,9 +146,9 @@ pub mod random {
         let mut result = String::new();
 
         // Generate random commands
-        let num_commands = rng.gen_range(0..config.avg_commands);
+        let num_commands = rng.random_range(0..config.avg_commands);
         for _ in 0..num_commands {
-            let cmd = match rng.gen_range(0..8) {
+            let cmd = match rng.random_range(0..8) {
                 0 => '+',
                 1 => '-',
                 2 => '>',
@@ -162,7 +162,7 @@ pub mod random {
         }
 
         // Maybe add a loop if we haven't reached max depth
-        if depth < config.max_depth && rng.gen_bool(config.loop_probability) {
+        if depth < config.max_depth && rng.random_bool(config.loop_probability) {
             result.push('[');
             result.push_str(&generate_recursive(rng, config, depth + 1));
             result.push(']');
