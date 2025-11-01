@@ -712,9 +712,10 @@ impl<'a> HookDispatcher<'a> {
 fn count_instructions(instructions: &[Instruction]) -> usize {
     let mut count = 0;
     for instruction in instructions {
-        count += 1; // Count this instruction
         if let Instruction::Loop(body) = instruction {
             count += count_instructions(body); // Recursively count loop body
+        } else {
+            count += 1; // Count this instruction
         }
     }
     count
@@ -924,7 +925,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
         // For loops, we need to account for all instructions in the body
         match instruction {
             Instruction::Loop(body) => {
-                local_index += 1 + count_instructions(body);
+                local_index += count_instructions(body);
             }
             _ => {
                 local_index += 1;
@@ -2503,7 +2504,7 @@ mod tests {
         }
     }
 
-    // Phase 2: Instruction index tracking tests
+    // Instruction index tracking tests
     #[test]
     fn test_instruction_index_simple_program() {
         use crate::parser::parse_with_debug;
@@ -2541,7 +2542,7 @@ mod tests {
         // New index mapping: 0-1: ++, 2: LoopCheck, 3-6: >+<-
         assert_eq!(debug_info.loop_count(), 1);
         let loop_meta = debug_info.get_loop_metadata(2).unwrap();
-        assert_eq!(loop_meta.body_start_index, 2); // Body starts with LoopCheck
+        assert_eq!(loop_meta.loop_start_index, 2); // Body starts with LoopCheck
         assert_eq!(loop_meta.body_size, 5); // LoopCheck + >+<- = 5 instructions
     }
 
@@ -2564,20 +2565,19 @@ mod tests {
         assert_eq!(debug_info.loop_count(), 2);
 
         let outer = debug_info.get_loop_metadata(1).unwrap();
-        assert_eq!(outer.body_start_index, 1); // Body starts with LoopCheck
+        assert_eq!(outer.loop_start_index, 1); // Body starts with LoopCheck
         assert_eq!(outer.parent_loop, None);
 
         let inner = debug_info.get_loop_metadata(4).unwrap();
-        assert_eq!(inner.body_start_index, 4); // Body starts with LoopCheck
+        assert_eq!(inner.loop_start_index, 4); // Body starts with LoopCheck
         assert_eq!(inner.parent_loop, Some(1));
     }
 
-    // Phase 2: End-to-end test demonstrating source location tracking in loops
+    // End-to-end test demonstrating source location tracking in loops
     #[test]
-    fn test_phase2_source_location_after_many_loop_iterations() {
+    fn test_source_location_after_many_loop_iterations() {
         use crate::parser::parse_with_debug;
 
-        // This test demonstrates the core value of Phase 2:
         // Even after MANY loop iterations (high step count), we can still
         // accurately report the source location of the error.
         //
@@ -2605,11 +2605,7 @@ mod tests {
             Err(BfError::MemoryOutOfBounds {
                 source_location, ..
             }) => {
-                // Phase 2 SUCCESS: We have a source location!
-                assert!(
-                    source_location.is_some(),
-                    "Phase 2 should provide source location"
-                );
+                assert!(source_location.is_some(), "Should provide source location");
 
                 let loc = source_location.unwrap();
                 // The error happens at the second '>' instruction (column 5)
@@ -2624,9 +2620,9 @@ mod tests {
         }
     }
 
-    // Phase 2: Test loop call stack in nested loops
+    // Test loop call stack in nested loops
     #[test]
-    fn test_phase2_loop_call_stack_nested_loops() {
+    fn test_loop_call_stack_nested_loops() {
         use crate::parser::parse_with_debug;
 
         // Program with nested loops that triggers error in inner loop
@@ -2661,10 +2657,7 @@ mod tests {
                 ..
             }) => {
                 // Verify source location
-                assert!(
-                    source_location.is_some(),
-                    "Phase 2 should provide source location"
-                );
+                assert!(source_location.is_some(), "Should provide source location");
                 let loc = source_location.unwrap();
                 assert_eq!(loc.line, 1);
                 // Error at second '>' inside inner loop (column 9)
@@ -2672,11 +2665,8 @@ mod tests {
                 // Columns: 1234567890123
                 assert_eq!(loc.column, 9, "Error at second '>' inside inner loop");
 
-                // Phase 2 SUCCESS: Verify loop call stack exists
-                assert!(
-                    loop_call_stack.is_some(),
-                    "Phase 2 should provide loop call stack"
-                );
+                // Verify loop call stack exists
+                assert!(loop_call_stack.is_some(), "Should provide loop call stack");
 
                 let stack = loop_call_stack.unwrap();
                 assert_eq!(stack.len(), 2, "Should have 2 frames: outer and inner loop");
@@ -2700,13 +2690,13 @@ mod tests {
         }
     }
 
-    // Phase 2: Test loop call stack with many iterations
+    // Test loop call stack with many iterations
     #[test]
-    fn test_phase2_loop_call_stack_many_iterations() {
+    fn test_loop_call_stack_many_iterations() {
         use crate::parser::parse_with_debug;
 
         // Program that runs multiple iterations before error
-        // Use the proven pattern from test_phase2_source_location_after_many_loop_iterations
+        // Use the proven pattern from test_source_location_after_many_loop_iterations
         // ++[>>+] with small memory
         // This creates an "infinite" loop that keeps moving right and incrementing
         // Eventually it will go out of bounds
@@ -2729,10 +2719,7 @@ mod tests {
             Err(BfError::MemoryOutOfBounds {
                 loop_call_stack, ..
             }) => {
-                assert!(
-                    loop_call_stack.is_some(),
-                    "Phase 2 should provide loop call stack"
-                );
+                assert!(loop_call_stack.is_some(), "Should provide loop call stack");
 
                 let stack = loop_call_stack.unwrap();
                 assert_eq!(stack.len(), 1, "Should have 1 frame: the loop");
@@ -2748,9 +2735,9 @@ mod tests {
         }
     }
 
-    // Phase 2: Test loop call stack formatting
+    // Test loop call stack formatting
     #[test]
-    fn test_phase2_loop_call_stack_formatting() {
+    fn test_loop_call_stack_formatting() {
         use crate::parser::parse_with_debug;
 
         // Use the proven nested loop pattern from earlier test
@@ -2782,9 +2769,9 @@ mod tests {
         }
     }
 
-    // Phase 2: Test triple nested loops
+    // Test triple nested loops
     #[test]
-    fn test_phase2_triple_nested_loop_call_stack() {
+    fn test_triple_nested_loop_call_stack() {
         use crate::parser::parse_with_debug;
 
         // Triple nested loop
@@ -2825,11 +2812,11 @@ mod tests {
     }
 
     // ===================================================================
-    // Phase 2 Debugging Tests: Deep Nested Loops with Overflow
+    //          Debugging Tests: Deep Nested Loops with Overflow
     // ===================================================================
     //
-    // These tests verify that Phase 2 correctly tracks source locations
-    // and loop call stacks in complex nested loop scenarios with memory
+    // These tests verify that We correctly tracks source locations and
+    // loop call stacks in complex nested loop scenarios with memory
     // overflow near boundaries.
     //
     // Strategy: Use 100-cell memory and move pointer close to boundary
@@ -2837,7 +2824,7 @@ mod tests {
     // overflow while verifying loop call stack is correct.
 
     #[test]
-    fn test_phase2_debug_double_nested_overflow() {
+    fn test_debug_double_nested_overflow() {
         use crate::parser::parse_with_debug;
 
         // Strategy: Move pointer to cell 90, then use nested loops to overflow
@@ -2916,7 +2903,7 @@ mod tests {
     }
 
     #[test]
-    fn test_phase2_debug_triple_nested_overflow() {
+    fn test_debug_triple_nested_overflow() {
         use crate::parser::parse_with_debug;
 
         // Strategy: Move pointer to cell 85, then use triple nested loops
@@ -2977,7 +2964,7 @@ mod tests {
     }
 
     #[test]
-    fn test_phase2_debug_quad_nested_overflow() {
+    fn test_debug_quad_nested_overflow() {
         use crate::parser::parse_with_debug;
 
         // 4-level deep nesting
@@ -3034,7 +3021,7 @@ mod tests {
     }
 
     #[test]
-    fn test_phase2_debug_realistic_scenario() {
+    fn test_debug_realistic_scenario() {
         use crate::parser::parse_with_debug;
 
         // Realistic scenario: Program that does some work then overflows
@@ -3091,7 +3078,6 @@ mod tests {
 
     // Tests for profiling instruction hit counts
     #[test]
-    #[ignore] // TODO: Fix after loop parsing refactor - LoopCheck counting changed
     fn test_profiling_simple_loop_instruction_counts() {
         use crate::hooks::builtin::{ProfilingHook, SharedProfilingHook};
         use crate::parser::parse_with_debug;
@@ -3157,7 +3143,7 @@ mod tests {
 
         // Indices: 0-4 are +++++, 5 is [, 6 is LoopCheck, 7-10 are >++<, 11 is -, 12 is >, 13 is .
         // LoopCheck and loop body (>++<-) should all have same count (5 iterations)
-        let loop_body_hits: Vec<u64> = (6..=11)
+        let loop_body_hits: Vec<u64> = (5..=10)
             .map(|idx| *profiler.instruction_hits().get(&idx).unwrap_or(&0))
             .collect();
 
@@ -3325,7 +3311,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix after loop parsing refactor - instruction indices shifted
     fn test_profiling_instruction_indices_no_overlap() {
         use crate::hooks::builtin::{ProfilingHook, SharedProfilingHook};
         use crate::parser::parse_with_debug;
@@ -3362,5 +3347,172 @@ mod tests {
                 indices[i + 1]
             );
         }
+    }
+
+    // Unit tests for count_instructions helper function
+    #[test]
+    fn test_count_instructions_empty() {
+        let instructions: Vec<Instruction> = vec![];
+        assert_eq!(count_instructions(&instructions), 0);
+    }
+
+    #[test]
+    fn test_count_instructions_single() {
+        let instructions = vec![Instruction::IncrementValue];
+        assert_eq!(count_instructions(&instructions), 1);
+
+        let instructions = vec![Instruction::Output];
+        assert_eq!(count_instructions(&instructions), 1);
+    }
+
+    #[test]
+    fn test_count_instructions_multiple() {
+        let instructions = vec![
+            Instruction::IncrementValue,
+            Instruction::IncrementPointer,
+            Instruction::Output,
+        ];
+        assert_eq!(count_instructions(&instructions), 3);
+
+        let instructions = vec![
+            Instruction::IncrementValue,
+            Instruction::IncrementValue,
+            Instruction::DecrementPointer,
+            Instruction::DecrementValue,
+            Instruction::Input,
+        ];
+        assert_eq!(count_instructions(&instructions), 5);
+    }
+
+    #[test]
+    fn test_count_instructions_single_loop() {
+        // Loop with body: Loop + LoopCheck + body instructions
+        let loop_body = vec![
+            Instruction::LoopCheck,
+            Instruction::IncrementValue,
+            Instruction::DecrementPointer,
+        ];
+        let instructions = vec![Instruction::Loop(loop_body)];
+
+        // Count: 3 (body: LoopCheck + IncrementValue + DecrementPointer) = 3
+        assert_eq!(count_instructions(&instructions), 3);
+    }
+
+    #[test]
+    fn test_count_instructions_empty_loop() {
+        // Loop with only LoopCheck (no other body instructions)
+        let loop_body = vec![Instruction::LoopCheck];
+        let instructions = vec![Instruction::Loop(loop_body)];
+
+        // Count: 1 (LoopCheck) =
+        assert_eq!(count_instructions(&instructions), 1);
+    }
+
+    #[test]
+    fn test_count_instructions_nested_loops() {
+        // Inner loop: [LoopCheck, IncrementValue]
+        let inner_loop = vec![Instruction::LoopCheck, Instruction::IncrementValue];
+
+        // Outer loop: [LoopCheck, IncrementPointer, Loop(inner), DecrementPointer]
+        let outer_loop_body = vec![
+            Instruction::LoopCheck,
+            Instruction::IncrementPointer,
+            Instruction::Loop(inner_loop),
+            Instruction::DecrementPointer,
+        ];
+
+        let instructions = vec![Instruction::Loop(outer_loop_body)];
+
+        // Count breakdown:
+        // - Outer body: LoopCheck (1) + IncrementPointer (1) + DecrementPointer (1) = 3
+        // - Inner body: LoopCheck (1) + IncrementValue (1) = 2
+        // Total: 3 + 2 = 5
+        assert_eq!(count_instructions(&instructions), 5);
+    }
+
+    #[test]
+    fn test_count_instructions_sibling_loops() {
+        // First loop: [LoopCheck, IncrementValue]
+        let loop1 = vec![Instruction::LoopCheck, Instruction::IncrementValue];
+
+        // Second loop: [LoopCheck, DecrementValue, Output]
+        let loop2 = vec![
+            Instruction::LoopCheck,
+            Instruction::DecrementValue,
+            Instruction::Output,
+        ];
+
+        let instructions = vec![
+            Instruction::IncrementPointer,
+            Instruction::Loop(loop1),
+            Instruction::DecrementPointer,
+            Instruction::Loop(loop2),
+        ];
+
+        // Count breakdown:
+        // - IncrementPointer: 1
+        // - First loop body: LoopCheck (1) + IncrementValue (1) = 2
+        // - DecrementPointer: 1
+        // - Second loop body: LoopCheck (1) + DecrementValue (1) + Output (1) = 3
+        // Total: 1 + 2 + 1 + 3 = 7
+        assert_eq!(count_instructions(&instructions), 7);
+    }
+
+    #[test]
+    fn test_count_instructions_deeply_nested() {
+        // Triple nested loops
+        // Innermost: [LoopCheck, Output]
+        let innermost = vec![Instruction::LoopCheck, Instruction::Output];
+
+        // Middle: [LoopCheck, Loop(innermost), IncrementValue]
+        let middle = vec![
+            Instruction::LoopCheck,
+            Instruction::Loop(innermost),
+            Instruction::IncrementValue,
+        ];
+
+        // Outer: [LoopCheck, Loop(middle)]
+        let outer = vec![Instruction::LoopCheck, Instruction::Loop(middle)];
+
+        let instructions = vec![Instruction::Loop(outer)];
+
+        // Count breakdown:
+        // - Outermost body: LoopCheck (1) = 1
+        // - Middle body: LoopCheck (1) + IncrementValue (1) = 2
+        // - Innermost body: LoopCheck (1) + Output (1) = 2
+        // Total: 1 + 2 + 2 = 8
+        assert_eq!(count_instructions(&instructions), 5);
+    }
+
+    #[test]
+    fn test_count_instructions_complex_mixed() {
+        // Complex case: mix of instructions and nested loops
+        // Inner loop: [LoopCheck, DecrementValue]
+        let inner = vec![Instruction::LoopCheck, Instruction::DecrementValue];
+
+        // Outer loop: [LoopCheck, IncrementPointer, Loop(inner), DecrementPointer, Output]
+        let outer_body = vec![
+            Instruction::LoopCheck,
+            Instruction::IncrementPointer,
+            Instruction::Loop(inner),
+            Instruction::DecrementPointer,
+            Instruction::Output,
+        ];
+
+        let instructions = vec![
+            Instruction::IncrementValue,
+            Instruction::IncrementValue,
+            Instruction::Loop(outer_body),
+            Instruction::DecrementValue,
+        ];
+
+        // Count breakdown:
+        // - IncrementValue: 1
+        // - IncrementValue: 1
+        // - Outer body: LoopCheck (1) + IncrementPointer (1) + DecrementPointer (1) + Output (1) = 4
+        // - Inner body: LoopCheck (1) + DecrementValue (1) = 2
+        // - DecrementValue: 1
+        // Total: 1 + 1 + 1 + 4 + 2 = 9
+        assert_eq!(count_instructions(&instructions), 9);
     }
 }

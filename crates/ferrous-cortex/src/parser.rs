@@ -246,7 +246,6 @@ fn parse_block_with_debug(
                 // The '[' bracket IS the condition check, implemented by LoopCheck.
                 // We record only ONE step for the LoopCheck instruction.
                 let loop_start_index = *step_index;
-                let body_start_index = *step_index; // LoopCheck is first in body
 
                 debug_info.record(*step_index, loop_location);
                 *step_index += 1;
@@ -268,10 +267,9 @@ fn parse_block_with_debug(
                 body_with_check.extend(loop_body);
 
                 // Record loop metadata (body_size includes LoopCheck)
-                let body_size = *step_index - body_start_index;
+                let body_size = *step_index - loop_start_index;
                 debug_info.record_loop_metadata(crate::debug::LoopMetadata {
                     loop_start_index,
-                    body_start_index,
                     body_size,
                     parent_loop: parent_loop_index,
                     source_location: loop_location,
@@ -745,9 +743,8 @@ mod loop_metadata_tests {
     #[test]
     fn test_simple_loop_metadata() {
         // Simple: +[>+<-]
-        // New index mapping (Loop instruction doesn't count as step):
         // 0: +
-        // 1: LoopCheck (this IS the '[' condition check)
+        // 1: [ <-- loop
         // 2: >
         // 3: +
         // 4: <
@@ -760,7 +757,6 @@ mod loop_metadata_tests {
 
         let metadata = debug_info.get_loop_metadata(1).unwrap();
         assert_eq!(metadata.loop_start_index, 1); // LoopCheck is at index 1
-        assert_eq!(metadata.body_start_index, 1); // Body starts with LoopCheck
         assert_eq!(metadata.body_size, 5); // LoopCheck + >+<- = 5 instructions
         assert_eq!(metadata.parent_loop, None); // Top-level loop
         assert_eq!(metadata.source_location.line, 1);
@@ -772,10 +768,10 @@ mod loop_metadata_tests {
         // Nested: +[>+[<.>-]<-]
         // New index mapping (Loop instructions don't count as steps):
         // 0: +
-        // 1: LoopCheck (outer - this IS the '[')
+        // 1: [ <-- outer loop
         // 2: >
         // 3: +
-        // 4: LoopCheck (inner - this IS the second '[')
+        // 4: [ <-- inner loop
         // 5: <
         // 6: .
         // 7: >
@@ -791,14 +787,12 @@ mod loop_metadata_tests {
         // Outer loop
         let outer = debug_info.get_loop_metadata(1).unwrap();
         assert_eq!(outer.loop_start_index, 1);
-        assert_eq!(outer.body_start_index, 1);
         assert_eq!(outer.body_size, 10); // LoopCheck + >+[<.>-]<- = 10 instructions
         assert_eq!(outer.parent_loop, None);
 
         // Inner loop
         let inner = debug_info.get_loop_metadata(4).unwrap();
         assert_eq!(inner.loop_start_index, 4);
-        assert_eq!(inner.body_start_index, 4);
         assert_eq!(inner.body_size, 5); // LoopCheck + <.>- = 5 instructions
         assert_eq!(inner.parent_loop, Some(1)); // Parent is outer loop
     }
@@ -808,13 +802,13 @@ mod loop_metadata_tests {
         // Triple nested: +++[>+[>+[>+<-]<-]<-]
         // New index mapping:
         // 0-2: +++
-        // 3: LoopCheck (outer)
+        // 3: [ <-- outer loop
         // 4: >
         // 5: +
-        // 6: LoopCheck (middle)
+        // 6: [ <-- middle loop
         // 7: >
         // 8: +
-        // 9: LoopCheck (inner)
+        // 9: [ <-- inner loop
         // 10-13: >+<-
         // 14-15: <-
         // 16-17: <-
@@ -827,21 +821,18 @@ mod loop_metadata_tests {
         // Outer loop (index 3)
         let outer = debug_info.get_loop_metadata(3).unwrap();
         assert_eq!(outer.loop_start_index, 3);
-        assert_eq!(outer.body_start_index, 3);
         assert_eq!(outer.body_size, 15); // LoopCheck + >+[>+[>+<-]<-]<- = 15 instructions
         assert_eq!(outer.parent_loop, None);
 
         // Middle loop (index 6)
         let middle = debug_info.get_loop_metadata(6).unwrap();
         assert_eq!(middle.loop_start_index, 6);
-        assert_eq!(middle.body_start_index, 6);
         assert_eq!(middle.body_size, 10); // LoopCheck(1) + >+(2) + inner_loop(5) + <-(2) = 10
         assert_eq!(middle.parent_loop, Some(3)); // Parent is outer
 
         // Inner loop (index 9)
         let inner = debug_info.get_loop_metadata(9).unwrap();
         assert_eq!(inner.loop_start_index, 9);
-        assert_eq!(inner.body_start_index, 9);
         assert_eq!(inner.body_size, 5); // LoopCheck + >+<- = 5 instructions
         assert_eq!(inner.parent_loop, Some(6)); // Parent is middle
     }
@@ -851,10 +842,10 @@ mod loop_metadata_tests {
         // Two sibling loops: +[>+<-]+[>-<+]
         // New index mapping:
         // 0: +
-        // 1: LoopCheck (first loop)
+        // 1: [ <-- first loop
         // 2-5: >+<-
         // 6: +
-        // 7: LoopCheck (second loop)
+        // 7: [ <-- second loop
         // 8-11: >-<+
         let source = "+[>+<-]+[>-<+]";
         let (_instructions, debug_info) = parse_with_debug(source).unwrap();
@@ -887,7 +878,6 @@ mod loop_metadata_tests {
 
         let metadata = debug_info.get_loop_metadata(0).unwrap();
         assert_eq!(metadata.loop_start_index, 0);
-        assert_eq!(metadata.body_start_index, 0);
         assert_eq!(metadata.body_size, 1); // Only LoopCheck (empty body)
         assert_eq!(metadata.parent_loop, None);
     }
