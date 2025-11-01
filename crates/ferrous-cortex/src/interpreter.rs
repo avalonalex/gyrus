@@ -116,7 +116,6 @@ use crate::io::{BfInput, BfOutput, StdInput, StdOutput};
 use crate::stats::ExecutionStats;
 use crate::types::{MemoryAddress, StepCount};
 use std::io;
-use std::sync::{Arc, Mutex};
 
 use crate::config::MemoryModel;
 
@@ -177,67 +176,61 @@ pub fn interpret(instructions: &[Instruction]) -> Result<()> {
     interpret_with_config(instructions, ExecutionConfig::default(), None).map(|_| ())
 }
 
-/// Context for interpreter execution with auto-registered hooks.
+/// Context for interpreter execution with built-in hooks.
 ///
-/// This struct handles the lifecycle of auto-registered hooks:
-/// 1. Setup: Register built-in hooks (stats, warnings, debug, limits)
+/// This struct handles the lifecycle of built-in hooks:
+/// 1. Setup: Create built-in hooks (stats, warnings, debug, limits)
 /// 2. Execution: Run the program
 /// 3. Cleanup: Extract results and enrich errors
 ///
-/// This centralizes hook management and error enrichment logic,
-/// making the interpreter more maintainable and testable.
+/// Built-in hooks are stored directly (no Arc<Mutex>) since the interpreter
+/// is single-threaded. User hooks from ExecutionConfig are still supported.
 struct InterpreterContext {
     config: ExecutionConfig,
 
-    // Hook handles for extracting results after execution
-    stats_handle: Arc<Mutex<crate::hooks::builtin::StatsTrackerHook>>,
-    warning_handle: Arc<Mutex<crate::hooks::builtin::WarningCollectorHook>>,
-    debug_handle: Option<Arc<Mutex<crate::hooks::builtin::DebugTrackingHook>>>,
-    limit_handle: Option<Arc<Mutex<crate::hooks::builtin::LimitEnforcerHook>>>,
+    // Built-in hooks stored directly (no Arc<Mutex> needed!)
+    stats_hook: crate::hooks::builtin::StatsTrackerHook,
+    warning_hook: crate::hooks::builtin::WarningCollectorHook,
+    debug_hook: Option<crate::hooks::builtin::DebugTrackingHook>,
+    limit_hook: Option<crate::hooks::builtin::LimitEnforcerHook>,
 }
 
 impl InterpreterContext {
-    /// Create a new interpreter context with auto-registered hooks
-    fn new(mut config: ExecutionConfig, debug_info: Option<&DebugInfo>) -> Self {
+    /// Create a new interpreter context with built-in hooks
+    fn new(config: ExecutionConfig, debug_info: Option<&DebugInfo>) -> Self {
         use crate::hooks::builtin::{
-            SharedDebugTrackingHook, SharedLimitHook, SharedStatsHook, SharedWarningHook,
+            DebugTrackingHook, LimitEnforcerHook, StatsTrackerHook, WarningCollectorHook,
         };
 
-        // Auto-register built-in hooks
-        let (stats_hook, stats_handle) = SharedStatsHook::new();
-        let (warning_hook, warning_handle) = SharedWarningHook::new();
-        config.register_hook(Box::new(stats_hook));
-        config.register_hook(Box::new(warning_hook));
+        // Create built-in hooks directly (no Arc<Mutex> wrappers!)
+        let stats_hook = StatsTrackerHook::new();
+        let warning_hook = WarningCollectorHook::new();
 
-        // Register debug tracking hook if debug info is provided
-        let debug_handle = debug_info.map(|info| {
-            let (debug_hook, handle) = SharedDebugTrackingHook::new(info.clone());
-            config.register_hook(Box::new(debug_hook));
-            handle
-        });
+        // Create debug tracking hook if debug info is provided
+        let debug_hook = debug_info.map(|info| DebugTrackingHook::new(info.clone()));
 
-        // Register limit enforcement hook if limits are configured
-        let limit_handle = if config.max_steps().is_some() || config.timeout_ms().is_some() {
-            let (limit_hook, handle) =
-                SharedLimitHook::new(config.max_steps(), config.timeout_ms());
-            config.register_hook(Box::new(limit_hook));
-            Some(handle)
+        // Create limit enforcement hook if limits are configured
+        let limit_hook = if config.max_steps().is_some() || config.timeout_ms().is_some() {
+            Some(LimitEnforcerHook::new(
+                config.max_steps(),
+                config.timeout_ms(),
+            ))
         } else {
             None
         };
 
         Self {
             config,
-            stats_handle,
-            warning_handle,
-            debug_handle,
-            limit_handle,
+            stats_hook,
+            warning_hook,
+            debug_hook,
+            limit_hook,
         }
     }
 
     /// Execute the program and return statistics
     fn execute<I: BfInput, O: BfOutput>(
-        self,
+        mut self,
         instructions: &[Instruction],
         input: &mut I,
         output: &mut O,
@@ -245,23 +238,17 @@ impl InterpreterContext {
         // Create VM state
         let mut state = VmState::new(*self.config.memory_model());
 
-        // Get debug info clone if needed
-        let debug_info_clone = self
-            .debug_handle
-            .as_ref()
-            .map(|handle| handle.lock().unwrap().debug_info().clone());
+        // Clone debug_info before borrowing hooks mutably (DebugInfo is Arc, so cheap to clone)
+        let debug_info = self.debug_hook.as_ref().map(|h| h.debug_info().clone());
 
-        // Destructure self to avoid borrowing conflicts
-        let Self {
-            mut config,
-            stats_handle,
-            warning_handle,
-            debug_handle,
-            limit_handle,
-        } = self;
-
-        // Create hook dispatcher
-        let mut dispatcher = HookDispatcher::new(&mut config);
+        // Create hook dispatcher with built-in hooks (no Arc<Mutex>!)
+        let mut dispatcher = HookDispatcher::new(
+            &mut self.config,
+            &mut self.stats_hook,
+            &mut self.warning_hook,
+            self.debug_hook.as_mut(),
+            self.limit_hook.as_mut(),
+        );
 
         // Execute the program
         let execute_result = execute_block(
@@ -271,23 +258,27 @@ impl InterpreterContext {
             input,
             output,
             0,
-            debug_info_clone.as_ref(),
+            debug_info.as_ref(),
         );
 
+        // Call on_complete if execution succeeded, then drop dispatcher
+        if execute_result.is_ok() {
+            dispatcher.dispatch_complete(&state);
+        }
+        // Dispatcher is dropped automatically here, ending all mutable borrows
+
         // Check for limit errors (takes precedence over ExecutionPaused)
-        if let Some(handle) = &limit_handle
-            && let Some(mut error) = handle.lock().unwrap().take_error()
+        if let Some(limit_hook) = &mut self.limit_hook
+            && let Some(mut error) = limit_hook.take_error()
         {
             // Enrich StepLimitExceeded with source_location
-            if let Some(debug_handle) = &debug_handle
+            if let Some(debug_hook) = &self.debug_hook
                 && let BfError::StepLimitExceeded {
                     instruction_index, ..
                 } = &error
+                && let Some(loc) = debug_hook.debug_info().lookup(*instruction_index)
             {
-                let debug_hook = debug_handle.lock().unwrap();
-                if let Some(loc) = debug_hook.debug_info().lookup(*instruction_index) {
-                    error = error.with_step_limit_source_location(loc);
-                }
+                error = error.with_step_limit_source_location(loc);
             }
             return Err(error);
         }
@@ -295,23 +286,18 @@ impl InterpreterContext {
         // Handle execution result
         match execute_result {
             Ok(_) => {
-                // Only call on_complete if execution succeeded (not paused or errored)
-                dispatcher.dispatch_complete(&state);
-
-                // Extract statistics
-                let mut stats = stats_handle.lock().unwrap().stats().clone();
-                stats.warnings = warning_handle.lock().unwrap().warnings().to_vec();
+                // Extract statistics (no mutex locking!)
+                let mut stats = self.stats_hook.stats().clone();
+                stats.warnings = self.warning_hook.warnings().to_vec();
                 Ok(stats)
             }
             Err(mut error) => {
-                // Enrich error with debug information
-                if let Some(handle) = &debug_handle {
-                    let debug_hook = handle.lock().unwrap();
-
+                // Enrich error with debug information (no mutex locking!)
+                if let Some(debug_hook) = &self.debug_hook {
                     // Add loop call stack
-                    let loop_stack = debug_hook.loop_stack().to_vec();
+                    let loop_stack = debug_hook.loop_stack();
                     let loop_call_stack: Vec<crate::error::LoopStackFrame> = loop_stack
-                        .into_iter()
+                        .iter()
                         .map(|ctx| crate::error::LoopStackFrame {
                             source_location: ctx.source_location,
                             iteration: ctx.iteration,
@@ -573,15 +559,33 @@ fn execute_single_instruction<I: BfInput, O: BfOutput>(
 /// The dispatcher creates HookContext snapshots and calls the appropriate
 /// hook methods on the HookManager, returning the HookDecision.
 struct HookDispatcher<'a> {
-    /// The execution config containing registered hooks
+    /// The execution config containing user-registered hooks
     config: &'a mut ExecutionConfig,
+
+    /// Built-in hooks (not in Arc<Mutex>!)
+    stats_hook: &'a mut crate::hooks::builtin::StatsTrackerHook,
+    warning_hook: &'a mut crate::hooks::builtin::WarningCollectorHook,
+    debug_hook: Option<&'a mut crate::hooks::builtin::DebugTrackingHook>,
+    limit_hook: Option<&'a mut crate::hooks::builtin::LimitEnforcerHook>,
 }
 
 impl<'a> HookDispatcher<'a> {
-    /// Create a new hook dispatcher
+    /// Create a new hook dispatcher with built-in hooks
     #[inline]
-    fn new(config: &'a mut ExecutionConfig) -> Self {
-        Self { config }
+    fn new(
+        config: &'a mut ExecutionConfig,
+        stats_hook: &'a mut crate::hooks::builtin::StatsTrackerHook,
+        warning_hook: &'a mut crate::hooks::builtin::WarningCollectorHook,
+        debug_hook: Option<&'a mut crate::hooks::builtin::DebugTrackingHook>,
+        limit_hook: Option<&'a mut crate::hooks::builtin::LimitEnforcerHook>,
+    ) -> Self {
+        Self {
+            config,
+            stats_hook,
+            warning_hook,
+            debug_hook,
+            limit_hook,
+        }
     }
 
     /// Get immutable access to the execution config
@@ -602,15 +606,27 @@ impl<'a> HookDispatcher<'a> {
         state: &VmState,
         instruction_index: usize,
     ) -> HookDecision {
+        // Get source location from debug hook if available
+        let source_location = self
+            .debug_hook
+            .as_ref()
+            .and_then(|h| h.debug_info().lookup(instruction_index));
+
+        let context = HookContext::new(
+            &state.memory,
+            state.pointer,
+            state.step_count,
+            source_location.as_ref(),
+            state.loop_depth,
+            instruction_index,
+        );
+
+        // Call built-in hooks first (order matters for correctness)
+        // Note: Built-in hooks don't use before_instruction currently,
+        // but we keep this for consistency and future extensions
+
+        // Call user hooks from config
         if let Some(hook_manager) = self.config.hook_manager_mut() {
-            let context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // Source location tracked by DebugTrackingHook
-                state.loop_depth,
-                instruction_index,
-            );
             hook_manager.before_instruction(instruction, &context)
         } else {
             HookDecision::Continue
@@ -627,15 +643,45 @@ impl<'a> HookDispatcher<'a> {
         state: &VmState,
         instruction_index: usize,
     ) -> HookDecision {
+        use crate::hooks::ExecutionHook;
+
+        // Get source location from debug hook if available
+        let source_location = self
+            .debug_hook
+            .as_ref()
+            .and_then(|h| h.debug_info().lookup(instruction_index));
+
+        let context = HookContext::new(
+            &state.memory,
+            state.pointer,
+            state.step_count,
+            source_location.as_ref(),
+            state.loop_depth,
+            instruction_index,
+        );
+
+        // Call built-in hooks first (order matters for correctness)
+
+        // 1. Stats tracking (always runs)
+        self.stats_hook.after_instruction(instruction, &context);
+
+        // 2. Warning collection (always runs)
+        self.warning_hook.after_instruction(instruction, &context);
+
+        // 3. Limit enforcement (check step limits / timeout)
+        if let Some(limit_hook) = &mut self.limit_hook
+            && limit_hook.after_instruction(instruction, &context) == HookDecision::Break
+        {
+            return HookDecision::Break;
+        }
+
+        // 4. Debug tracking (updates internal state)
+        if let Some(debug_hook) = &mut self.debug_hook {
+            debug_hook.after_instruction(instruction, &context);
+        }
+
+        // Call user hooks from config
         if let Some(hook_manager) = self.config.hook_manager_mut() {
-            let context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // Source location tracked by DebugTrackingHook
-                state.loop_depth,
-                instruction_index,
-            );
             hook_manager.after_instruction(instruction, &context)
         } else {
             HookDecision::Continue
@@ -653,17 +699,35 @@ impl<'a> HookDispatcher<'a> {
         body_start_index: usize,
         body_size: usize,
     ) -> HookDecision {
+        use crate::hooks::ExecutionHook;
+
+        // Get source location from debug hook if available
+        let source_location = self
+            .debug_hook
+            .as_ref()
+            .and_then(|h| h.debug_info().lookup(loop_instruction_index));
+
+        let context = HookContext::new(
+            &state.memory,
+            state.pointer,
+            state.step_count,
+            source_location.as_ref(),
+            state.loop_depth,
+            loop_instruction_index,
+        );
+
+        let loop_info =
+            crate::hooks::LoopInfo::new(loop_instruction_index, body_start_index, body_size);
+
+        // Call built-in hooks first
+        self.stats_hook.on_loop_enter(&context, Some(&loop_info));
+
+        if let Some(debug_hook) = &mut self.debug_hook {
+            debug_hook.on_loop_enter(&context, Some(&loop_info));
+        }
+
+        // Call user hooks from config
         if let Some(hook_manager) = self.config.hook_manager_mut() {
-            let context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // Source location tracked by DebugTrackingHook
-                state.loop_depth,
-                loop_instruction_index,
-            );
-            let loop_info =
-                crate::hooks::LoopInfo::new(loop_instruction_index, body_start_index, body_size);
             hook_manager.on_loop_enter(&context, Some(&loop_info))
         } else {
             HookDecision::Continue
@@ -675,15 +739,30 @@ impl<'a> HookDispatcher<'a> {
     /// Returns HookDecision::Continue, Break, or Skip
     #[inline]
     fn dispatch_loop_exit(&mut self, state: &VmState, instruction_index: usize) -> HookDecision {
+        use crate::hooks::ExecutionHook;
+
+        // Get source location from debug hook if available
+        let source_location = self
+            .debug_hook
+            .as_ref()
+            .and_then(|h| h.debug_info().lookup(instruction_index));
+
+        let context = HookContext::new(
+            &state.memory,
+            state.pointer,
+            state.step_count,
+            source_location.as_ref(),
+            state.loop_depth,
+            instruction_index,
+        );
+
+        // Call built-in hooks first
+        if let Some(debug_hook) = &mut self.debug_hook {
+            debug_hook.on_loop_exit(&context);
+        }
+
+        // Call user hooks from config
         if let Some(hook_manager) = self.config.hook_manager_mut() {
-            let context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // Source location tracked by DebugTrackingHook
-                state.loop_depth,
-                instruction_index,
-            );
             hook_manager.on_loop_exit(&context)
         } else {
             HookDecision::Continue
@@ -693,15 +772,22 @@ impl<'a> HookDispatcher<'a> {
     /// Dispatch on_complete hook (called after execution finishes)
     #[inline]
     fn dispatch_complete(&mut self, state: &VmState) {
+        use crate::hooks::ExecutionHook;
+
+        let context = HookContext::new(
+            &state.memory,
+            state.pointer,
+            state.step_count,
+            None, // No source location at completion
+            state.loop_depth,
+            0, // No meaningful instruction index after completion
+        );
+
+        // Call built-in hooks first
+        self.stats_hook.on_complete(&context);
+
+        // Call user hooks from config
         if let Some(hook_manager) = self.config.hook_manager_mut() {
-            let context = HookContext::new(
-                &state.memory,
-                state.pointer,
-                state.step_count,
-                None, // No source location at completion
-                state.loop_depth,
-                0, // No meaningful instruction index after completion
-            );
             hook_manager.on_complete(&context);
         }
     }
