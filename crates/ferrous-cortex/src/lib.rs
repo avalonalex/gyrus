@@ -151,7 +151,8 @@ mod minify;
 mod parser;
 mod stats;
 pub mod syntax;
-#[cfg(test)]
+// Test utilities - exposed publicly to allow integration tests to use them
+// Integration tests are separate crates and need public access to test utilities
 pub mod test_utils;
 mod types;
 mod validator;

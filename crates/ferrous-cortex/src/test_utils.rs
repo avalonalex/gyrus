@@ -3,12 +3,16 @@
 //! This module provides helper functions and utilities for writing tests.
 //! Only available in test builds.
 
-use crate::config::{EofBehavior, ExecutionConfig, ExecutionConfigBuilder, MemoryModel};
+use crate::config::{EofBehavior, ExecutionConfig, ExecutionConfigBuilder};
 use crate::error::BfError;
 use crate::interpreter::interpret_with_io;
 use crate::io::StringIo;
 use crate::parser::parse;
 use crate::stats::ExecutionStats;
+
+// Only used in tests
+#[cfg(test)]
+use crate::config::MemoryModel;
 
 /// Run a BrainFuck program with string input and capture output.
 ///
@@ -37,12 +41,12 @@ pub fn run_bf(source: &str, input: &str) -> Result<(String, ExecutionStats), BfE
 /// ```
 /// use ferrous_cortex::test_utils::{run_bf_with_config, configs};
 ///
-/// let (output, stats) = run_bf_with_config(
+/// let result = run_bf_with_config(
 ///     "+[>+]",
 ///     "",
 ///     configs::with_step_limit(100)
 /// );
-/// assert!(output.is_err()); // Should hit step limit
+/// assert!(result.is_err()); // Should hit step limit
 /// ```
 pub fn run_bf_with_config(
     source: &str,
@@ -88,6 +92,125 @@ pub fn assert_bf_equivalent(source1: &str, source2: &str, input: &str) {
         "Programs should produce identical output.\nProgram 1: {}\nProgram 2: {}",
         source1, source2
     );
+}
+
+/// Random BrainFuck program generation.
+///
+/// This module provides utilities for generating random BrainFuck programs,
+/// useful for fuzzing, benchmarking, testing, and educational purposes.
+pub mod random {
+    use rand::Rng;
+
+    /// Configuration for random program generation.
+    #[derive(Debug, Clone)]
+    pub struct RandomProgramConfig {
+        /// Maximum nesting depth for loops
+        pub max_depth: usize,
+        /// Average number of commands per sequence
+        pub avg_commands: usize,
+        /// Probability of adding a loop (0.0 to 1.0)
+        pub loop_probability: f64,
+    }
+
+    impl Default for RandomProgramConfig {
+        fn default() -> Self {
+            Self {
+                max_depth: 3,
+                avg_commands: 10,
+                loop_probability: 0.3,
+            }
+        }
+    }
+
+    /// Generate a random valid BrainFuck program with balanced brackets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ferrous_cortex::test_utils::random::{generate_random_program, RandomProgramConfig};
+    /// use ferrous_cortex::parse;
+    ///
+    /// let program = generate_random_program(&mut rand::thread_rng(), &RandomProgramConfig::default());
+    /// // The generated program should always parse successfully
+    /// assert!(parse(&program).is_ok());
+    /// ```
+    pub fn generate_random_program<R: Rng>(rng: &mut R, config: &RandomProgramConfig) -> String {
+        generate_recursive(rng, config, 0)
+    }
+
+    fn generate_recursive<R: Rng>(
+        rng: &mut R,
+        config: &RandomProgramConfig,
+        depth: usize,
+    ) -> String {
+        let mut result = String::new();
+
+        // Generate random commands
+        let num_commands = rng.gen_range(0..config.avg_commands);
+        for _ in 0..num_commands {
+            let cmd = match rng.gen_range(0..8) {
+                0 => '+',
+                1 => '-',
+                2 => '>',
+                3 => '<',
+                4 => '.',
+                5 => ',',
+                6 => ' ',
+                _ => '\n',
+            };
+            result.push(cmd);
+        }
+
+        // Maybe add a loop if we haven't reached max depth
+        if depth < config.max_depth && rng.gen_bool(config.loop_probability) {
+            result.push('[');
+            result.push_str(&generate_recursive(rng, config, depth + 1));
+            result.push(']');
+        }
+
+        result
+    }
+}
+
+/// Proptest strategies for property-based testing.
+///
+/// These are only available in test builds since proptest is a dev-dependency.
+#[cfg(test)]
+pub mod proptest_strategies {
+    use proptest::prelude::*;
+
+    /// Generate a random sequence of non-bracket BF commands
+    fn arb_bf_commands() -> impl Strategy<Value = Vec<char>> {
+        let bf_chars = prop::sample::select(vec!['+', '-', '>', '<', '.', ',', ' ', '\n']);
+        prop::collection::vec(bf_chars, 0..10)
+    }
+
+    /// Generate random valid BrainFuck programs with balanced brackets.
+    ///
+    /// Uses a recursive strategy to ensure all brackets are properly balanced.
+    pub fn arb_bf_program() -> impl Strategy<Value = String> {
+        let leaf = arb_bf_commands().prop_map(|cmds| cmds.iter().collect::<String>());
+
+        leaf.prop_recursive(
+            3,  // depth: max nesting level
+            10, // size: desired number of nodes
+            3,  // items per collection
+            |inner| {
+                (arb_bf_commands(), inner, any::<bool>()).prop_map(
+                    |(cmds, inner_program, add_loop)| {
+                        let mut s = cmds.iter().collect::<String>();
+                        // Randomly add a loop with the inner program
+                        if !inner_program.is_empty() && add_loop {
+                            s.push('[');
+                            s.push_str(&inner_program);
+                            s.push(']');
+                        }
+                        s
+                    },
+                )
+            },
+        )
+    }
 }
 
 /// Common test configurations.
