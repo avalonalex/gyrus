@@ -23,7 +23,7 @@
 //! ```
 
 use std::io::Write;
-use termcolor::Color;
+use termcolor::{Ansi, Color, ColorSpec, WriteColor};
 
 /// Syntax highlighter for BrainFuck code.
 #[derive(Debug, Clone)]
@@ -253,6 +253,7 @@ impl HighlightedCode {
         end_line: usize,
     ) -> std::io::Result<()> {
         let theme = ColorTheme::default();
+        let mut ansi_writer = Ansi::new(writer);
 
         for (idx, line) in self.lines.iter().enumerate() {
             if idx < start_line || idx >= end_line {
@@ -260,7 +261,12 @@ impl HighlightedCode {
             }
             // Write line number if present
             if let Some(num) = line.number {
-                write!(writer, "\x1b[38;2;100;100;100m{:4} │\x1b[0m ", num)?;
+                let mut line_num_spec = ColorSpec::new();
+                line_num_spec.set_fg(Some(Color::Rgb(100, 100, 100)));
+                ansi_writer.set_color(&line_num_spec)?;
+                write!(ansi_writer, "{:4} │", num)?;
+                ansi_writer.reset()?;
+                write!(ansi_writer, " ")?;
             }
 
             // Write spans with colors
@@ -274,41 +280,38 @@ impl HighlightedCode {
                     SpanStyle::Whitespace => None,
                 };
 
-                if let Some(color) = color {
-                    let (r, g, b) = match span.style {
+                if let Some(base_color) = color {
+                    let final_color = match span.style {
                         // Use depth-based colors for loops
                         SpanStyle::LoopStart(depth) | SpanStyle::LoopEnd(depth) => {
-                            Self::color_for_depth(depth)
+                            let (r, g, b) = Self::color_for_depth(depth);
+                            Color::Rgb(r, g, b)
                         }
                         // Use theme colors for other instructions
-                        _ => match color {
-                            Color::Black => (0, 0, 0),
-                            Color::Blue => (0, 150, 255),
-                            Color::Green => (0, 200, 0),
-                            Color::Red => (255, 0, 0),
-                            Color::Cyan => (0, 255, 255),
-                            Color::Magenta => (255, 0, 255),
-                            Color::Yellow => (255, 255, 0),
-                            Color::White => (255, 255, 255),
-                            Color::Rgb(r, g, b) => (r, g, b),
-                            _ => (200, 200, 200),
+                        _ => match base_color {
+                            Color::Blue => Color::Rgb(0, 150, 255),
+                            Color::Green => Color::Rgb(0, 200, 0),
+                            other => other,
                         },
                     };
 
+                    let mut color_spec = ColorSpec::new();
+                    color_spec.set_fg(Some(final_color));
+
                     // Special styling for loops (bold)
                     if matches!(span.style, SpanStyle::LoopStart(_) | SpanStyle::LoopEnd(_)) {
-                        write!(writer, "\x1b[1;38;2;{};{};{}m", r, g, b)?;
-                    } else {
-                        write!(writer, "\x1b[38;2;{};{};{}m", r, g, b)?;
+                        color_spec.set_bold(true);
                     }
-                    write!(writer, "{}", span.text)?;
-                    write!(writer, "\x1b[0m")?;
+
+                    ansi_writer.set_color(&color_spec)?;
+                    write!(ansi_writer, "{}", span.text)?;
+                    ansi_writer.reset()?;
                 } else {
-                    write!(writer, "{}", span.text)?;
+                    write!(ansi_writer, "{}", span.text)?;
                 }
             }
 
-            writeln!(writer)?;
+            writeln!(ansi_writer)?;
         }
 
         Ok(())
