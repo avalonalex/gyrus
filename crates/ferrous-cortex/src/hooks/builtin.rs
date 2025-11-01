@@ -1075,7 +1075,7 @@ impl ProfilingHook {
             std::collections::HashMap::new();
 
         // Build reverse mapping: offset -> instruction_index
-        for (&instruction_index, _) in &self.instruction_hits {
+        for &instruction_index in self.instruction_hits.keys() {
             if let Some(location) = debug_info.lookup(instruction_index) {
                 char_to_instruction.insert(location.offset, instruction_index);
             }
@@ -1115,9 +1115,7 @@ impl ProfilingHook {
                         } else if max_hits > 1.0 {
                             // Map hit counts logarithmically: log(hits) / log(max_hits)
                             // This spreads out lower frequencies much better
-                            ((hits as f64).ln() / (max_hits as f64).ln())
-                                .max(0.0)
-                                .min(1.0)
+                            ((hits as f64).ln() / max_hits.ln()).clamp(0.0, 1.0)
                         } else {
                             1.0
                         };
@@ -1156,7 +1154,7 @@ impl ProfilingHook {
         };
 
         let legend_steps = vec![
-            (0.0, format!("not executed (0 hits)")),
+            (0.0, "not executed (0 hits)".to_string()),
             (0.2, format!("cold (1-{} hits)", hits_at_heat(0.2))),
             (
                 0.4,

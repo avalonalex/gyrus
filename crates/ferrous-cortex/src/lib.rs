@@ -139,6 +139,7 @@
 //! Run with: `cargo run --example basic_usage`
 
 // Module declarations
+pub mod codegen;
 mod config;
 mod debug;
 mod error;
