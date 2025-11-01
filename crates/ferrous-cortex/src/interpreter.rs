@@ -816,6 +816,19 @@ fn execute_block<I: BfInput, O: BfOutput>(
     start_index: usize,             // flat index where this block starts
     debug_info: Option<&DebugInfo>, // Optional debug info for error messages
 ) -> ExecutionResult {
+    // Helper to check if hook requested execution pause
+    let check_pause =
+        |decision: HookDecision, step_count: StepCount, context: &str| -> ExecutionResult {
+            match decision {
+                HookDecision::Break => Err(BfError::ExecutionPaused {
+                    instruction_index: step_count.into(),
+                    source_location: None,
+                    message: Some(format!("Execution paused by hook {}", context)),
+                }),
+                _ => Ok(ExecutionFlow::Continue),
+            }
+        };
+
     let mut local_index = 0;
 
     for instruction in instructions {
@@ -830,23 +843,12 @@ fn execute_block<I: BfInput, O: BfOutput>(
         // The actual '[' instruction (LoopCheck) is what gets executed, not the Loop wrapper.
         // This prevents double-counting and maintains consistency with after_instruction.
         if !matches!(instruction, Instruction::Loop(_)) {
-            match dispatcher.dispatch_before(instruction, state, instruction_index) {
-                HookDecision::Continue => {}
-                HookDecision::Break => {
-                    return Err(BfError::ExecutionPaused {
-                        instruction_index: state.step_count.into(),
-                        source_location: None, // Debug hook can provide this
-                        message: Some(format!(
-                            "Execution paused by hook at instruction {}",
-                            state.step_count.get()
-                        )),
-                    });
-                }
-                HookDecision::Skip => {
-                    // Skip this instruction, increment local_index and continue
-                    local_index += 1;
-                    continue;
-                }
+            let decision = dispatcher.dispatch_before(instruction, state, instruction_index);
+            check_pause(decision, state.step_count, "at instruction")?;
+            if decision == HookDecision::Skip {
+                // Skip this instruction, increment local_index and continue
+                local_index += 1;
+                continue;
             }
         }
 
@@ -873,19 +875,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     state.step_count.increment();
 
                     // Hook: after_instruction for LoopCheck (needed for limit checking)
-                    match dispatcher.dispatch_after(loop_check, state, body_start_index) {
-                        HookDecision::Continue => {}
-                        HookDecision::Break => {
-                            return Err(BfError::ExecutionPaused {
-                                instruction_index: state.step_count.into(),
-                                source_location: None,
-                                message: Some("Execution paused by hook at LoopCheck".to_string()),
-                            });
-                        }
-                        HookDecision::Skip => {
-                            // Can't skip LoopCheck - it's required
-                        }
-                    }
+                    let decision = dispatcher.dispatch_after(loop_check, state, body_start_index);
+                    check_pause(decision, state.step_count, "at LoopCheck")?;
+                    // Skip doesn't make sense for LoopCheck - it's required
 
                     // Execute LoopCheck to determine if we should continue
                     match execute_single_instruction(
@@ -910,29 +902,20 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     state.loop_depth += 1;
 
                     // Hook: on_loop_enter
-                    match dispatcher.dispatch_loop_enter(
+                    let decision = dispatcher.dispatch_loop_enter(
                         state,
                         instruction_index,
                         body_start_index,
                         body_size,
-                    ) {
-                        HookDecision::Continue => {}
-                        HookDecision::Break => {
-                            state.loop_depth -= 1;
-                            return Err(BfError::ExecutionPaused {
-                                instruction_index: state.step_count.into(),
-                                source_location: None, // Debug hook can provide this
-                                message: Some(format!(
-                                    "Execution paused by hook at loop enter (instruction {})",
-                                    state.step_count.get()
-                                )),
-                            });
-                        }
-                        HookDecision::Skip => {
-                            // For loop hooks, Skip means skip the entire loop iteration
-                            state.loop_depth -= 1;
-                            continue;
-                        }
+                    );
+                    if let Err(e) = check_pause(decision, state.step_count, "at loop enter") {
+                        state.loop_depth -= 1;
+                        return Err(e);
+                    }
+                    if decision == HookDecision::Skip {
+                        // For loop hooks, Skip means skip the entire loop iteration
+                        state.loop_depth -= 1;
+                        continue;
                     }
 
                     // Execute rest of loop body (skip LoopCheck since we already executed it)
@@ -953,22 +936,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
                     state.loop_depth -= 1;
 
                     // Hook: on_loop_exit
-                    match dispatcher.dispatch_loop_exit(state, instruction_index) {
-                        HookDecision::Continue => {}
-                        HookDecision::Break => {
-                            return Err(BfError::ExecutionPaused {
-                                instruction_index: state.step_count.into(),
-                                source_location: None, // Debug hook can provide this
-                                message: Some(format!(
-                                    "Execution paused by hook at loop exit (instruction {})",
-                                    state.step_count.get()
-                                )),
-                            });
-                        }
-                        HookDecision::Skip => {
-                            // Skip doesn't make sense at loop exit, treat as Continue
-                        }
-                    }
+                    let decision = dispatcher.dispatch_loop_exit(state, instruction_index);
+                    check_pause(decision, state.step_count, "at loop exit")?;
+                    // Skip doesn't make sense at loop exit, treat as Continue
                 }
             }
 
@@ -1000,22 +970,9 @@ fn execute_block<I: BfInput, O: BfOutput>(
         // from inside the loop handler (line 785), and they share the same instruction_index.
         // Calling it here would cause double-counting in profilers and other hooks.
         if !matches!(instruction, Instruction::Loop(_)) {
-            match dispatcher.dispatch_after(instruction, state, instruction_index) {
-                HookDecision::Continue => {}
-                HookDecision::Break => {
-                    return Err(BfError::ExecutionPaused {
-                        instruction_index: state.step_count.into(),
-                        source_location: None, // Debug hook can provide this
-                        message: Some(format!(
-                            "Execution paused by hook after instruction {}",
-                            state.step_count.get()
-                        )),
-                    });
-                }
-                HookDecision::Skip => {
-                    // Skip doesn't make sense after instruction has already executed, treat as Continue
-                }
-            }
+            let decision = dispatcher.dispatch_after(instruction, state, instruction_index);
+            check_pause(decision, state.step_count, "after instruction")?;
+            // Skip doesn't make sense after instruction has already executed
         }
 
         // Increment local index for next instruction
