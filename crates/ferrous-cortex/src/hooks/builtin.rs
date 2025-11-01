@@ -1030,7 +1030,7 @@ impl ProfilingHook {
         use std::fmt::Write;
 
         let mut output = String::new();
-        writeln!(&mut output, "Execution Heatmap (per instruction)").unwrap();
+        writeln!(&mut output, "Execution Heatmap").unwrap();
         writeln!(&mut output).unwrap();
 
         // If no debug info, we can't map back to source
@@ -1044,59 +1044,159 @@ impl ProfilingHook {
             return output;
         };
 
-        // Find the maximum hit count for bar scaling
-        let max_hits = self.instruction_hits.values().copied().max().unwrap_or(1);
+        // Find the maximum hit count for heat normalization
+        let max_hits = self.instruction_hits.values().copied().max().unwrap_or(1) as f64;
 
-        // Convert source to bytes for character lookup
-        let source_bytes = source.as_bytes();
+        // Helper function to get color for a given heat level (0.0 to 1.0)
+        let heat_to_color = |heat: f64| -> (u8, u8, u8) {
+            if heat <= 0.0 {
+                // Not executed: dim blue
+                (50, 50, 150)
+            } else if heat < 0.2 {
+                // Cold: blue
+                (0, 150, 255)
+            } else if heat < 0.4 {
+                // Cool: cyan
+                (0, 200, 200)
+            } else if heat < 0.6 {
+                // Warm: green-yellow
+                (150, 200, 0)
+            } else if heat < 0.8 {
+                // Hot: yellow-orange
+                (255, 200, 0)
+            } else {
+                // Very hot: red
+                (255, 50, 0)
+            }
+        };
 
-        // Get all instruction indices and sort them
-        let mut instruction_indices: Vec<usize> = self.instruction_hits.keys().copied().collect();
-        instruction_indices.sort_unstable();
+        // Track which character is which instruction for heat mapping
+        let mut char_to_instruction: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
 
-        // Header
-        writeln!(
-            &mut output,
-            "{:>5} | {:>5} | {:<20} | {:>10} | Heat",
-            "Idx", "Instr", "Location", "Hits"
-        )
-        .unwrap();
-        writeln!(&mut output, "{}", "-".repeat(80)).unwrap();
-
-        // Display each instruction with hit counts
-        for &instruction_index in &instruction_indices {
-            let hits = self
-                .instruction_hits
-                .get(&instruction_index)
-                .copied()
-                .unwrap_or(0);
-
+        // Build reverse mapping: offset -> instruction_index
+        for (&instruction_index, _) in &self.instruction_hits {
             if let Some(location) = debug_info.lookup(instruction_index) {
-                // Get the actual character from source
-                let instr_char = if location.offset < source_bytes.len() {
-                    source_bytes[location.offset] as char
-                } else {
-                    '?'
-                };
-
-                // Generate bar chart (max 40 chars wide)
-                let bar_width = if max_hits > 0 {
-                    ((hits as f64 / max_hits as f64) * 40.0) as usize
-                } else {
-                    0
-                };
-                let bar = "█".repeat(bar_width);
-
-                let location_str = format!("line {}, col {}", location.line, location.column);
-
-                writeln!(
-                    &mut output,
-                    "{:>5} | {:>5} | {:<20} | {:>10} | {}",
-                    instruction_index, instr_char, location_str, hits, bar
-                )
-                .unwrap();
+                char_to_instruction.insert(location.offset, instruction_index);
             }
         }
+
+        // Process each line and character
+        let mut current_offset = 0;
+
+        for line in source.lines() {
+            // Track if we're in a line comment for this line
+            let mut in_line_comment = false;
+
+            for ch in line.chars() {
+                let char_offset = current_offset;
+                current_offset += ch.len_utf8();
+
+                // Check if this is a line comment start
+                if ch == '*' {
+                    in_line_comment = true;
+                }
+
+                if in_line_comment || !matches!(ch, '>' | '<' | '+' | '-' | ',' | '.' | '[' | ']') {
+                    // Comment or non-BF character: gray it out
+                    write!(&mut output, "\x1b[38;2;100;100;100m{}\x1b[0m", ch).unwrap();
+                } else {
+                    // BF instruction: apply heat color
+                    if let Some(&instruction_index) = char_to_instruction.get(&char_offset) {
+                        let hits = self
+                            .instruction_hits
+                            .get(&instruction_index)
+                            .copied()
+                            .unwrap_or(0);
+
+                        // Use logarithmic scale for better color distribution
+                        let heat = if hits == 0 {
+                            0.0
+                        } else if max_hits > 1.0 {
+                            // Map hit counts logarithmically: log(hits) / log(max_hits)
+                            // This spreads out lower frequencies much better
+                            ((hits as f64).ln() / (max_hits as f64).ln())
+                                .max(0.0)
+                                .min(1.0)
+                        } else {
+                            1.0
+                        };
+
+                        let (r, g, b) = heat_to_color(heat);
+                        write!(&mut output, "\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, ch).unwrap();
+                    } else {
+                        // BF instruction but no hit data: treat as unexecuted (dim blue)
+                        let (r, g, b) = heat_to_color(0.0);
+                        write!(&mut output, "\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, ch).unwrap();
+                    }
+                }
+            }
+            writeln!(&mut output).unwrap(); // End of line
+            current_offset += 1; // Account for newline
+        }
+
+        // Add legend with logarithmic count ranges
+        writeln!(&mut output).unwrap();
+        writeln!(
+            &mut output,
+            "Legend (execution frequency, logarithmic scale):"
+        )
+        .unwrap();
+
+        // Calculate logarithmic ranges: hits = max_hits^heat
+        let max_hits_u64 = max_hits as u64;
+
+        // Helper to calculate hit count at a given heat threshold
+        let hits_at_heat = |heat: f64| -> u64 {
+            if heat <= 0.0 {
+                0
+            } else {
+                (max_hits.powf(heat)).round() as u64
+            }
+        };
+
+        let legend_steps = vec![
+            (0.0, format!("not executed (0 hits)")),
+            (0.2, format!("cold (1-{} hits)", hits_at_heat(0.2))),
+            (
+                0.4,
+                format!(
+                    "cool ({}-{} hits)",
+                    hits_at_heat(0.2) + 1,
+                    hits_at_heat(0.4)
+                ),
+            ),
+            (
+                0.6,
+                format!(
+                    "warm ({}-{} hits)",
+                    hits_at_heat(0.4) + 1,
+                    hits_at_heat(0.6)
+                ),
+            ),
+            (
+                0.8,
+                format!("hot ({}-{} hits)", hits_at_heat(0.6) + 1, hits_at_heat(0.8)),
+            ),
+            (
+                1.0,
+                format!("very hot ({}-{} hits)", hits_at_heat(0.8) + 1, max_hits_u64),
+            ),
+        ];
+
+        for (heat, label) in legend_steps {
+            let (r, g, b) = heat_to_color(heat);
+            write!(
+                &mut output,
+                "  \x1b[38;2;{};{};{}m●\x1b[0m {}",
+                r, g, b, label
+            )
+            .unwrap();
+            if heat < 1.0 {
+                write!(&mut output, "   ").unwrap();
+            }
+        }
+        writeln!(&mut output).unwrap();
 
         writeln!(&mut output).unwrap();
         writeln!(
