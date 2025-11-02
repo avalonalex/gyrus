@@ -961,49 +961,6 @@ impl ProfilingHook {
         &self.instruction_hits
     }
 
-    /// Generate flamegraph data in folded stack format.
-    ///
-    /// This format is compatible with flamegraph visualization tools.
-    /// Each line represents a stack frame with a sample count (microseconds).
-    ///
-    /// # Format
-    ///
-    /// ```text
-    /// bf_program;Loop@5 1234
-    /// bf_program;Loop@5;Loop@15 567
-    /// ```
-    ///
-    /// The numbers represent microseconds spent in that stack frame.
-    pub fn generate_flamegraph_data(&self) -> String {
-        let mut lines = Vec::new();
-
-        // Group loops by depth to build hierarchical stacks
-        for completed in &self.completed_loops {
-            let time_us = completed.total_time.as_micros() as u64;
-
-            // Build stack trace based on depth
-            // For now, simplified: just show the loop itself
-            // In a full implementation, we'd track parent-child relationships
-            let stack_frames = [
-                "bf_program".to_string(),
-                format!(
-                    "Loop@{} ({})",
-                    completed.loop_instruction_index,
-                    if let Some(loc) = &completed.source_location {
-                        format!("{}:{}", loc.line, loc.column)
-                    } else {
-                        format!("idx{}", completed.loop_instruction_index)
-                    }
-                ),
-            ];
-
-            let stack = stack_frames.join(";");
-            lines.push(format!("{} {}", stack, time_us));
-        }
-
-        lines.join("\n")
-    }
-
     /// Format source code with execution heatmap showing hit counts per instruction.
     ///
     /// This creates a detailed view showing each BrainFuck instruction with its
