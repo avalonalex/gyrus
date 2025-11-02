@@ -109,12 +109,58 @@ fn bench_hello_world(c: &mut Criterion) {
     });
 }
 
+fn bench_hanoi(c: &mut Criterion) {
+    // Towers of Hanoi - computationally intensive
+    let source = include_str!("../../../programs/advanced/hanoi.bf");
+    let instructions = parse(source).unwrap();
+
+    c.bench_function("hanoi", |b| {
+        b.iter(|| {
+            let config = ExecutionConfig::default();
+            let mut input = StringIo::empty();
+            let mut output = StringIo::empty();
+            interpret_with_io(
+                black_box(&instructions),
+                config,
+                &mut input,
+                &mut output,
+                None,
+            )
+            .unwrap();
+        });
+    });
+}
+
+fn bench_mandelbrot(c: &mut Criterion) {
+    // Mandelbrot set renderer - very computationally intensive
+    let source = include_str!("../../../programs/advanced/mandelbrot.bf");
+    let instructions = parse(source).unwrap();
+
+    c.bench_function("mandelbrot", |b| {
+        b.iter(|| {
+            let config = ExecutionConfig::default();
+            let mut input = StringIo::empty();
+            let mut output = StringIo::empty();
+            interpret_with_io(
+                black_box(&instructions),
+                config,
+                &mut input,
+                &mut output,
+                None,
+            )
+            .unwrap();
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_simple_arithmetic,
     bench_nested_loops,
     bench_pointer_movement,
     bench_io_operations,
-    bench_hello_world
+    bench_hello_world,
+    bench_hanoi,
+    bench_mandelbrot
 );
 criterion_main!(benches);
