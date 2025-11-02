@@ -110,6 +110,7 @@
 // Sub-modules
 mod dispatch;
 mod execution;
+mod optimized;
 mod state;
 
 // Tests module
@@ -335,4 +336,52 @@ pub fn interpret_with_config(
     let mut input = StdInput;
     let mut output = StdOutput;
     interpret_with_io(instructions, config, &mut input, &mut output, debug_info)
+}
+
+/// Interpret and execute optimized BrainFuck instructions.
+///
+/// This is the fast path for executing optimized IR. It provides significant
+/// performance improvements over the standard interpreter by:
+/// - Executing fused operations in single steps (e.g., Add(5) vs 5× IncrementValue)
+/// - Recognizing loop patterns as single operations (e.g., Zero, MultiplyAdd)
+/// - Simplified step counting
+///
+/// # Performance
+///
+/// Expected speedups:
+/// - Simple arithmetic: 5-10× (instruction fusion)
+/// - Pointer movement: 10-20× (movement fusion)
+/// - Loop patterns: 100-500× (pattern recognition)
+///
+/// # Limitations
+///
+/// - No debug symbol support (use standard interpreter for debugging)
+/// - Step counting is approximate (each optimized instruction = 1 step)
+///
+/// # Examples
+///
+/// ```rust
+/// use ferrous_cortex::{parse, optimize, interpret_optimized_with_io, io::StringIo, ExecutionConfig};
+///
+/// let source = "+++++[->+++<]"; // Multiply: 5 * 3 = 15
+/// let instructions = parse(source)?;
+/// let optimized = optimize(&instructions);
+///
+/// let mut input = StringIo::empty();
+/// let mut output = StringIo::empty();
+/// let stats = interpret_optimized_with_io(
+///     &optimized.instructions,
+///     ExecutionConfig::default(),
+///     &mut input,
+///     &mut output
+/// )?;
+/// # Ok::<(), ferrous_cortex::BfError>(())
+/// ```
+pub fn interpret_optimized_with_io<I: BfInput, O: BfOutput>(
+    instructions: &[crate::optimizer::OptimizedInstruction],
+    config: ExecutionConfig,
+    input: &mut I,
+    output: &mut O,
+) -> Result<ExecutionStats> {
+    optimized::interpret_optimized(instructions, config, input, output)
 }
