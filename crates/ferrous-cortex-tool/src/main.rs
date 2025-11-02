@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use ferrous_cortex::{
     BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
     codegen::compile_string,
-    minify, parse_with_debug,
+    minify, optimize, parse, parse_with_debug,
     syntax::{ColorTheme, SyntaxHighlighter},
     test_utils::random::{RandomProgramConfig, generate_random_program},
     validate,
@@ -126,6 +126,21 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Show optimization mapping (visual)
+    Optimize {
+        /// BrainFuck source file to optimize
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Theme: dark, light
+        #[arg(long, default_value = "dark")]
+        theme: String,
+
+        /// Plain output (no colors)
+        #[arg(long)]
+        plain: bool,
+    },
 }
 
 fn main() {
@@ -173,6 +188,7 @@ fn run() -> Result<(), BfError> {
             output,
             verbose,
         } => run_compile(text, output, verbose),
+        Commands::Optimize { file, theme, plain } => run_optimize(file, theme, plain),
     }
 }
 
@@ -558,4 +574,121 @@ fn display_debug_csv(debug_info: &DebugInfo) {
 /// Get the character at a specific source location
 fn get_char_at_location(source: &str, loc: &SourceLocation) -> char {
     source.chars().nth(loc.offset).unwrap_or('?')
+}
+
+fn run_optimize(file: PathBuf, theme: String, plain: bool) -> Result<(), BfError> {
+    // Read source file
+    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
+        path: file.clone(),
+        source: source_err,
+        hint: format!(
+            "Make sure the file exists and you have permission to read it. Current path: {}",
+            file.display()
+        ),
+    })?;
+
+    // Parse the program
+    let instructions = parse(&source)?;
+
+    // Minify first to remove comments and get clean BF code
+    let minified_source = minify(&instructions);
+
+    // Parse the minified code WITH debug info to get instruction->character mapping
+    let (minified_instructions, debug_info) = parse_with_debug(&minified_source)?;
+
+    // Optimize the minified instructions
+    let optimized = optimize(&minified_instructions);
+
+    // Select theme
+    let color_theme = match theme.to_lowercase().as_str() {
+        "dark" => ColorTheme::dark(),
+        "light" => ColorTheme::light(),
+        other => {
+            eprintln!(
+                "Error: Invalid theme '{}'. Valid options: dark, light",
+                other
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Display optimization mapping
+    println!("=== Optimization Mapping ===\n");
+    println!("Original: {} instructions", optimized.original_count);
+    println!("Optimized: {} instructions", optimized.optimized_count);
+    println!(
+        "Compression: {:.2}× ({:.1}% reduction)\n",
+        optimized.compression_ratio(),
+        (1.0 - 1.0 / optimized.compression_ratio()) * 100.0
+    );
+
+    display_optimization_mapping(
+        &minified_source,
+        &optimized.instructions,
+        &debug_info,
+        &color_theme,
+        plain,
+    );
+
+    Ok(())
+}
+
+fn display_optimization_mapping(
+    source: &str,
+    optimized: &[ferrous_cortex::optimizer::OptimizedInstruction],
+    debug_info: &DebugInfo,
+    theme: &ColorTheme,
+    plain: bool,
+) {
+    // Build the grouped output
+    let mut output = String::new();
+
+    for (i, inst) in optimized.iter().enumerate() {
+        let range = inst.source_range();
+        let instr_start = range.start; // Instruction index (not character offset)
+        let instr_end = range.end; // Instruction index (not character offset)
+
+        // Convert instruction indices to character offsets using debug info
+        if let Some(start_loc) = debug_info.lookup(instr_start) {
+            let char_start = start_loc.offset;
+
+            // Find the end character offset
+            let char_end = if instr_end < debug_info.len() {
+                // End is the start of the next instruction
+                if let Some(end_loc) = debug_info.lookup(instr_end) {
+                    end_loc.offset
+                } else {
+                    source.len()
+                }
+            } else {
+                // Last instruction - go to end of source
+                source.len()
+            };
+
+            // Extract the source substring using character offsets
+            let source_bytes = source.as_bytes();
+            let substring = if char_end <= source_bytes.len() && char_start <= char_end {
+                String::from_utf8_lossy(&source_bytes[char_start..char_end]).to_string()
+            } else {
+                "".to_string()
+            };
+
+            output.push_str(&substring);
+        }
+
+        // Add 3 spaces after each group (except the last)
+        if i < optimized.len() - 1 {
+            output.push_str("   ");
+        }
+    }
+
+    // Display with syntax highlighting
+    if plain {
+        println!("{}", output);
+    } else {
+        let highlighter = SyntaxHighlighter::with_theme(theme.clone());
+        let highlighted = highlighter.highlight(&output);
+        print!("{}", highlighted.to_ansi());
+        println!();
+    }
 }

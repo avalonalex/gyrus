@@ -235,7 +235,16 @@ fn run() -> Result<(), BfError> {
 
     if cli.verbose && !cli.quiet {
         eprintln!("Configuration:");
-        eprintln!("  Execution mode: {}", if use_optimized { "Optimized (default)" } else if enable_profiling { "Trace (profiling + debug)" } else { "Debug (standard + symbols)" });
+        eprintln!(
+            "  Execution mode: {}",
+            if use_optimized {
+                "Optimized (default)"
+            } else if enable_profiling {
+                "Trace (profiling + debug)"
+            } else {
+                "Debug (standard + symbols)"
+            }
+        );
         eprintln!("  Memory model: {}", config.memory_model());
         eprintln!("  Cell model: {}", config.cell_model());
         eprintln!(
@@ -273,7 +282,9 @@ fn run() -> Result<(), BfError> {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error: {}", e.format_detailed());
-                eprintln!("\nHint: Use --debug for source location tracking and better error messages");
+                eprintln!(
+                    "\nHint: Use --debug for source location tracking and better error messages"
+                );
                 std::process::exit(1);
             }
         }
@@ -315,7 +326,8 @@ fn run() -> Result<(), BfError> {
         eprintln!("Bytes written: {}", stats.bytes_written);
 
         // If debug mode is enabled (not trace-only), show where execution completed
-        if !enable_profiling && cli.debug
+        if !enable_profiling
+            && cli.debug
             && let Some(ref debug_info) = debug_info
         {
             let total_instructions = debug_info.len();
