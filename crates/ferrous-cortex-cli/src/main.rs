@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use ferrous_cortex::hooks::builtin::{ProfilingHook, SharedProfilingHook};
 use ferrous_cortex::{
     BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
-    interpret_with_io,
+    interpret_optimized_with_io, interpret_with_io,
     io::{StdInput, StdOutput},
-    parse, parse_with_debug,
+    optimize, parse, parse_with_debug,
 };
 use std::sync::{Arc, Mutex};
 
@@ -69,6 +69,10 @@ struct Cli {
     /// Enable profiling to identify hot code regions and loop performance (implies --debug)
     #[arg(long)]
     profile: bool,
+
+    /// Enable optimizations for faster execution (disables debug symbols and profiling)
+    #[arg(long)]
+    optimize: bool,
 }
 
 fn main() {
@@ -95,6 +99,13 @@ where
 fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
+    // Validate conflicting options
+    if cli.optimize && (cli.profile || cli.debug) {
+        eprintln!("Error: --optimize cannot be used with --profile or --debug");
+        eprintln!("       (Optimized interpreter prioritizes performance over observability)");
+        std::process::exit(1);
+    }
+
     // Read the source file
     let source = fs::read_to_string(&cli.file).map_err(|source| BfError::FileError {
         path: cli.file.clone(),
@@ -108,6 +119,7 @@ fn run() -> Result<(), BfError> {
 
     // Parse the program (with or without debug symbols based on --debug flag)
     // Note: --profile implies --debug for source location tracking
+    // Note: --optimize disables debug symbols
     let (instructions, debug_info) = if cli.debug || cli.profile {
         // Debug mode: parse with debug symbols for source location tracking
         match parse_with_debug(&source) {
@@ -242,21 +254,45 @@ fn run() -> Result<(), BfError> {
         eprintln!();
     }
 
-    // Execute the program (with or without debug symbols)
+    // Execute the program (optimized or standard path)
     let mut input = StdInput;
     let mut output = StdOutput;
-    let stats = match interpret_with_io(
-        &instructions,
-        config,
-        &mut input,
-        &mut output,
-        debug_info.as_ref(),
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            // For runtime errors, use format_with_source to show source location
-            eprintln!("{}", e.format_with_source(&source));
-            std::process::exit(1);
+    let stats = if cli.optimize {
+        // Optimized path: optimize then execute
+        let optimized = optimize(&instructions);
+
+        if cli.verbose && !cli.quiet {
+            eprintln!("=== Optimization Results ===");
+            eprintln!("Original instructions: {}", optimized.original_count);
+            eprintln!("Optimized instructions: {}", optimized.optimized_count);
+            eprintln!("Compression ratio: {:.2}×", optimized.compression_ratio());
+            eprintln!();
+        }
+
+        match interpret_optimized_with_io(&optimized.instructions, config, &mut input, &mut output)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // Optimized interpreter errors don't have source location
+                eprintln!("{}", e.format_detailed());
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // Standard path: execute with optional debug symbols
+        match interpret_with_io(
+            &instructions,
+            config,
+            &mut input,
+            &mut output,
+            debug_info.as_ref(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                // For runtime errors, use format_with_source to show source location
+                eprintln!("{}", e.format_with_source(&source));
+                std::process::exit(1);
+            }
         }
     };
 

@@ -149,6 +149,7 @@ mod interpreter;
 pub mod io;
 mod location;
 mod minify;
+pub mod optimizer;
 mod parser;
 mod stats;
 pub mod syntax;
@@ -166,9 +167,12 @@ pub use config::{
 pub use debug::DebugInfo;
 pub use error::{BfError, BfWarning, MemoryDump, Result, RuntimeWarning};
 pub use instruction::Instruction;
-pub use interpreter::{interpret, interpret_with_config, interpret_with_io};
+pub use interpreter::{
+    interpret, interpret_optimized_with_io, interpret_with_config, interpret_with_io,
+};
 pub use location::SourceLocation;
 pub use minify::minify;
+pub use optimizer::{OptimizedInstruction, OptimizedProgram, SourceRange, optimize};
 pub use parser::{parse, parse_with_debug};
 pub use stats::ExecutionStats;
 pub use types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};
