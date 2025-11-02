@@ -69,14 +69,6 @@ struct Cli {
     /// Enable profiling to identify hot code regions and loop performance (implies --debug)
     #[arg(long)]
     profile: bool,
-
-    /// Generate flamegraph SVG output file (implies --profile)
-    #[arg(long, value_name = "FILE")]
-    flamegraph: Option<PathBuf>,
-
-    /// Generate HTML heatmap output file (implies --profile)
-    #[arg(long, value_name = "FILE")]
-    profile_html: Option<PathBuf>,
 }
 
 fn main() {
@@ -115,29 +107,28 @@ fn run() -> Result<(), BfError> {
     })?;
 
     // Parse the program (with or without debug symbols based on --debug flag)
-    // Note: --profile, --flamegraph, and --profile-html imply --debug for source location tracking
-    let (instructions, debug_info) =
-        if cli.debug || cli.profile || cli.flamegraph.is_some() || cli.profile_html.is_some() {
-            // Debug mode: parse with debug symbols for source location tracking
-            match parse_with_debug(&source) {
-                Ok((instructions, debug_info)) => (instructions, Some(debug_info)),
-                Err(BfError::MultipleBracketErrors { .. }) => {
-                    // Errors already reported to stderr, just exit with error code
-                    std::process::exit(1);
-                }
-                Err(e) => return Err(e),
+    // Note: --profile implies --debug for source location tracking
+    let (instructions, debug_info) = if cli.debug || cli.profile {
+        // Debug mode: parse with debug symbols for source location tracking
+        match parse_with_debug(&source) {
+            Ok((instructions, debug_info)) => (instructions, Some(debug_info)),
+            Err(BfError::MultipleBracketErrors { .. }) => {
+                // Errors already reported to stderr, just exit with error code
+                std::process::exit(1);
             }
-        } else {
-            // Fast mode (default): parse without debug symbols
-            match parse(&source) {
-                Ok(instructions) => (instructions, None),
-                Err(BfError::MultipleBracketErrors { .. }) => {
-                    // Errors already reported to stderr, just exit with error code
-                    std::process::exit(1);
-                }
-                Err(e) => return Err(e),
+            Err(e) => return Err(e),
+        }
+    } else {
+        // Fast mode (default): parse without debug symbols
+        match parse(&source) {
+            Ok(instructions) => (instructions, None),
+            Err(BfError::MultipleBracketErrors { .. }) => {
+                // Errors already reported to stderr, just exit with error code
+                std::process::exit(1);
             }
-        };
+            Err(e) => return Err(e),
+        }
+    };
 
     // Parse cell model
     let cell_model = parse_or_exit(
@@ -209,8 +200,8 @@ fn run() -> Result<(), BfError> {
     // Build the final config
     let mut config = builder.build();
 
-    // Create profiler hook if --profile flag is set or --flamegraph/--profile-html is requested
-    let profiler_handle = if cli.profile || cli.flamegraph.is_some() || cli.profile_html.is_some() {
+    // Create profiler hook if --profile flag is set
+    let profiler_handle = if cli.profile {
         let profiler = Arc::new(Mutex::new(ProfilingHook::new()));
         let profiler_clone = Arc::clone(&profiler);
         config.register_hook(Box::new(SharedProfilingHook::new_with_shared(
@@ -329,62 +320,6 @@ fn run() -> Result<(), BfError> {
         eprintln!();
         eprintln!("{}", profiler.format_ascii_tree());
         eprintln!("{}", "=".repeat(80));
-    }
-
-    // Generate flamegraph SVG if requested
-    if let Some(flamegraph_path) = &cli.flamegraph
-        && let Some(profiler) = &profiler_handle
-    {
-        let profiler = profiler.lock().unwrap();
-        let folded_stacks = profiler.generate_flamegraph_data();
-
-        // Generate SVG using inferno
-        use inferno::flamegraph;
-        let mut options = flamegraph::Options::default();
-        options.title = "BrainFuck Profile".to_string();
-
-        let mut svg_output = Vec::new();
-        if let Err(e) = flamegraph::from_lines(&mut options, folded_stacks.lines(), &mut svg_output)
-        {
-            eprintln!("Error generating flamegraph: {}", e);
-            std::process::exit(1);
-        }
-
-        // Write to file
-        if let Err(e) = fs::write(flamegraph_path, svg_output) {
-            eprintln!(
-                "Error writing flamegraph to {}: {}",
-                flamegraph_path.display(),
-                e
-            );
-            std::process::exit(1);
-        }
-
-        if !cli.quiet {
-            eprintln!("\n✅ Flamegraph saved to: {}", flamegraph_path.display());
-        }
-    }
-
-    // Generate HTML heatmap if requested
-    if let Some(html_path) = &cli.profile_html
-        && let Some(profiler) = &profiler_handle
-    {
-        let profiler = profiler.lock().unwrap();
-        let html = profiler.generate_html_heatmap(&source, debug_info.as_ref());
-
-        // Write to file
-        if let Err(e) = fs::write(html_path, html) {
-            eprintln!(
-                "Error writing HTML heatmap to {}: {}",
-                html_path.display(),
-                e
-            );
-            std::process::exit(1);
-        }
-
-        if !cli.quiet {
-            eprintln!("✅ HTML heatmap saved to: {}", html_path.display());
-        }
     }
 
     Ok(())
