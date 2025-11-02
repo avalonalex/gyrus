@@ -1121,11 +1121,15 @@ impl ProfilingHook {
 
                         // Use logarithmic scale for better color distribution
                         let heat = if hits == 0 {
-                            0.0
+                            -1.0 // Sentinel value for truly unexecuted (heat_to_color checks <= 0.0)
+                        } else if hits == 1 {
+                            // Special case: 1 hit should be cold (small positive value)
+                            // ln(1) = 0, but we want hits=1 to show as "cold" not "not executed"
+                            0.01 // Just above 0.0, will be colored cyan (cold)
                         } else if max_hits > 1.0 {
                             // Map hit counts logarithmically: log(hits) / log(max_hits)
                             // This spreads out lower frequencies much better
-                            ((hits as f64).ln() / max_hits.ln()).clamp(0.0, 1.0)
+                            ((hits as f64).ln() / max_hits.ln()).clamp(0.01, 1.0)
                         } else {
                             1.0
                         };

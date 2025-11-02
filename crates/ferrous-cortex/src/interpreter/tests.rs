@@ -868,7 +868,6 @@ fn test_source_location_multiline_program() {
 }
 
 #[test]
-// #[ignore] // TODO: Fix after loop parsing refactor - instruction indices shifted
 fn test_source_location_in_nested_loop() {
     // Test that source location works correctly inside nested loops
     use crate::config::ExecutionConfigBuilder;
