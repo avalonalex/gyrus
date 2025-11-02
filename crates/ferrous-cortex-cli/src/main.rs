@@ -62,17 +62,15 @@ struct Cli {
     #[arg(long, default_value = "zero")]
     eof_behavior: String,
 
-    /// Enable debug symbols for source location tracking (slower, shows line/column in errors)
+    /// Enable debug mode: use standard interpreter with source location tracking
+    /// (slower but shows line/column in errors, required for debugging)
     #[arg(long)]
     debug: bool,
 
-    /// Enable profiling to identify hot code regions and loop performance (implies --debug)
+    /// Enable trace mode: profile execution and show heatmap at end
+    /// (implies --debug, shows hot code regions and loop performance)
     #[arg(long)]
-    profile: bool,
-
-    /// Enable optimizations for faster execution (disables debug symbols and profiling)
-    #[arg(long)]
-    optimize: bool,
+    trace: bool,
 }
 
 fn main() {
@@ -99,12 +97,12 @@ where
 fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
-    // Validate conflicting options
-    if cli.optimize && (cli.profile || cli.debug) {
-        eprintln!("Error: --optimize cannot be used with --profile or --debug");
-        eprintln!("       (Optimized interpreter prioritizes performance over observability)");
-        std::process::exit(1);
-    }
+    // Determine execution mode
+    // Default: Optimized interpreter (fast, no tracking)
+    // --debug: Standard interpreter with debug symbols
+    // --trace: Standard interpreter with debug symbols + profiling
+    let use_optimized = !cli.debug && !cli.trace;
+    let enable_profiling = cli.trace;
 
     // Read the source file
     let source = fs::read_to_string(&cli.file).map_err(|source| BfError::FileError {
@@ -117,10 +115,10 @@ fn run() -> Result<(), BfError> {
         ),
     })?;
 
-    // Parse the program (with or without debug symbols based on --debug flag)
-    // Note: --profile implies --debug for source location tracking
-    // Note: --optimize disables debug symbols
-    let (instructions, debug_info) = if cli.debug || cli.profile {
+    // Parse the program
+    // - Optimized mode: parse without debug symbols (fast)
+    // - Debug/trace mode: parse with debug symbols for source tracking
+    let (instructions, debug_info) = if cli.debug || cli.trace {
         // Debug mode: parse with debug symbols for source location tracking
         match parse_with_debug(&source) {
             Ok((instructions, debug_info)) => (instructions, Some(debug_info)),
@@ -212,8 +210,8 @@ fn run() -> Result<(), BfError> {
     // Build the final config
     let mut config = builder.build();
 
-    // Create profiler hook if --profile flag is set
-    let profiler_handle = if cli.profile {
+    // Create profiler hook if --trace flag is set
+    let profiler_handle = if enable_profiling {
         let profiler = Arc::new(Mutex::new(ProfilingHook::new()));
         let profiler_clone = Arc::clone(&profiler);
         config.register_hook(Box::new(SharedProfilingHook::new_with_shared(
@@ -237,6 +235,7 @@ fn run() -> Result<(), BfError> {
 
     if cli.verbose && !cli.quiet {
         eprintln!("Configuration:");
+        eprintln!("  Execution mode: {}", if use_optimized { "Optimized (default)" } else if enable_profiling { "Trace (profiling + debug)" } else { "Debug (standard + symbols)" });
         eprintln!("  Memory model: {}", config.memory_model());
         eprintln!("  Cell model: {}", config.cell_model());
         eprintln!(
@@ -254,11 +253,11 @@ fn run() -> Result<(), BfError> {
         eprintln!();
     }
 
-    // Execute the program (optimized or standard path)
+    // Execute the program
     let mut input = StdInput;
     let mut output = StdOutput;
-    let stats = if cli.optimize {
-        // Optimized path: optimize then execute
+    let stats = if use_optimized {
+        // OPTIMIZED MODE (default): Fast execution, no tracking
         let optimized = optimize(&instructions);
 
         if cli.verbose && !cli.quiet {
@@ -273,13 +272,13 @@ fn run() -> Result<(), BfError> {
         {
             Ok(s) => s,
             Err(e) => {
-                // Optimized interpreter errors don't have source location
-                eprintln!("{}", e.format_detailed());
+                eprintln!("Error: {}", e.format_detailed());
+                eprintln!("\nHint: Use --debug for source location tracking and better error messages");
                 std::process::exit(1);
             }
         }
     } else {
-        // Standard path: execute with optional debug symbols
+        // DEBUG/TRACE MODE: Standard interpreter with debug symbols
         match interpret_with_io(
             &instructions,
             config,
@@ -289,7 +288,6 @@ fn run() -> Result<(), BfError> {
         ) {
             Ok(s) => s,
             Err(e) => {
-                // For runtime errors, use format_with_source to show source location
                 eprintln!("{}", e.format_with_source(&source));
                 std::process::exit(1);
             }
@@ -316,18 +314,15 @@ fn run() -> Result<(), BfError> {
         eprintln!("Bytes read: {}", stats.bytes_read);
         eprintln!("Bytes written: {}", stats.bytes_written);
 
-        // If debug mode is enabled, show where execution completed
-        if cli.debug
+        // If debug mode is enabled (not trace-only), show where execution completed
+        if !enable_profiling && cli.debug
             && let Some(ref debug_info) = debug_info
         {
-            // Find the last instruction that was executed
-            // Program completed, so we executed through all instructions
             let total_instructions = debug_info.len();
             if total_instructions > 0 {
                 eprintln!("\n=== Debug Information ===");
                 eprintln!("Total instructions: {}", total_instructions);
 
-                // Look up the last instruction's location
                 let last_instruction_index = total_instructions - 1;
                 if let Some(location) = debug_info.lookup(last_instruction_index) {
                     eprintln!(
@@ -342,7 +337,7 @@ fn run() -> Result<(), BfError> {
         }
     }
 
-    // Display profiling results if --profile flag was used (unless --quiet)
+    // Display profiling results if --trace flag was used (unless --quiet)
     if !cli.quiet
         && let Some(profiler) = &profiler_handle
     {
