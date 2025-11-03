@@ -635,6 +635,454 @@ $ gdb ./program
    Current instruction
 ```
 
+## Debug Build Strategies
+
+When compiling BrainFuck to native code, we lose the interpreter's ability to hook into every instruction. There are multiple strategies for preserving debuggability, each with different tradeoffs.
+
+### Strategy 1: DWARF Debug Symbols (Recommended for AOT/JIT)
+
+**Approach:** Use Cranelift's built-in DWARF support to emit industry-standard debug information.
+
+**How it works:**
+1. Map each BF instruction to source locations during compilation
+2. Emit DWARF sections in the compiled binary (AOT) or in-memory (JIT)
+3. Standard debuggers (GDB, LLDB) can step through BF source code
+
+**Implementation:**
+```rust
+// In translator.rs
+fn translate_instruction(
+    &mut self,
+    inst: &OptimizedInstruction,
+    builder: &mut FunctionBuilder,
+    debug_info: Option<&DebugInfo>,
+) {
+    // Set source location for this instruction
+    if let Some(debug_info) = debug_info {
+        let source_range = inst.source_range();
+        let srcloc = SourceLoc::new(source_range.start as u32);
+        builder.set_srcloc(srcloc);  // Cranelift API
+    }
+
+    // Emit Cranelift IR (all instructions inherit this source location)
+    match inst {
+        OptimizedInstruction::Add(n, _) => {
+            let ptr = builder.use_var(pointer_var);
+            let addr = builder.ins().iadd(mem_base, ptr);
+            let cell = builder.ins().load(types::I8, MemFlags::trusted(), addr, 0);
+            let new_cell = builder.ins().iadd_imm(cell, *n as i64);
+            builder.ins().store(MemFlags::trusted(), new_cell, addr, 0);
+        }
+        // ... other instructions
+    }
+}
+```
+
+**For JIT builds:**
+- Debug info stays in memory
+- GDB/LLDB can attach to running process
+- Source locations available for crash dumps
+
+**For AOT builds:**
+```rust
+use cranelift_object::ObjectModule;
+use gimli::write::Dwarf;
+
+// After compiling function
+let mut dwarf = Dwarf::default();
+let unit = dwarf.units.add(/* compilation unit */);
+
+// Add line number program
+for (inst_offset, source_loc) in debug_info.iter() {
+    dwarf.line_program.add_row(
+        inst_offset,
+        source_loc.line,
+        source_loc.column,
+    );
+}
+
+// Embed in object file
+object_module.emit_debug_info(&dwarf);
+```
+
+**Debugging experience:**
+```bash
+$ gdb ./compiled_bf_program
+(gdb) break 456  # Set breakpoint at BF source line 456
+Breakpoint 1 at 0x1234: file program.bf, line 456.
+(gdb) run
+Breakpoint 1, line 456 in program.bf
+456 | +++[>++<-]    * This is where the error happens
+    |    ^
+(gdb) backtrace
+#0  line 456 in program.bf
+#1  loop at line 320 in program.bf
+#2  loop at line 45 in program.bf
+(gdb) print *memory@30000  # Inspect memory
+```
+
+**Advantages:**
+- ✅ Zero runtime overhead (debug info is separate)
+- ✅ Works with standard debuggers (GDB, LLDB, lldb-vscode, VS Code)
+- ✅ Industry-standard approach
+- ✅ Cranelift has built-in support via `builder.set_srcloc()`
+- ✅ Can strip debug info for release builds (no penalty)
+
+**Disadvantages:**
+- ⚠️ Complex to implement fully (DWARF format has many features)
+- ⚠️ Limited control over debug behavior (standard debuggers only)
+- ⚠️ Requires understanding debug sections and formats
+
+**When to use:**
+- Default for all JIT/AOT debug builds
+- Production error reporting (stack traces)
+- Integration with IDEs and external tools
+
+---
+
+### Strategy 2: Runtime Instrumentation (For Interactive Debugger)
+
+**Approach:** Insert function calls before/after each instruction that callback into runtime debugger.
+
+**How it works:**
+1. Compile BF program with debug hooks at each instruction
+2. Runtime function checks breakpoints, updates UI, handles step-through
+3. Full control over debug behavior (time-travel, custom features)
+
+**Implementation:**
+```rust
+// In translator.rs (debug mode)
+fn translate_with_instrumentation(
+    inst: &OptimizedInstruction,
+    inst_index: usize,
+    builder: &mut FunctionBuilder,
+) {
+    // Emit call to debug hook BEFORE each instruction
+    let inst_idx = builder.ins().iconst(types::I32, inst_index as i64);
+    let mem_ptr = builder.use_var(memory_var);
+    let ptr_val = builder.use_var(pointer_var);
+
+    // Call: void debug_hook(u32 inst_index, *mut u8 memory, u64 pointer)
+    builder.ins().call(debug_hook_func, &[inst_idx, mem_ptr, ptr_val]);
+
+    // Now emit the actual instruction
+    match inst {
+        OptimizedInstruction::Add(n, _) => {
+            // ... normal translation
+        }
+        // ... other instructions
+    }
+}
+```
+
+```rust
+// Runtime function (in ferrous-cortex-jit or linked into AOT binary)
+extern "C" fn debug_hook(
+    inst_index: u32,
+    memory: *mut u8,
+    pointer: u64,
+) {
+    // Check breakpoints
+    if BREAKPOINT_MANAGER.has_breakpoint_at(inst_index) {
+        let loc = DEBUG_INFO.lookup(inst_index);
+        println!("Breakpoint hit at line {}, column {}", loc.line, loc.column);
+
+        // Pause execution, show debugger UI
+        DEBUGGER_UI.pause_and_show(memory, pointer, loc);
+    }
+
+    // Update trace/profiler
+    if TRACE_ENABLED.load(Ordering::Relaxed) {
+        let loc = DEBUG_INFO.lookup(inst_index);
+        println!("[{:06}] Line {}, Col {}: executing",
+            inst_index, loc.line, loc.column);
+    }
+
+    // Update instruction heat map
+    PROFILER.record_execution(inst_index);
+}
+```
+
+**Advantages:**
+- ✅ Full control over debug behavior
+- ✅ Can implement custom features (time-travel, memory watchpoints, heat maps)
+- ✅ Easier to implement than DWARF
+- ✅ Perfect for TUI debugger integration
+- ✅ Can capture execution history for replay
+
+**Disadvantages:**
+- ❌ Significant runtime overhead (50-90% slower due to function call per instruction)
+- ❌ Not compatible with standard debuggers (GDB/LLDB)
+- ❌ Debug build is MUCH slower than release build
+- ❌ Larger compiled code size (extra calls everywhere)
+
+**When to use:**
+- Interactive TUI debugger (`ferrous-cortex --debug --interactive`)
+- Execution tracing and profiling
+- Teaching/learning mode with step-through
+- When you need custom debug features not supported by DWARF
+
+---
+
+### Strategy 3: Safepoint Polling (Hybrid Approach)
+
+**Approach:** Insert lightweight checks only at strategic points (loop headers, not every instruction).
+
+**How it works:**
+1. Emit debug checks only at loop boundaries
+2. Check a global flag: if debugging is active, call debug handler
+3. Hot path (normal execution) has minimal overhead (single load + branch)
+
+**Implementation:**
+```rust
+fn translate_loop_with_safepoint(
+    loop_body: &[OptimizedInstruction],
+    loop_start_location: SourceLocation,
+    builder: &mut FunctionBuilder,
+) {
+    let header_block = builder.create_block();
+    let loop_block = builder.create_block();
+    let debug_check_block = builder.create_block();
+    let after_block = builder.create_block();
+
+    builder.ins().jump(header_block, &[]);
+    builder.switch_to_block(header_block);
+
+    // SAFEPOINT: Check debug flag once per loop iteration
+    let debug_flag_addr = builder.ins().global_value(types::I64, debug_flag_global);
+    let debug_flag = builder.ins().load(types::I8, MemFlags::trusted(), debug_flag_addr, 0);
+    let is_debugging = builder.ins().icmp_imm(IntCC::NotEqual, debug_flag, 0);
+
+    // Branch to debug check if flag is set (cold path)
+    builder.ins().brnz(is_debugging, debug_check_block, &[]);
+
+    // Check loop condition (hot path)
+    let ptr = builder.use_var(pointer_var);
+    let addr = builder.ins().iadd(mem_base, ptr);
+    let cell = builder.ins().load(types::I8, MemFlags::trusted(), addr, 0);
+    builder.ins().brz(cell, after_block, &[]);
+    builder.ins().jump(loop_block, &[]);
+
+    // Debug check block (only executed when debugging is active)
+    builder.switch_to_block(debug_check_block);
+    let loop_loc = builder.ins().iconst(types::I32, loop_start_location.offset as i64);
+    builder.ins().call(debug_safepoint_func, &[loop_loc]);
+    // Re-check loop condition after debug
+    let ptr = builder.use_var(pointer_var);
+    let addr = builder.ins().iadd(mem_base, ptr);
+    let cell = builder.ins().load(types::I8, MemFlags::trusted(), addr, 0);
+    builder.ins().brz(cell, after_block, &[]);
+    builder.ins().jump(loop_block, &[]);
+
+    // Loop body (no instrumentation in body for performance)
+    builder.switch_to_block(loop_block);
+    for inst in loop_body {
+        translate_instruction(inst, builder); // No hooks
+    }
+    builder.ins().jump(header_block, &[]);
+
+    builder.seal_block(header_block);
+    builder.seal_block(loop_block);
+    builder.seal_block(debug_check_block);
+    builder.switch_to_block(after_block);
+    builder.seal_block(after_block);
+}
+```
+
+**Advantages:**
+- ✅ Minimal overhead when debugging is disabled (~1-2% from branch predictor)
+- ✅ Can pause execution at loop boundaries (sufficient for most debugging)
+- ✅ Good compromise between speed and debuggability
+- ✅ Flag can be toggled at runtime (enable/disable debugging dynamically)
+
+**Disadvantages:**
+- ⚠️ Can't break/step in middle of long non-looping sequences
+- ⚠️ Requires maintaining global debug state
+- ⚠️ Less precise than full instrumentation
+
+**When to use:**
+- Balance between performance and debuggability
+- Programs with heavy computation inside loops
+- Production builds that might need occasional debugging
+
+---
+
+### Strategy 4: Tiered Compilation (Ultimate Flexibility)
+
+**Approach:** Switch between interpreter (debuggable) and compiled code (fast) based on use case.
+
+**Implementation:**
+```rust
+pub enum ExecutionMode {
+    Interpreter,       // Full debug support via hooks (existing)
+    JitInstrumented,   // Compiled with debug hooks (Strategy 2)
+    JitDebug,          // Compiled with DWARF (Strategy 1)
+    JitRelease,        // Compiled, no debug info (maximum speed)
+}
+
+pub fn execute_program(
+    instructions: &[OptimizedInstruction],
+    debug_info: &DebugInfo,
+    mode: ExecutionMode,
+) -> Result<ExecutionStats> {
+    match mode {
+        ExecutionMode::Interpreter => {
+            // Use existing interpreter with hooks
+            interpret_with_config(instructions, config, Some(debug_info))
+        }
+        ExecutionMode::JitInstrumented => {
+            // Compile with debug hooks
+            let compiler = JitCompiler::new_instrumented()?;
+            let program = compiler.compile(instructions, Some(debug_info))?;
+            program.execute()
+        }
+        ExecutionMode::JitDebug => {
+            // Compile with DWARF
+            let compiler = JitCompiler::new_debug()?;
+            let program = compiler.compile(instructions, Some(debug_info))?;
+            program.execute()
+        }
+        ExecutionMode::JitRelease => {
+            // Compile for speed
+            let compiler = JitCompiler::new_release()?;
+            let program = compiler.compile(instructions, None)?;
+            program.execute()
+        }
+    }
+}
+```
+
+**CLI integration:**
+```bash
+# Interpreter - maximum debug features (existing)
+ferrous-cortex program.bf --debug --trace
+
+# JIT with DWARF - fast + debugger support
+ferrous-cortex program.bf --jit --debug
+
+# JIT instrumented - full hooks for TUI debugger
+ferrous-cortex program.bf --jit --debug --instrumented
+
+# JIT release - maximum speed
+ferrous-cortex program.bf --jit
+```
+
+**Advantages:**
+- ✅ User chooses appropriate tradeoff for their use case
+- ✅ Maintains existing interpreter path (no regression)
+- ✅ Clear separation of concerns
+- ✅ Easy to add new execution modes
+
+**Disadvantages:**
+- ⚠️ More code to maintain (multiple execution paths)
+- ⚠️ Need to test all modes
+- ⚠️ Users need to understand which mode to use
+
+---
+
+## Recommended Implementation Plan
+
+### Phase 1: JIT with DWARF (2-3 weeks)
+
+**Goal:** Basic compiled execution with debugger support
+
+1. Implement Strategy 1 (DWARF) in JIT mode
+2. Call `builder.set_srcloc()` for each instruction
+3. Test with GDB/LLDB on simple programs
+4. CLI: `--jit` and `--jit --debug` flags
+
+**Expected results:**
+- 100-500× speedup over interpreter
+- GDB can show BF source lines
+- Breakpoints work at source level
+
+### Phase 2: Instrumented Mode (1-2 weeks)
+
+**Goal:** Full debug support for TUI debugger
+
+1. Implement Strategy 2 (instrumentation)
+2. Add `--instrumented` flag
+3. Integrate with hook system
+4. Test with complex programs
+
+**Expected results:**
+- ~50% slower than JIT debug, but much faster than interpreter
+- Full control over execution (breakpoints, step, watchpoints)
+- Foundation for TUI debugger
+
+### Phase 3: Optimization (1 week)
+
+**Goal:** Minimize debug overhead
+
+1. Implement Strategy 3 (safepoints) as option
+2. Benchmark all modes
+3. Profile and optimize hot paths
+4. Document performance characteristics
+
+**Expected results:**
+- Safepoint mode: <5% overhead vs release
+- Clear guidance on which mode to use when
+
+---
+
+## Comparison Matrix
+
+| Strategy | Runtime Overhead | Debugger | Custom Features | Complexity | Best For |
+|----------|-----------------|----------|-----------------|------------|----------|
+| **DWARF** | 0% | ✅ GDB/LLDB | ❌ | Medium | AOT/JIT default |
+| **Instrumented** | 50-90% | ❌ | ✅ Full control | Low | TUI debugger |
+| **Safepoints** | 1-5% | ⚠️ Limited | ✅ Partial | Medium | Production + debug |
+| **Interpreter** | N/A | ✅ Full hooks | ✅ Full control | N/A | Already have! |
+
+---
+
+## Integration with Existing Architecture
+
+FerrousCortex already has excellent foundations for debug support:
+
+✅ **`SourceRange` in every `OptimizedInstruction`**
+- Already tracks source location spans
+- Maps directly to Cranelift's `SourceLoc`
+
+✅ **`DebugInfo` with instruction_map**
+- O(1) lookup from instruction index to source location
+- Can be passed to compiler unchanged
+
+✅ **`parse_with_debug()`**
+- Collects debug symbols during parsing
+- Ready to use in compilation pipeline
+
+✅ **Hook system (`ExecutionHook` trait)**
+- Can integrate with instrumented builds
+- Callbacks for breakpoints, tracing, profiling
+
+**Minimal integration required:**
+```rust
+// In translator.rs - just add this line before each instruction translation:
+let srcloc = SourceLoc::new(inst.source_range().start as u32);
+builder.set_srcloc(srcloc);
+
+// That's it! Cranelift handles the rest.
+```
+
+---
+
+## Future Enhancements
+
+**Hot-path optimization:**
+- Profile-guided optimization: instrument first, compile optimized later
+- Deoptimization: fall back to interpreter when debugging is needed
+
+**Advanced debugging:**
+- Reverse execution (requires execution history)
+- Conditional breakpoints based on memory state
+- Watchpoints on specific cells
+
+**IDE integration:**
+- Debug Adapter Protocol (DAP) server
+- VS Code extension with visual debugging
+- Source-level profiling with heat maps
+
 ## Performance Benchmarks (Projected)
 
 ### hanoi.bf (Towers of Hanoi)
