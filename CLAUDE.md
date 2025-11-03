@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 FerrousCortex is an industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust. The project uses Rust edition 2024.
 
 **Project Structure**: Cargo workspace with multiple crates
+
 - **ferrous-cortex** (`crates/ferrous-cortex/`): Core library crate
 - **ferrous-cortex-cli** (`crates/ferrous-cortex-cli/`): CLI binary crate
 - Future: debugger, REPL, JIT compiler as separate crates
@@ -14,7 +15,9 @@ FerrousCortex is an industry-strength BrainFuck interpreter/compiler and visual 
 ## Documentation Organization
 
 **Important**: Use the following directories for different types of documentation:
-- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents
+
+- **IMPORTANT** - Do not create markdown files unless the user explicitly states to do so. You may offer to create markdown files, but only do so with explicit user approval. Integrate any necessary notes as comments within the relevant code files, and keep comments succinct and on point.
+- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents. We should be aggressive in terms of purge outdated PRDs as they have high cognative overhead.
 - **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
 
 ## Core Architecture
@@ -65,6 +68,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
    - Public API: `minify(instructions: &[Instruction]) -> String`
 
 **Supporting Modules:**
+
 - **error** (`error.rs`): `BfError`, `BfWarning` types with rich formatting and syntax highlighting
   - `extract_source_context_highlighted()`: Generates syntax-highlighted error/warning messages with ANSI colors
   - Caret positioning formula: `column + 6` (7-char line prefix, column is 1-indexed)
