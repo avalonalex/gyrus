@@ -1,22 +1,33 @@
 # gyrus
 
-A BrainFuck interpreter, optimizer, and debugger written in Rust.
+**Production-grade tooling for a language that will never see production.**
 
-A *gyrus* is one of the folds of the cerebral cortex. The word also reads as
-*gyre* — a loop, a spiral — which is most of what a BrainFuck program is.
+BrainFuck has eight instructions, no variables, no functions, no types, and no
+error messages. It was built in 1993 to see how small a compiler could get, and
+it succeeded so completely that writing anything in it is closer to a dare than
+to programming. Nobody ships BrainFuck. Nobody has ever been paged at 3am
+because a BrainFuck service fell over.
 
-> **Note**: this codebase is written with AI assistance (Claude). It is a
-> project for learning how interpreters, optimizers, and debuggers fit
-> together, not production software.
+gyrus gives it the toolchain anyway: errors that point at the line and column
+that caused them, an optimizer, a profiler with an execution heatmap, static
+analysis, configurable memory and cell semantics, and the hook infrastructure a
+real debugger sits on. The language deserves none of this. That is the fun.
 
-## Why
+A *gyrus* is a fold of the cerebral cortex. The word also reads as *gyre* — a
+loop, a spiral — which is most of what a BrainFuck program is.
 
-BrainFuck gives you eight instructions and no diagnostics: no line numbers, no
-variable names, no stack traces. When a program misbehaves, the language offers
-nothing to help. gyrus is an attempt to give it everything a real toolchain has.
+> **Note**: written with AI assistance (Claude), as a project for learning how
+> interpreters, optimizers, and debuggers fit together. Built in earnest, which
+> is not the same as battle-tested.
 
-An unmatched bracket, for instance, is reported where it actually is — with
-context, and in colour in a real terminal:
+## What a real error message looks like
+
+Here is what BrainFuck traditionally tells you when your brackets do not
+balance: nothing. The program runs until it does something unforgivable, and
+you find out by watching the memory fill with garbage.
+
+Here is what gyrus says instead — with syntax highlighting, in a real
+terminal:
 
 ```
 $ gyrus programs/errors/unmatched_bracket.bf
@@ -28,9 +39,11 @@ Error: Unmatched '[' at line 12, column 1
    13 |             * This will cause a parse error
 ```
 
-All bracket errors are reported in one pass rather than one per run. Runtime
-errors carry the same context when built with `--debug`, because the parser
-keeps a source location for every instruction.
+Every bracket error is reported in one pass, not one per run, because finding
+your mistakes one at a time is a punishment the language already inflicts
+enough of. Runtime errors carry the same context under `--debug`: the parser
+keeps a source location for every single instruction, so "cell overflow at
+instruction 5042" becomes a line, a column, and a caret.
 
 ## Quick start
 
@@ -49,6 +62,8 @@ own. Building against another toolchain needs Rust **1.88** or newer (the code
 uses let-chains, which stabilized there).
 
 ## Features
+
+The unreasonable part is that all of this actually works.
 
 **Execution**
 - Three execution modes: an optimized interpreter (default), a debug
@@ -99,12 +114,14 @@ uses let-chains, which stabilized there).
 
 ## Status
 
-Working: the parser with full source locations, three execution modes
-(optimized, debug, tracing), an optimizer, the hook system, static validation,
+**Working**: the parser with full source locations, three execution modes
+(optimized, debug, tracing), the optimizer, the hook system, static validation,
 minification, syntax highlighting, and the `gyrus-tool` subcommands.
 
-Planned: a TUI debugger with breakpoints and memory visualization, a REPL, and
-a Cranelift JIT/AOT backend. Designs for those live in [`PRD/`](PRD/).
+**Planned**: a TUI debugger with breakpoints and memory visualization, a REPL,
+and a Cranelift JIT/AOT backend — because if you are going to over-engineer a
+BrainFuck implementation, you may as well JIT-compile it. Designs live in
+[`PRD/`](PRD/).
 
 ## Development
 
@@ -137,7 +154,10 @@ is in [`programs/third-party/CREDITS.md`](programs/third-party/CREDITS.md).
 
 ## Contributing
 
-This is a personal learning project, so there is no roadmap you can sign up
-for — but bug reports and corrections are welcome, especially about the
-BrainFuck programs under `programs/third-party/` if you are one of their
-authors.
+This is a personal learning project, so there is no roadmap to sign up for. Bug
+reports and corrections are welcome all the same — particularly if you wrote
+one of the programs under `programs/third-party/` and want it credited
+differently or removed.
+
+If you found a genuine bug in a BrainFuck interpreter, you have my sincere
+respect for how you spent your afternoon.
