@@ -1,6 +1,6 @@
 # PRD: Public Release — Rename to `gyrus` and Repository Hygiene
 
-**Status**: In Progress — Phase 1 complete, Phase 2 complete, Phase 3 partial
+**Status**: In Progress — Phases 1-3 complete, Phase 4 (docs/tone) remaining
 **Last Updated**: 2026-08-23
 **Priority**: High (blocks first public push)
 
@@ -147,9 +147,13 @@ Fix: move `license`, `repository`, `authors`, and `rust-version` into
 `[workspace.package]`; inherit everywhere; drop the fictional "Contributors"
 attribution; settle on one version for the 0.3.0 release.
 
-**S2 — No declared MSRV.** Edition 2024 needs Rust ≥ 1.85. Without
-`rust-version`, users on older toolchains get a manifest parse error instead of
-a clear message.
+**S2 — No declared MSRV.** ~~Edition 2024 needs Rust ≥ 1.85.~~ **Deferred
+deliberately.** `rust-toolchain.toml` now pins 1.97.1 and is the single place a
+Rust version is declared, so contributors and CI cannot drift. A `rust-version`
+field would be a second copy of that number, and — with no 1.85 toolchain
+available to build against — an unverified claim, which is worse than no claim.
+Revisit at the crates.io decision, where MSRV actually matters to consumers, and
+add it together with a CI job that builds on that exact version.
 
 **S3 — No CI.** Baseline is already green: `cargo fmt --check` clean, 302 tests
 passing, exactly one clippy warning (useless `vec!` in the library). A GitHub
@@ -219,9 +223,7 @@ documentation, archive, or delete.
 3. README license section: dual license for the Rust code, separate note for
    `programs/third-party/`.
 
-### Phase 3 — Hygiene ⏳ PARTIAL (c58a12f: binary untracked, license/repository
-consolidated into [workspace.package]; remaining: version unification, authors
-field, rust-version, CI, the one clippy warning)
+### Phase 3 — Hygiene ✅ COMPLETE (c58a12f, c860cd7)
 
 1. `git rm --cached benchmarks/mandelbrot`, gitignore `benchmarks/mandelbrot`.
 2. Consolidate manifest metadata into `[workspace.package]`; add `rust-version`;
@@ -251,14 +253,15 @@ field, rust-version, CI, the one clippy warning)
 - [x] `git grep -iE 'ferrous[-_ ]?cortex'` returns hits only in `PRD/archived/`
       and in this document's record of the before-state.
 - [x] `cargo test --workspace` green (302 tests) after the rename.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean (four
+      warnings fixed; the lint surface differs by toolchain, hence the pin).
 - [x] `LICENSE` (MIT) present; README license section filled. Dual-licensing was
       dropped: MIT alone, matching the other projects in this collection.
 - [x] Every file in `programs/` is either original or credited in
       `programs/third-party/CREDITS.md` with author, source, and license.
 - [x] No tracked binary artifacts (verified: 0).
-- [ ] All three crates share one version and inherit workspace metadata.
-- [ ] CI green on a pushed branch.
+- [x] All three crates share one version (0.3.0) and inherit workspace metadata.
+- [ ] CI green on a pushed branch (workflow added; has not run yet).
 - [ ] README describes the project as it is, with no unearned superlatives.
 - [ ] `cargo package -p gyrus` succeeds (whether or not it is published).
 
