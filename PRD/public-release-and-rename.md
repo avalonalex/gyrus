@@ -1,7 +1,7 @@
 # PRD: Public Release — Rename to `gyrus` and Repository Hygiene
 
-**Status**: Not Started
-**Last Updated**: 2026-08-22
+**Status**: In Progress — Phase 1 complete, Phase 2 complete, Phase 3 partial
+**Last Updated**: 2026-08-23
 **Priority**: High (blocks first public push)
 
 ## Summary
@@ -176,7 +176,18 @@ documentation, archive, or delete.
 
 ## Implementation Plan
 
-### Phase 0 — Decisions (blocking, human)
+### Phase 0 — Decisions ✅ RESOLVED 2026-08-23
+
+- Name: **gyrus**.
+- Third-party programs: **attribute, do not purge**. Mere aggregation (GPL §5)
+  means a GPL program can sit in an MIT repo without affecting the Rust code's
+  license; and the files carrying explicit grants (GPL, CC BY-SA) are the
+  *strongest* ones to redistribute, while the unlicensed bylined programs are
+  the weakest. Purging would have cost the benchmark corpus for no legal gain.
+- `benchmarks/mandelbrot`: **untracked going forward**, blob left in history.
+- Commit email and crates.io publishing: still open.
+
+### Phase 0 (original) — Decisions (blocking, human)
 
 - Confirm `gyrus` and reserve nothing (crates.io names are claimed by publishing,
   not reserving).
@@ -187,7 +198,7 @@ documentation, archive, or delete.
   noreply address going forward, rewrite, or accept it as public.
 - Decide whether v0.3.0 publishes to crates.io or is GitHub-only for now.
 
-### Phase 1 — Rename (one commit, mechanical)
+### Phase 1 — Rename ✅ COMPLETE (eec7c76)
 
 1. `git mv crates/ferrous-cortex crates/gyrus` (and `-cli`, `-tool`).
 2. Update the three `Cargo.toml` `name`/`[[bin]]` fields plus the workspace
@@ -200,7 +211,7 @@ documentation, archive, or delete.
    `PRD/archived/`.
 6. Rename the GitHub repository; GitHub keeps the redirect from the old name.
 
-### Phase 2 — Legal (B1, B2)
+### Phase 2 — Legal ✅ COMPLETE (0b91b16, 6d67b85)
 
 1. Add `LICENSE-MIT` and `LICENSE-APACHE` at the repo root.
 2. Create `programs/third-party/` + `CREDITS.md`; move and annotate the borrowed
@@ -208,7 +219,9 @@ documentation, archive, or delete.
 3. README license section: dual license for the Rust code, separate note for
    `programs/third-party/`.
 
-### Phase 3 — Hygiene (B4, S1, S2, S3)
+### Phase 3 — Hygiene ⏳ PARTIAL (c58a12f: binary untracked, license/repository
+consolidated into [workspace.package]; remaining: version unification, authors
+field, rust-version, CI, the one clippy warning)
 
 1. `git rm --cached benchmarks/mandelbrot`, gitignore `benchmarks/mandelbrot`.
 2. Consolidate manifest metadata into `[workspace.package]`; add `rust-version`;
@@ -235,14 +248,15 @@ documentation, archive, or delete.
 
 ## Success Criteria
 
-- [ ] `git grep -iE 'ferrous[-_ ]?cortex'` returns hits only in `PRD/archived/`.
-- [ ] `cargo test --workspace` green (302 tests) after the rename.
+- [x] `git grep -iE 'ferrous[-_ ]?cortex'` returns hits only in `PRD/archived/`
+      and in this document's record of the before-state.
+- [x] `cargo test --workspace` green (302 tests) after the rename.
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- [ ] `LICENSE-MIT` and `LICENSE-APACHE` present; README license section filled.
-- [ ] Every file in `programs/` is either original or credited in
+- [x] `LICENSE` (MIT) present; README license section filled. Dual-licensing was
+      dropped: MIT alone, matching the other projects in this collection.
+- [x] Every file in `programs/` is either original or credited in
       `programs/third-party/CREDITS.md` with author, source, and license.
-- [ ] No tracked binary artifacts (`git ls-files | xargs file | grep -c Mach-O`
-      is 0).
+- [x] No tracked binary artifacts (verified: 0).
 - [ ] All three crates share one version and inherit workspace metadata.
 - [ ] CI green on a pushed branch.
 - [ ] README describes the project as it is, with no unearned superlatives.
@@ -255,6 +269,14 @@ documentation, archive, or delete.
 - Phase 0 decisions block Phases 2, 3, and 5.
 
 ## Risks and Open Questions
+
+- **Publishing blocker: bench include paths** — `cargo package -p gyrus` ships
+  `benches/` but not `programs/`, so the `include_str!("../../../programs/...")`
+  calls in `benches/interpreter.rs` cannot resolve from a published crate. Fix
+  by excluding benches from the package, or by reading the programs at runtime.
+- **Publishing blocker: license text** — `LICENSE` sits at the repo root,
+  outside `crates/gyrus/`, so cargo will not include it in the published crate.
+  Copy it into each published crate directory before `cargo publish`.
 
 - **History rewrite** — Dropping `benchmarks/mandelbrot` from history means
   rewriting all 118 commits. Free now (private, single-author, no forks),
