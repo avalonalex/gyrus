@@ -2,16 +2,22 @@
 
 **Production-grade tooling for a language that will never see production.**
 
-BrainFuck has eight instructions, no variables, no functions, no types, and no
-error messages. It was built in 1993 to see how small a compiler could get, and
-it succeeded so completely that writing anything in it is closer to a dare than
-to programming. Nobody ships BrainFuck. Nobody has ever been paged at 3am
-because a BrainFuck service fell over.
+If you are going to run BrainFuck in production, run it on gyrus.
 
-gyrus gives it the toolchain anyway: errors that point at the line and column
-that caused them, an optimizer, a profiler with an execution heatmap, static
-analysis, configurable memory and cell semantics, and the hook infrastructure a
-real debugger sits on. The language deserves none of this. That is the fun.
+You are not going to run BrainFuck in production. But suppose you did. You would
+want an unmatched bracket to name the line it sits on. You would want to know
+which loop is burning 99% of your runtime. You would want the choice of an
+interpreter that refuses to let arithmetic wrap silently, and tells you that
+cell 0 overflowed at line 412, column 7, rather than rolling to zero and
+poisoning everything downstream. You would want a step limit and a wall-clock
+timeout, because a hung BrainFuck program tells you precisely nothing.
+
+gyrus has all of that. The language deserves none of it. That is the fun.
+
+What it is being asked to support: BrainFuck has eight instructions, no
+variables, no functions, no types, and no error messages. It was built in 1993
+to see how small a compiler could get, and it succeeded so completely that
+writing anything in it is closer to a dare than to programming.
 
 A *gyrus* is a fold of the cerebral cortex. The word also reads as *gyre* — a
 loop, a spiral — which is most of what a BrainFuck program is.
