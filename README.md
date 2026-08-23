@@ -993,7 +993,13 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 
 ## License
 
-[Add your license here]
+The Rust code in this repository is licensed under the [MIT License](LICENSE).
+
+The BrainFuck programs under `programs/` include well-known works by other
+authors, retained under their original licenses and marked as such in each
+file's header — see [`programs/README.md`](programs/README.md) for attribution.
+They are aggregated here as a test and benchmark corpus; the MIT license above
+covers the interpreter, not those programs.
 
 ## Contributing
 
