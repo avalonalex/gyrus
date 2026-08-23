@@ -252,10 +252,10 @@ fn run() -> Result<(), BfError> {
                 .map_or("unlimited".to_string(), |s| s.to_string())
         );
         eprintln!(
-            "  Timeout: {}ms",
+            "  Timeout: {}",
             config
                 .timeout_ms()
-                .map_or("unlimited".to_string(), |t| t.to_string())
+                .map_or("unlimited".to_string(), |t| format!("{t}ms"))
         );
         eprintln!();
     }

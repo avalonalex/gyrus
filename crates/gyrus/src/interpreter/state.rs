@@ -33,6 +33,17 @@ pub(super) struct VmState {
     pub loop_depth: usize,
     /// Memory model that dictates how memory operations behave
     pub memory_model: MemoryModel,
+    /// Highest pointer position reached so far.
+    ///
+    /// The optimized interpreter runs without hooks, so it accumulates the
+    /// statistics the debug path gets from `StatsTracker` here instead.
+    pub peak_pointer: usize,
+    /// Number of loop-body entries
+    pub loop_iterations: u64,
+    /// Total bytes read from input
+    pub bytes_read: u64,
+    /// Total bytes written to output
+    pub bytes_written: u64,
 }
 
 impl VmState {
@@ -45,6 +56,10 @@ impl VmState {
             step_count: StepCount::new(0),
             loop_depth: 0, // Start at top level (not inside any loops)
             memory_model,
+            peak_pointer: 0,
+            loop_iterations: 0,
+            bytes_read: 0,
+            bytes_written: 0,
         }
     }
 }

@@ -57,10 +57,23 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     // Execute the optimized program
     execute_block(instructions, &mut state, &config, input, output)?;
 
-    // Collect final statistics
+    // Collect final statistics.
+    //
+    // The optimized path runs without hooks, so these come from counters on
+    // VmState rather than from `StatsTracker`. Two of them are in *optimized*
+    // units and cannot match the debug interpreter: `total_steps` counts one
+    // step per optimized instruction, and `loop_iterations` counts only loops
+    // the optimizer left as loops — a `[-]` fused into `Zero`, or a `[>]` fused
+    // into `SeekRight`, no longer iterates. The rest (peak pointer, cells
+    // modified, bytes in and out) describe the program's actual behavior and do
+    // match.
     stats.total_steps = state.step_count;
-    stats.peak_memory_used = crate::types::MemoryAddress::new(state.memory.len());
+    stats.peak_memory_used = crate::types::MemoryAddress::new(state.peak_pointer + 1);
     stats.memory_allocated = crate::types::MemorySize::new(state.memory.capacity());
+    stats.loop_iterations = state.loop_iterations;
+    stats.bytes_read = state.bytes_read;
+    stats.bytes_written = state.bytes_written;
+    stats.cells_modified = ExecutionStats::count_modified_cells(&state.memory);
 
     Ok(stats)
 }
@@ -137,6 +150,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
 
         // Fused pointer movements
         OptimizedInstruction::Right(n, _range) => {
+            // One max() per fused move rather than per unit step
             for _ in 0..*n {
                 // Use memory model's increment logic
                 state.memory_model.try_increment_pointer(
@@ -147,6 +161,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                     0,    // Instruction index not used without debug info
                 )?;
             }
+            state.peak_pointer = state.peak_pointer.max(state.pointer.get());
             Ok(ExecutionFlow::Continue)
         }
 
@@ -174,6 +189,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                 instruction_index: Some(state.step_count.into()),
                 source,
             })?;
+            state.bytes_written += 1;
             Ok(ExecutionFlow::Continue)
         }
 
@@ -182,6 +198,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
             match input.read_byte() {
                 Ok(Some(byte)) => {
                     state.memory[ptr] = byte;
+                    state.bytes_read += 1;
                     Ok(ExecutionFlow::Continue)
                 }
                 Ok(None) => {
@@ -239,6 +256,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                     0,
                 )?;
             }
+            state.peak_pointer = state.peak_pointer.max(state.pointer.get());
             Ok(ExecutionFlow::Continue)
         }
 
@@ -326,6 +344,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
 
             // Loop while current cell is non-zero
             while state.memory[state.pointer.get()] != 0 {
+                state.loop_iterations += 1;
                 execute_block(body, state, config, input, output)?;
             }
 
@@ -370,6 +389,95 @@ mod tests {
 
         // Should be 2 steps: Add(3) + Zero
         assert_eq!(stats.total_steps, crate::types::StepCount::new(2));
+    }
+
+    /// The optimized path runs without hooks, so it must accumulate statistics
+    /// itself. These previously came back as zeroes, and `peak_memory_used`
+    /// reported the whole allocation (30,000 for the default fixed model)
+    /// rather than the highest cell the pointer reached.
+    #[test]
+    fn test_optimized_collects_statistics() {
+        // Writes 3 cells, walks to cell 2, emits 2 bytes.
+        let source = ">+++>++.<<+.";
+        let instructions = parse(source).unwrap();
+        let optimized = optimize(&instructions);
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+
+        let stats =
+            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(stats.bytes_written, 2, "two Output instructions ran");
+        assert_eq!(stats.bytes_read, 0, "program reads no input");
+        assert_eq!(
+            stats.cells_modified, 3,
+            "cells 0, 1 and 2 hold non-zero values"
+        );
+        assert_eq!(
+            stats.peak_memory_used,
+            crate::types::MemoryAddress::new(3),
+            "pointer reached cell 2, so the peak is 3 cells - not the 100-cell allocation"
+        );
+    }
+
+    #[test]
+    fn test_optimized_counts_input_bytes() {
+        let source = ",.,."; // echo two bytes
+        let instructions = parse(source).unwrap();
+        let optimized = optimize(&instructions);
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let mut input = StringIo::new("hi");
+        let mut output = StringIo::empty();
+
+        let stats =
+            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(stats.bytes_read, 2);
+        assert_eq!(stats.bytes_written, 2);
+        assert_eq!(output.output_string(), "hi");
+    }
+
+    /// Loops the optimizer leaves alone are counted; loops it fuses away are
+    /// not, because they no longer iterate. This is the one statistic that
+    /// deliberately differs from the debug interpreter.
+    #[test]
+    fn test_optimized_counts_surviving_loop_iterations() {
+        // An outer loop the optimizer cannot fuse (it contains Output).
+        let source = "+++[-.]";
+        let instructions = parse(source).unwrap();
+        let optimized = optimize(&instructions);
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+
+        let stats =
+            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(stats.loop_iterations, 3, "loop body ran once per decrement");
+        assert_eq!(stats.bytes_written, 3);
+    }
+
+    /// A cleared cell is not a modified cell: `cells_modified` counts non-zero
+    /// cells at exit, matching the debug interpreter's definition.
+    #[test]
+    fn test_optimized_cleared_cells_are_not_counted() {
+        let source = "+++[-]"; // fused into Add(3) + Zero
+        let instructions = parse(source).unwrap();
+        let optimized = optimize(&instructions);
+
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+
+        let stats =
+            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+
+        assert_eq!(stats.cells_modified, 0, "the cell was cleared before exit");
+        assert_eq!(stats.loop_iterations, 0, "the loop was fused into Zero");
     }
 
     #[test]
