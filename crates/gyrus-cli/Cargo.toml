@@ -2,6 +2,9 @@
 name = "gyrus-cli"
 version.workspace = true
 edition.workspace = true
+description = "Command-line BrainFuck interpreter"
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "gyrus"

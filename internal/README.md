@@ -60,7 +60,7 @@ Milestone document for the complete plugin/hook architecture implementation.
 ### Implementation Status & Test Results
 
 #### [`architecture-status.md`](./architecture-status.md)
-**Status**: Current (v0.2.0)
+**Status**: Current (v0.3.0)
 
 Current implementation state, workspace structure, and module organization.
 

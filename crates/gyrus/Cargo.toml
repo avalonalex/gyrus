@@ -16,12 +16,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 thiserror.workspace = true
-termcolor = "1.4"  # Cross-platform terminal colors
-rand = "0.9.2"  # Random program generation for fuzzing/testing
+termcolor.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
-proptest = "1.5"  # Property-based testing
-criterion = { version = "0.7.0", features = ["html_reports"] }  # Benchmarking
+proptest.workspace = true
+criterion.workspace = true
 
 [[bench]]
 name = "interpreter"

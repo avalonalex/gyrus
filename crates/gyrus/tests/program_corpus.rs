@@ -81,8 +81,12 @@ fn test_line_comments() {
 #[test]
 fn test_quine() {
     // Quine outputs its own source code
-    let output = run_program("third-party/advanced/quine.bf", "", ExecutionConfig::default())
-        .expect("Quine should succeed");
+    let output = run_program(
+        "third-party/advanced/quine.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("Quine should succeed");
 
     // Quine should output its own source (may need normalization)
     // For now, just verify it produces output
@@ -270,8 +274,12 @@ fn test_strip_tabs_lf() {
 
 #[test]
 fn test_ascii_unary() {
-    let output = run_program_bytes("third-party/utilities/ascii_unary.bf", "AB", ExecutionConfig::default())
-        .expect("ASCII unary should succeed");
+    let output = run_program_bytes(
+        "third-party/utilities/ascii_unary.bf",
+        "AB",
+        ExecutionConfig::default(),
+    )
+    .expect("ASCII unary should succeed");
 
     // 'A' = 65, 'B' = 66
     // Program outputs '!' for each count, separated by spaces
@@ -286,8 +294,12 @@ fn test_ascii_unary() {
 
 #[test]
 fn test_clearscreen() {
-    let output = run_program_bytes("third-party/utilities/clearscreen.bf", "", ExecutionConfig::default())
-        .expect("Clear screen should succeed");
+    let output = run_program_bytes(
+        "third-party/utilities/clearscreen.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("Clear screen should succeed");
 
     // Should output 100 newlines
     let expected: Vec<u8> = vec![b'\n'; 100];
@@ -296,8 +308,12 @@ fn test_clearscreen() {
 
 #[test]
 fn test_beep() {
-    let output = run_program_bytes("third-party/utilities/beep.bf", "", ExecutionConfig::default())
-        .expect("Beep should succeed");
+    let output = run_program_bytes(
+        "third-party/utilities/beep.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("Beep should succeed");
 
     // Should output ASCII 7 (bell)
     assert_eq!(output, vec![7]);
@@ -305,8 +321,12 @@ fn test_beep() {
 
 #[test]
 fn test_true() {
-    let output = run_program("third-party/utilities/true.bf", "", ExecutionConfig::default())
-        .expect("True should succeed");
+    let output = run_program(
+        "third-party/utilities/true.bf",
+        "",
+        ExecutionConfig::default(),
+    )
+    .expect("True should succeed");
 
     // Should output nothing (shortest quine!)
     assert_eq!(output, "");
@@ -495,10 +515,10 @@ fn test_corpus_debug_info_tracking() {
 
     // Select programs that complete quickly
     let test_programs = vec![
-        "basic/simple.bf",          // Very simple: prints 'H'
-        "basic/hello_world.bf",     // Classic: prints "Hello World!"
-        "basic/line_comments.bf",   // Comment syntax test
-        "tests/deep_nesting.bf", // Nested loops test
+        "basic/simple.bf",        // Very simple: prints 'H'
+        "basic/hello_world.bf",   // Classic: prints "Hello World!"
+        "basic/line_comments.bf", // Comment syntax test
+        "tests/deep_nesting.bf",  // Nested loops test
     ];
 
     for program_path in test_programs {

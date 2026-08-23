@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "gyrus",
