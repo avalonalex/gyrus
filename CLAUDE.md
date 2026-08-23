@@ -380,7 +380,32 @@ cargo test --lib                      # Run only library tests
 cargo check                           # Fast syntax check
 cargo clippy                          # Linting
 cargo fmt                             # Format code
+cargo update                          # Refresh Cargo.lock within the declared ranges
 ```
+
+### Verifying claims that rot
+
+Some facts in this repo are claims about things nobody exercises day to day,
+and they go stale silently. Both of these have already been wrong once, so both
+are now scripts rather than good intentions:
+
+```bash
+scripts/check-msrv.sh                 # workspace really builds on its declared MSRV
+scripts/check-readme-commands.py      # every flag the README documents exists
+```
+
+`check-msrv.sh` reads `rust-version` out of `Cargo.toml` instead of restating
+it, and installs that toolchain if it is missing. Run it after touching
+dependencies or using a new language feature — the declared MSRV was already
+wrong once (1.85 by inference; 1.88 in fact, because of let-chains).
+
+`check-readme-commands.py` needs `cargo build --release --workspace` first. It
+exists because the README documented `gyrus --validate` and `gyrus --minify`
+long after both became `gyrus-tool` subcommands.
+
+**When adding a claim to the docs, ask whether a script could check it.** If it
+could, write the script — an unexecuted claim is one that will eventually be
+false.
 
 ## Testing BF Programs
 

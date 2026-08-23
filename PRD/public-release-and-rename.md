@@ -169,8 +169,14 @@ instead of a wall of unstable-feature errors.
 
 Note that `rust-version` (the minimum a consumer needs) and
 `rust-toolchain.toml` (the compiler this repo develops and gates against, 1.97.1)
-are different facts and are both declared. Re-verify the floor with
-`cargo +1.88 test --workspace` after any change that might raise it.
+are different facts and are both declared.
+
+**Automated**: `scripts/check-msrv.sh` reads the version out of `Cargo.toml`,
+installs that toolchain if absent, and builds `--workspace --all-targets`
+against it. The version is read from the manifest rather than restated, so the
+check cannot drift from the thing it checks; bumping the MSRV is a one-line
+manifest edit. Verified in both directions — it passes on 1.88 and fails with a
+clear message when the manifest is set back to 1.85.
 
 **S3 — No CI.** ⏳ **Written and verified locally, but deferred to Phase 5.**
 The account has no Actions minutes for private repositories, so a committed
@@ -196,6 +202,22 @@ programs docs, and the GitHub repo description. Original finding follows. "An in
 (`README.md:3`) and "production-grade" (library crate description) invite
 eye-rolls. The `azores` README is the model to copy: state plainly what it is,
 that it's a learning-driven project, and that it was written with AI assistance.
+
+**S7 — Facts that rot.** ✅ **Addressed generally, not case by case.** Two
+claims in this repo went stale silently and for the same reason: nothing
+executed them. The MSRV was wrong (1.85 declared by inference, 1.88 in fact),
+and the README documented `gyrus --validate` / `gyrus --minify` for however long
+it had been since those moved to `gyrus-tool`. Both are now scripts that fail
+loudly, wired into the parked CI workflow:
+
+- `scripts/check-msrv.sh` — builds the workspace on the declared MSRV
+- `scripts/check-readme-commands.py` — extracts every documented `gyrus` /
+  `gyrus-tool` invocation and checks its flags against clap's `--help`
+
+Both were tested against the actual historical bugs and do catch them. The
+principle for anything added later: a claim in the docs that a script can check
+should be checked by a script, because a claim nobody executes is a claim that
+will eventually be false.
 
 **S6 — Doc directory triage.** `internal/` (15 files) and `PRD/` (10 active +
 11 archived) include session artifacts — `hook-system-complete.md`,
@@ -330,6 +352,32 @@ jobs:
       run: |
         test "$(./target/release/gyrus programs/basic/hello_world.bf)" = "Hello World!"
         ./target/release/gyrus-tool minify programs/basic/hello_world.bf > /dev/null
+
+  # Reads rust-version from Cargo.toml and installs that toolchain itself, so
+  # there is no version restated here to fall out of sync with the manifest.
+  msrv:
+    name: MSRV (read from Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - run: scripts/check-msrv.sh
+
+  # The README documented `gyrus --validate` and `gyrus --minify` for months
+  # after both moved to gyrus-tool subcommands. This job makes that class of
+  # rot fail the build instead of waiting for a reader to hit it.
+  docs:
+    name: Documented commands exist
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo build --release --workspace
+    - run: scripts/check-readme-commands.py
 
   fmt:
     name: Rustfmt
