@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that every command line the README documents is one the binaries accept.
+"""Verify that every command line the docs contain is one the binaries accept.
 
 Documentation of a CLI rots the moment a flag moves, and nothing complains: the
 README here documented `gyrus --validate` and `gyrus --minify` long after both
@@ -10,8 +10,12 @@ and checks its flags against what clap actually reports in --help. It is
 deliberately dumb about semantics: it does not run the commands, only checks
 that the flags exist.
 
-Usage: scripts/check-readme-commands.py [--readme PATH]
-Exits non-zero if the README documents a flag the binary does not have.
+Checks README.md and docs/*.md. PRD/ is deliberately excluded: those documents
+describe features that do not exist yet, so their command lines are aspirational
+by design.
+
+Usage: scripts/check-readme-commands.py [FILE ...]
+Exits non-zero if the docs use a flag the binary does not have.
 """
 import argparse
 import re
@@ -34,8 +38,9 @@ def help_flags(argv):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--readme", default=str(ROOT / "README.md"))
+    ap.add_argument("files", nargs="*", help="Markdown files (default: README.md and docs/*.md)")
     args = ap.parse_args()
+    targets = [Path(f) for f in args.files] or [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
 
     gyrus = ROOT / "target" / "release" / "gyrus"
     tool = ROOT / "target" / "release" / "gyrus-tool"
@@ -53,10 +58,10 @@ def main():
             tool_flags |= help_flags([str(tool), sub, "--help"])
     known["gyrus-tool"] = tool_flags
 
-    text = Path(args.readme).read_text()
     problems = []
     checked = 0
-    for lineno, raw in enumerate(text.split("\n"), 1):
+    for target_file in targets:
+      for lineno, raw in enumerate(target_file.read_text().split("\n"), 1):
         line = raw.strip().lstrip("$").strip()
         line = re.sub(r"^\./target/release/", "", line)
         for prog in ("gyrus-tool", "gyrus"):  # longest first
@@ -67,13 +72,14 @@ def main():
         checked += 1
         unknown = sorted(set(FLAG.findall(line)) - known[prog])
         if unknown:
-            problems.append((lineno, raw.strip(), unknown))
+            problems.append((target_file, lineno, raw.strip(), unknown))
 
-    print(f"Checked {checked} documented command line(s) in {Path(args.readme).name}")
+    print(f"Checked {checked} documented command line(s) across {len(targets)} file(s)")
     if problems:
-        print("\nFAIL: the README documents flags these binaries do not accept:\n", file=sys.stderr)
-        for lineno, line, unknown in problems:
-            print(f"  {Path(args.readme).name}:{lineno}: {line}", file=sys.stderr)
+        print("\nFAIL: the docs use flags these binaries do not accept:\n", file=sys.stderr)
+        for path, lineno, line, unknown in problems:
+            rel = path.relative_to(ROOT) if path.is_absolute() else path
+            print(f"  {rel}:{lineno}: {line}", file=sys.stderr)
             print(f"      unknown: {', '.join(unknown)}\n", file=sys.stderr)
         return 1
     print("OK: every documented flag exists.")

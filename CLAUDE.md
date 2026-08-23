@@ -17,11 +17,24 @@ let-chains); `rust-toolchain.toml` pins the development compiler.
 
 ## Documentation Organization
 
-**Important**: Use the following directories for different types of documentation:
+- **IMPORTANT** — Do not create markdown files unless the user explicitly asks.
+  You may offer. Prefer succinct comments in the relevant code file.
+- **`README.md`** — the landing page, kept short on purpose. It says what gyrus
+  is, shows one error message, gives a quick start, and links onward.
+- **`docs/`** — user-facing reference: usage, errors, execution models, tooling,
+  development, testing, architecture. Anything describing what *exists* goes
+  here.
+- **`PRD/`** — design documents for what does **not** exist yet. When a feature
+  ships, delete its PRD rather than archiving it: the code and `docs/` describe
+  what was built, and git history keeps the reasoning.
+- There is no `internal/` directory and no `PRD/archived/`. Both were deleted in
+  August 2026 — together about 12,000 lines of completed-milestone records,
+  progress logs, and superseded status docs that no reader needed and that
+  quietly contradicted the code.
 
-- **IMPORTANT** - Do not create markdown files unless the user explicitly states to do so. You may offer to create markdown files, but only do so with explicit user approval. Integrate any necessary notes as comments within the relevant code files, and keep comments succinct and on point.
-- **`PRD/`** - Product Requirements Documents, project proposals, and high-level design documents. We should be aggressive in terms of purge outdated PRDs as they have high cognative overhead.
-- **`internal/`** - Internal documentation, implementation notes, test results, and milestone records
+The bar for a new document: would someone who has not read this conversation
+need it? Notes to self, "phase N complete" records, and status snapshots fail
+that test. Prefer one focused document over a section in a large one.
 
 ## Core Architecture
 
@@ -391,7 +404,8 @@ are now scripts rather than good intentions:
 
 ```bash
 scripts/check-msrv.sh                 # workspace really builds on its declared MSRV
-scripts/check-readme-commands.py      # every flag the README documents exists
+scripts/check-readme-commands.py      # every flag README.md and docs/ use exists
+scripts/check-doc-links.py            # every relative Markdown link resolves
 ```
 
 ### Benchmarking and profiling

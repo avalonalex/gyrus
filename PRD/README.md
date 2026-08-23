@@ -1,139 +1,43 @@
-# gyrus PRD Directory
+# PRDs
 
-This directory contains Product Requirements Documents (PRDs) for gyrus features and improvements.
+Design documents for things that **do not exist yet**. Once something ships, its
+PRD is deleted rather than archived — the code and `docs/` describe what is
+built, and git history keeps the reasoning for anyone who wants it.
 
-## Structure
+That rule cost this directory about 6,000 lines of completed-milestone records
+in August 2026, and it is the rule that keeps it readable.
 
-- **Active PRDs**: Documents for features currently in development or planned
-- **Archived PRDs** (`archived/`): Completed features preserved for historical reference
+## Active
 
-## Active PRDs
+| Document | Status | Priority |
+|---|---|---|
+| [public-release-and-rename.md](public-release-and-rename.md) | In progress — phases 1-4 done, release remaining | High |
+| [optimizer-hook-integration.md](optimizer-hook-integration.md) | Design complete, unimplemented | High — blocks aggressive optimization |
+| [optimizer_improvements.md](optimizer_improvements.md) | Catalogue of missed optimizations | Medium |
+| [compilation_backend.md](compilation_backend.md) | Design complete, unimplemented | Medium — the big one |
+| [cranelift_implementation_insights.md](cranelift_implementation_insights.md) | Supporting research for the above | Medium |
+| [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | Medium |
+| [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design complete, unimplemented | Low |
 
-### Project & Release
-
-**public-release-and-rename.md**
-- **Status**: ❌ Not Started
-- **Summary**: Rename FerrousCortex -> `gyrus` and close the legal/metadata/doc
-  gaps blocking a first public push (no LICENSE files, GPL third-party program,
-  placeholder repo URLs, committed build artifact, doc drift, no CI)
-- **Priority**: High (blocks going public)
-- **Dependencies**: None technical; Phase 0 requires human decisions
-
-### Debug & Diagnostics
-
-**debug-symbols-and-runtime-diagnostics.md**
-- **Status**: ⏳ Partially Complete
-- **Completed**: Debug symbol tracking, source location in errors/warnings
-- **Remaining**: Advanced diagnostics, call stack visualization
-- **Priority**: Medium (foundation complete)
-
-### Performance & Optimization
-
-**optimization-and-advanced-features.md**
-- **Status**: ❌ Not Started (Design Complete ✅)
-- **Summary**: Comprehensive optimization roadmap with hook integration
-- **Key Features**:
-  - Three-tier optimization strategy (parse-time, adaptive, AOT/JIT)
-  - RLE, clear loops, scan loops, copy/multiply optimizations
-  - I/O buffering and memory optimizations
-  - Hook compatibility and debug symbol preservation
-  - Language extensions (# debug, @ breakpoint)
-  - Developer tools (REPL, debugger, profiler)
-- **Priority**: High (next major milestone)
-- **Dependencies**: Hook system ✅ complete
-- **Note**: Merged from performance-optimizations.md (October 2025)
-
-### Language Extensions
-
-**macro-preprocessor-design.md**
-- **Status**: ❌ Not Started
-- **Summary**: Macro system for BrainFuck (named macros, parameters, standard library)
-- **Priority**: Low
-- **Dependencies**: Parser infrastructure ✅ complete
-
-### Documentation
-
-**TESTING.md**
-- **Status**: 📚 Living Document
-- **Summary**: Testing strategy, coverage goals, property-based testing
-- **Note**: Continuously updated as testing evolves
-
-## Archived PRDs
-
-See `archived/README.md` for completed features:
-
-### Recently Completed (November 2025)
-- ✅ **Interpreter Refactoring** - Split interpreter.rs into focused modules (state, dispatch, execution)
-- ✅ **String-to-BF Compiler** - Dynamic programming codegen achieving ~11 BF ops/char (72% size reduction)
-- ✅ **Random Program Generator** - Configurable BF program generator for testing (exposed via CLI)
-
-### Previously Completed (October 2025)
-- ✅ **Syntax Highlighter** - ANSI color highlighting for BF code
-- ✅ **gyrus-tool** - Separated utility CLI from execution CLI
-- ✅ **Plugin/Hook Architecture** - Extensible execution monitoring system
-- ✅ **Architectural Improvements** - Workspace migration, I/O abstraction
-- ✅ **Hook Refactoring** - Moved stats/limits to hooks, simplified VmState
-- ✅ **Testing Strategy** - Property-based testing for debug symbols implemented
-- ✅ **PRD Consolidation** - Merged performance-optimizations.md into optimization-and-advanced-features.md
-
-### Previously Completed (October 2024)
-- ✅ **Cell Model** - Fixed validator and documented wrapping behavior
-
-## How to Use This Directory
-
-### When Planning New Features
-1. Review active PRDs to avoid duplication
-2. Check archived PRDs for related historical context
-3. Create new PRD in this directory
-4. Update this README with status
-
-### When Completing Features
-1. Update PRD with implementation details
-2. Move to `archived/` directory
-3. Update `archived/README.md` with completion summary
-4. Update this README to remove from active list
-
-### PRD Template
+## Writing one
 
 ```markdown
 # PRD: Feature Name
 
-**Status**: Not Started | In Progress | Partially Complete | Complete
+**Status**: Not Started | In Progress | Complete
 **Last Updated**: YYYY-MM-DD
 **Priority**: High | Medium | Low
 
-## Summary
-Brief 2-3 sentence overview
-
-## Motivation
-Why this feature is needed
-
-## Requirements
-- Functional requirements
-- Non-functional requirements
-
-## Design
-High-level architecture and approach
-
+## Summary        Two or three sentences.
+## Motivation     Why this is worth building.
+## Requirements   Functional and non-functional.
+## Design         Architecture and approach.
 ## Implementation Plan
-Phased rollout or implementation steps
-
-## Success Criteria
-How to measure completion
-
+## Success Criteria   How you know it is done.
 ## Dependencies
-Prerequisites and related features
 ```
 
-## Priority Guidelines
-
-- **High**: Critical features, blocking other work, or major user value
-- **Medium**: Important but not blocking, quality of life improvements
-- **Low**: Nice-to-have, research, experimental features
-
-## Notes
-
-- PRDs are living documents - update status as work progresses
-- Keep archived PRDs for historical reference and lessons learned
-- Link between related PRDs to show dependencies
-- Update CLAUDE.md when major features are completed
+Prefer one focused document over a section inside a large one. The umbrella PRD
+this directory used to have grew to 2,500 lines by restating four other
+documents, and the only part unique to it was the hook-integration design now
+in `optimizer-hook-integration.md`.
