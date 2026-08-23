@@ -9,6 +9,16 @@ This directory contains Product Requirements Documents (PRDs) for FerrousCortex 
 
 ## Active PRDs
 
+### Project & Release
+
+**public-release-and-rename.md**
+- **Status**: ❌ Not Started
+- **Summary**: Rename FerrousCortex -> `gyrus` and close the legal/metadata/doc
+  gaps blocking a first public push (no LICENSE files, GPL third-party program,
+  placeholder repo URLs, committed build artifact, doc drift, no CI)
+- **Priority**: High (blocks going public)
+- **Dependencies**: None technical; Phase 0 requires human decisions
+
 ### Debug & Diagnostics
 
 **debug-symbols-and-runtime-diagnostics.md**
