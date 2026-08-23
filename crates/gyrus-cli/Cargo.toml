@@ -2,6 +2,7 @@
 name = "gyrus-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Command-line BrainFuck interpreter"
 license.workspace = true
 repository.workspace = true

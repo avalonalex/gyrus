@@ -1,6 +1,7 @@
 # PRD: Public Release — Rename to `gyrus` and Repository Hygiene
 
-**Status**: In Progress — Phases 1-3 complete, Phase 4 (docs/tone) remaining
+**Status**: In Progress — Phases 1-3 complete except CI (deferred to Phase 5,
+see S3); Phase 4 (docs/tone) remaining
 **Last Updated**: 2026-08-23
 **Priority**: High (blocks first public push)
 
@@ -147,18 +148,37 @@ Fix: move `license`, `repository`, `authors`, and `rust-version` into
 `[workspace.package]`; inherit everywhere; drop the fictional "Contributors"
 attribution; settle on one version for the 0.3.0 release.
 
-**S2 — No declared MSRV.** ~~Edition 2024 needs Rust ≥ 1.85.~~ **Deferred
-deliberately.** `rust-toolchain.toml` now pins 1.97.1 and is the single place a
-Rust version is declared, so contributors and CI cannot drift. A `rust-version`
-field would be a second copy of that number, and — with no 1.85 toolchain
-available to build against — an unverified claim, which is worse than no claim.
-Revisit at the crates.io decision, where MSRV actually matters to consumers, and
-add it together with a CI job that builds on that exact version.
+**S2 — No declared MSRV.** ✅ **Resolved: `rust-version = "1.88"`, verified.**
 
-**S3 — No CI.** Baseline is already green: `cargo fmt --check` clean, 302 tests
-passing, exactly one clippy warning (useless `vec!` in the library). A GitHub
-Actions workflow running fmt / clippy `-D warnings` / test on stable locks that
-in cheaply.
+The obvious guess was wrong. Edition 2024 puts the floor at 1.85, but 1.85 does
+not build this workspace: `src/interpreter/mod.rs`, `src/error.rs`,
+`src/hooks/builtin.rs`, and `src/interpreter/dispatch.rs` use **let-chains** in
+12 places, and those stabilized in **1.88**. Building on a 1.85 toolchain fails
+with 12 x E0658; on 1.88 everything compiles — lib, binaries, tests, benches,
+examples — and all 302 tests pass.
+
+This is why the number is measured rather than reasoned about. The payoff is
+the error an old toolchain now gets:
+
+```
+error: rustc 1.85.1 is not supported by the following packages:
+  gyrus@0.3.0 requires rustc 1.88
+```
+
+instead of a wall of unstable-feature errors.
+
+Note that `rust-version` (the minimum a consumer needs) and
+`rust-toolchain.toml` (the compiler this repo develops and gates against, 1.97.1)
+are different facts and are both declared. Re-verify the floor with
+`cargo +1.88 test --workspace` after any change that might raise it.
+
+**S3 — No CI.** ⏳ **Written and verified locally, but deferred to Phase 5.**
+The account has no Actions minutes for private repositories, so a committed
+workflow would either not run or fail on billing until the repo goes public.
+The workflow is parked in Phase 5 below and lands with the flip to public. Every
+gate it runs passes locally today under the pinned toolchain: 302 tests, fmt
+clean, `clippy --all-targets --all-features -- -D warnings` exits 0, release
+build plus CLI smoke test.
 
 **S4 — Documentation drift.** `CLAUDE.md` claims 166 tests (actual: 302) and
 lists 10 modules, but `crates/ferrous-cortex/src/` also contains `optimizer.rs`,
@@ -223,13 +243,13 @@ documentation, archive, or delete.
 3. README license section: dual license for the Rust code, separate note for
    `programs/third-party/`.
 
-### Phase 3 — Hygiene ✅ COMPLETE (c58a12f, c860cd7)
+### Phase 3 — Hygiene ✅ COMPLETE except CI (c58a12f, c860cd7)
 
 1. `git rm --cached benchmarks/mandelbrot`, gitignore `benchmarks/mandelbrot`.
 2. Consolidate manifest metadata into `[workspace.package]`; add `rust-version`;
    unify on `0.3.0`.
-3. Add `.github/workflows/ci.yml`: fmt check, clippy `-D warnings`, test, on
-   stable, plus a `cargo build --release` smoke run.
+3. ~~Add `.github/workflows/ci.yml`~~ — moved to Phase 5: no Actions minutes on
+   a private repo.
 4. Fix the one clippy warning so `-D warnings` passes.
 
 ### Phase 4 — Docs (S4, S5, S6)
@@ -245,6 +265,73 @@ documentation, archive, or delete.
 
 1. Tag `v0.3.0`, write a short `CHANGELOG.md` covering 0.1 → 0.3.
 2. Flip the repository to public.
+3. **Add CI** once public (Actions is free for public repositories). The
+   workflow below was written and its every gate verified locally under the
+   pinned toolchain; commit it verbatim as `.github/workflows/ci.yml`.
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Every job compiles with the version in rust-toolchain.toml — rustup honors
+# that file for each cargo invocation, so CI and local development cannot
+# drift apart. `rustup show` materializes it; there is deliberately no
+# toolchain version anywhere in this file, because a second copy is a second
+# thing to forget when bumping.
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - name: Run tests
+      run: cargo test --workspace
+    # The integration corpus reads programs/ from the workspace root, so a
+    # release build plus one real program catches path and packaging breakage
+    # that the unit tests cannot.
+    - name: Build release
+      run: cargo build --release --workspace
+    - name: Smoke test the CLI
+      run: |
+        test "$(./target/release/gyrus programs/basic/hello_world.bf)" = "Hello World!"
+        ./target/release/gyrus-tool minify programs/basic/hello_world.bf > /dev/null
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
+
 3. Optionally `cargo publish` the three crates in dependency order:
    `gyrus`, then `gyrus-cli`, `gyrus-tool`.
 
@@ -261,7 +348,9 @@ documentation, archive, or delete.
       `programs/third-party/CREDITS.md` with author, source, and license.
 - [x] No tracked binary artifacts (verified: 0).
 - [x] All three crates share one version (0.3.0) and inherit workspace metadata.
-- [ ] CI green on a pushed branch (workflow added; has not run yet).
+- [ ] CI green on a pushed branch — deferred to Phase 5, when the repo is
+      public and Actions minutes are free. Gates verified locally in the
+      meantime.
 - [ ] README describes the project as it is, with no unearned superlatives.
 - [ ] `cargo package -p gyrus` succeeds (whether or not it is published).
 

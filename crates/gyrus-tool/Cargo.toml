@@ -2,6 +2,7 @@
 name = "gyrus-tool"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Development and analysis tools for BrainFuck programs"
 license.workspace = true
 repository.workspace = true
