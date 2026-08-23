@@ -429,38 +429,36 @@ fn recognize_multiply_loop(
                 i += 1;
             }
             Instruction::IncrementValue => {
-                if position != 0 {
-                    // Count consecutive increments
-                    let mut count = 1;
-                    while i + count < body.len()
-                        && matches!(body[i + count], Instruction::IncrementValue)
-                    {
-                        count += 1;
-                    }
-                    // Multiplier is positive for increments, negated by source decrement direction
-                    adds.push((position, count as i32 * -decrement_factor));
-                    i += count;
-                } else {
-                    // Incrementing current cell in a multiplication loop doesn't make sense
+                // Incrementing the current cell in a multiplication loop doesn't make sense
+                if position == 0 {
                     return None;
                 }
+                // Count consecutive increments
+                let mut count = 1;
+                while i + count < body.len()
+                    && matches!(body[i + count], Instruction::IncrementValue)
+                {
+                    count += 1;
+                }
+                // Multiplier is positive for increments, negated by source decrement direction
+                adds.push((position, count as i32 * -decrement_factor));
+                i += count;
             }
             Instruction::DecrementValue => {
-                if position != 0 {
-                    // Count consecutive decrements
-                    let mut count = 1;
-                    while i + count < body.len()
-                        && matches!(body[i + count], Instruction::DecrementValue)
-                    {
-                        count += 1;
-                    }
-                    // Multiplier is negative for decrements, negated by source decrement direction
-                    adds.push((position, -(count as i32) * -decrement_factor));
-                    i += count;
-                } else {
-                    // Multiple decrements of current cell doesn't make sense for this pattern
+                // Multiple decrements of the current cell don't make sense for this pattern
+                if position == 0 {
                     return None;
                 }
+                // Count consecutive decrements
+                let mut count = 1;
+                while i + count < body.len()
+                    && matches!(body[i + count], Instruction::DecrementValue)
+                {
+                    count += 1;
+                }
+                // Multiplier is negative for decrements, negated by source decrement direction
+                adds.push((position, -(count as i32) * -decrement_factor));
+                i += count;
             }
             _ => {
                 // Other instructions (Output, Input, Loop) invalidate the pattern

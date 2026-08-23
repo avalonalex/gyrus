@@ -7,18 +7,48 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/avalonalex/gyrus"
 
+# Shared dependencies across the workspace
+#
+# Versions are stated at the granularity of a *breaking* change, and nothing
+# finer. Cargo requirements are already caret ranges — "2" and "2.0.17" have
+# the identical upper bound of <3.0.0, and the extra digits only assert a
+# minimum nobody here depends on — so spelling out patch levels does not
+# constrain anything; it just invites pointless edits. For 0.x crates the
+# minor field is the breaking unit, so "0.9" means <0.10.0.
+#
+# The effect: `cargo update` handles every compatible upgrade on its own and
+# records it in Cargo.lock, and a manifest edit is required exactly when a
+# dependency makes a breaking release. Cargo.lock is committed, so the exact
+# versions in use are always pinned regardless of how loose these ranges are.
 [workspace.dependencies]
-# Shared dependencies
-thiserror = "2.0.17"
-clap = { version = "4.5.51", features = ["derive"] }
-
-# Internal dependencies
+# Internal
 gyrus = { path = "crates/gyrus" }
+
+# Error handling
+thiserror = "2"
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Cross-platform terminal colors
+termcolor = "1"
+
+# Random program generation for fuzzing and testing
+rand = "0.9"
+
+# JSON output for `gyrus-tool debug-info`
+serde_json = "1"
+
+# Property-based testing
+proptest = "1"
+
+# Benchmarking
+criterion = { version = "0.7", features = ["html_reports"] }
 
 [profile.release]
 lto = true

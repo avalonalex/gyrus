@@ -1142,7 +1142,7 @@ impl ProfilingHook {
 
         // Build legend items with labels and hit counts
         // Use mid-range heat values for accurate color representation in legend
-        let legend_items = vec![
+        let legend_items = [
             (0.0, "not executed", "(0 hits)".to_string()),
             (0.1, "cold", format!("(1-{} hits)", hits_at_heat(0.2))),
             (
@@ -1276,7 +1276,7 @@ impl ProfilingHook {
 
         // Sort each depth level by time (descending)
         for loops in loops_by_depth.values_mut() {
-            loops.sort_by(|a, b| b.total_time.cmp(&a.total_time));
+            loops.sort_by_key(|l| std::cmp::Reverse(l.total_time));
         }
 
         writeln!(&mut output, "Loop Profile (by time):").unwrap();

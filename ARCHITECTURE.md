@@ -6,7 +6,7 @@ This document describes the current architecture of gyrus and provides design no
 
 ---
 
-## Current Architecture (v0.2.0)
+## Current Architecture (v0.3.0)
 
 ### Core Design Principles
 
@@ -420,7 +420,7 @@ pub enum OptLevel {
 
 ## Performance Considerations
 
-### Current Performance (v0.2.0)
+### Current Performance (v0.3.0)
 
 **Characteristics**:
 - Tree-walking interpreter: ~10-50x slower than native

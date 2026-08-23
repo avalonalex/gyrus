@@ -1,8 +1,7 @@
 [package]
 name = "gyrus-tool"
-version = "0.3.0"
-edition = "2024"
-authors = ["gyrus Contributors"]
+version.workspace = true
+edition.workspace = true
 description = "Development and analysis tools for BrainFuck programs"
 license.workspace = true
 repository.workspace = true
@@ -12,7 +11,7 @@ name = "gyrus-tool"
 path = "src/main.rs"
 
 [dependencies]
-gyrus = { path = "../gyrus" }
-clap = { version = "4.5", features = ["derive"] }
-serde_json = "1.0"
-rand = "0.9.2"
+gyrus.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+rand.workspace = true

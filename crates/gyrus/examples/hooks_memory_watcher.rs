@@ -119,7 +119,7 @@ impl ExecutionHook for MemoryChangeTracker {
 
         // Show top 5 most modified cells
         let mut cells: Vec<_> = changes.iter().collect();
-        cells.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        cells.sort_by_key(|c| std::cmp::Reverse(c.1.len()));
 
         println!("\n  Top 5 most modified cells:");
         for (addr, history) in cells.iter().take(5) {
