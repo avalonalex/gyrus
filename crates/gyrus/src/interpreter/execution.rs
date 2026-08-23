@@ -254,8 +254,16 @@ pub(super) fn execute_block<I: BfInput, O: BfOutput>(
         // Compute current instruction index
         let instruction_index = start_index + local_index;
 
-        // Increment step counter BEFORE calling hooks so hooks see the updated count
-        state.step_count.increment();
+        // Increment step counter BEFORE calling hooks so hooks see the updated count.
+        //
+        // Skipped for Loop for the same reason its hooks are skipped below: Loop is
+        // an AST container with no source character of its own - the '[' it stands
+        // for is executed as the LoopCheck at the head of its body, which counts its
+        // own step. Counting here too inflated total_steps by one per loop reached
+        // and tripped --max-steps early.
+        if !matches!(instruction, Instruction::Loop(_)) {
+            state.step_count.increment();
+        }
 
         // Hook: before_instruction
         // Skip before_instruction for Loop since it's just an AST container.
@@ -332,9 +340,12 @@ pub(super) fn execute_block<I: BfInput, O: BfOutput>(
                         return Err(e);
                     }
                     if decision == HookDecision::Skip {
-                        // For loop hooks, Skip means skip the entire loop iteration
+                        // Skip means skip the loop: leave it entirely rather than
+                        // re-testing the condition. `continue` would jump back to the
+                        // LoopCheck without running the body, so nothing could ever
+                        // change the condition cell and the loop would spin forever.
                         state.loop_depth -= 1;
-                        continue;
+                        break;
                     }
 
                     // Execute rest of loop body (skip LoopCheck since we already executed it)

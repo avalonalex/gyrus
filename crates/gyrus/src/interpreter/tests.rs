@@ -147,6 +147,33 @@ fn test_stats_basic_counting() {
     assert_eq!(stats.peak_memory_used, MemoryAddress::new(3)); // Moved to cell 2, so peak is 3 (0-based + 1)
 }
 
+/// `Instruction::Loop` is an AST container, not a source character: the `[` it
+/// stands for is executed as the LoopCheck at the head of its body. Counting a step
+/// for the container as well inflated `total_steps` by one per loop reached and
+/// tripped `--max-steps` early.
+#[test]
+fn test_loop_container_does_not_consume_a_step() {
+    // "+[-]" executes: '+', '[' (enters), '-', '[' (exits) = 4 steps
+    let instructions = parse("+[-]").unwrap();
+    let stats = interpret_with_config(&instructions, ExecutionConfig::default(), None).unwrap();
+    assert_eq!(stats.total_steps, StepCount::new(4));
+}
+
+/// Nested loops must not each add a phantom step either.
+#[test]
+fn test_nested_loop_containers_do_not_consume_steps() {
+    // "+[[-]]" executes:
+    //   '+'                  1
+    //   outer '[' enters     2
+    //   inner '[' enters     3
+    //   '-'                  4   (cell is now 0)
+    //   inner '[' exits      5
+    //   outer '[' exits      6
+    let instructions = parse("+[[-]]").unwrap();
+    let stats = interpret_with_config(&instructions, ExecutionConfig::default(), None).unwrap();
+    assert_eq!(stats.total_steps, StepCount::new(6));
+}
+
 #[test]
 fn test_stats_loop_iterations() {
     // Test loop iteration counting
@@ -893,7 +920,7 @@ fn test_source_location_in_nested_loop() {
             // Error at the 256th + instruction (the one that causes overflow)
             // Counting: 2 (++) + 1 ([) + 1 (>) + 256 (+'s) = column 260
             // Column mapping: ++ at 1-2, [ at 3, > at 4, first + at 5, 256th + at 260
-            assert_eq!(loc.column, 261, "Error should be at 256th + inside loop");
+            assert_eq!(loc.column, 260, "Error should be at 256th + inside loop");
         }
         other => panic!("Expected CellOverflow, got {:?}", other),
     }
@@ -1704,10 +1731,13 @@ fn test_loop_call_stack_nested_loops() {
     // Program: ++[>++[>>]<-]
     // Initial: cell[0]=2
     // Outer loop iteration 1:
-    //   - Move right to cell[1]
-    //   - Set cell[1]=2 (++)
-    //   - Inner loop iteration 1: move right twice (1→3)
-    //   - Inner loop iteration 2: move right twice (3→5, ERROR with memory_size=5)
+    //   - Move right to cell[1], set cell[1]=2 (++)
+    //   - Inner loop iteration 1: move right twice (1→3); cell[3] is 0 so the inner
+    //     loop exits
+    //   - '<' back to cell[2], '-' makes it 255
+    // Outer loop iteration 2 (condition tests cell[2], which is now 255):
+    //   - Move right to cell[3], set cell[3]=2 (++)
+    //   - Inner loop iteration 1: move right twice (3→5, ERROR with memory_size=5)
 
     let source = "++[>++[>>]<-]";
     let (instructions, debug_info) = parse_with_debug(source).unwrap();
@@ -1747,7 +1777,10 @@ fn test_loop_call_stack_nested_loops() {
             // Frame 0: Outer loop (starts at '[' which is column 3)
             assert_eq!(stack[0].source_location.line, 1);
             assert_eq!(stack[0].source_location.column, 3);
-            assert_eq!(stack[0].iteration, 1, "Outer loop first iteration");
+            assert_eq!(
+                stack[0].iteration, 2,
+                "Error happens on the outer loop's second iteration"
+            );
 
             // Frame 1: Inner loop (starts at '[' which is column 7)
             // Program: "++[>++[>>]<-]"

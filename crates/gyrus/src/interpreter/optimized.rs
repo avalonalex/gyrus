@@ -53,9 +53,10 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
 ) -> Result<ExecutionStats> {
     let mut state = VmState::new(*config.memory_model());
     let mut stats = ExecutionStats::default();
+    let limits = Limits::from_config(&config);
 
     // Execute the optimized program
-    execute_block(instructions, &mut state, &config, input, output)?;
+    execute_block(instructions, &mut state, &config, &limits, input, output)?;
 
     // Collect final statistics.
     //
@@ -69,7 +70,9 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     // match.
     stats.total_steps = state.step_count;
     stats.peak_memory_used = crate::types::MemoryAddress::new(state.peak_pointer + 1);
-    stats.memory_allocated = crate::types::MemorySize::new(state.memory.capacity());
+    // `len()`, not `capacity()`: the debug interpreter reports the tape length and
+    // a Vec's spare capacity is not addressable memory.
+    stats.memory_allocated = crate::types::MemorySize::new(state.memory.len());
     stats.loop_iterations = state.loop_iterations;
     stats.bytes_read = state.bytes_read;
     stats.bytes_written = state.bytes_written;
@@ -78,31 +81,75 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     Ok(stats)
 }
 
+/// Enforce the configured step and time limits.
+///
+/// Called before every optimized instruction and once per iteration of a
+/// general loop, so a loop with an empty body (`[]`) still terminates.
+#[inline]
+fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
+    if let Some(max_steps) = limits.max_steps
+        && state.step_count.get() >= max_steps
+    {
+        return Err(BfError::StepLimitExceeded {
+            limit: max_steps,
+            actual_steps: state.step_count,
+            hint: "Optimized interpreter counts each optimized instruction as 1 step".to_string(),
+            source_location: None,
+            instruction_index: state.step_count.get() as usize,
+        });
+    }
+
+    if let Some(timeout_ms) = limits.timeout_ms
+        && limits.start_time.elapsed().as_millis() as u64 > timeout_ms
+    {
+        return Err(BfError::ExecutionTimeout {
+            limit_ms: timeout_ms,
+            actual_steps: Some(state.step_count),
+            hint: format!(
+                "Program exceeded {}ms timeout after executing {} optimized instructions. \
+                 Try increasing the timeout with --timeout {}.",
+                timeout_ms,
+                state.step_count.get(),
+                timeout_ms * 2
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Step and time limits, resolved once so the hot loop does not re-read config.
+struct Limits {
+    max_steps: Option<u64>,
+    timeout_ms: Option<u64>,
+    start_time: std::time::Instant,
+}
+
+impl Limits {
+    fn from_config(config: &ExecutionConfig) -> Self {
+        Self {
+            max_steps: config.max_steps(),
+            timeout_ms: config.timeout_ms(),
+            start_time: std::time::Instant::now(),
+        }
+    }
+}
+
 /// Execute a block of optimized instructions
 fn execute_block<I: BfInput, O: BfOutput>(
     instructions: &[OptimizedInstruction],
     state: &mut VmState,
     config: &ExecutionConfig,
+    limits: &Limits,
     input: &mut I,
     output: &mut O,
 ) -> ExecutionResult {
     for instruction in instructions {
         // Check execution limits
-        if let Some(max_steps) = config.max_steps()
-            && state.step_count.get() >= max_steps
-        {
-            return Err(BfError::StepLimitExceeded {
-                limit: max_steps,
-                actual_steps: state.step_count,
-                hint: "Optimized interpreter counts each optimized instruction as 1 step"
-                    .to_string(),
-                source_location: None,
-                instruction_index: state.step_count.get() as usize,
-            });
-        }
+        check_limits(state, limits)?;
 
         // Execute the instruction
-        execute_instruction(instruction, state, config, input, output)?;
+        execute_instruction(instruction, state, config, limits, input, output)?;
 
         // Increment step count (each optimized instruction = 1 step)
         state.step_count = crate::types::StepCount::new(state.step_count.get() + 1);
@@ -117,6 +164,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
     instruction: &OptimizedInstruction,
     state: &mut VmState,
     config: &ExecutionConfig,
+    limits: &Limits,
     input: &mut I,
     output: &mut O,
 ) -> ExecutionResult {
@@ -124,9 +172,10 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
         // Fused arithmetic operations
         OptimizedInstruction::Add(n, _range) => {
             let ptr = state.pointer.get();
-            // Perform N increments in one operation
+            // Resolve the trait object once rather than per unit increment
+            let cells = config.cell_model().behavior();
             for _ in 0..*n {
-                config.cell_model().behavior().try_increment(
+                cells.try_increment(
                     &mut state.memory[ptr],
                     state.step_count,
                     None, // No debug info in optimized path
@@ -137,9 +186,9 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
 
         OptimizedInstruction::Sub(n, _range) => {
             let ptr = state.pointer.get();
-            // Perform N decrements in one operation
+            let cells = config.cell_model().behavior();
             for _ in 0..*n {
-                config.cell_model().behavior().try_decrement(
+                cells.try_decrement(
                     &mut state.memory[ptr],
                     state.step_count,
                     None, // No debug info
@@ -171,7 +220,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                 state.memory_model.try_decrement_pointer(
                     &mut state.pointer,
                     &state.memory,
-                    false, // Don't allow negative pointers
+                    config.allow_negative_pointer(),
                     state.step_count,
                     None, // No debug info
                     0,
@@ -233,7 +282,7 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
 
         // Optimized loop patterns
         OptimizedInstruction::Zero(_range) => {
-            // [-] or [+] → set cell to 0
+            // [-] → set cell to 0
             let ptr = state.pointer.get();
             state.memory[ptr] = 0;
             Ok(ExecutionFlow::Continue)
@@ -246,6 +295,8 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                 if state.memory[ptr] == 0 {
                     break;
                 }
+                // A seek is a loop: honour step/time limits so it cannot spin forever
+                check_limits(state, limits)?;
 
                 // Move right
                 state.memory_model.try_increment_pointer(
@@ -267,12 +318,13 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                 if state.memory[ptr] == 0 {
                     break;
                 }
+                check_limits(state, limits)?;
 
                 // Move left
                 state.memory_model.try_decrement_pointer(
                     &mut state.pointer,
                     &state.memory,
-                    false,
+                    config.allow_negative_pointer(),
                     state.step_count,
                     None,
                     0,
@@ -312,16 +364,23 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                     })?
                 };
 
-                // Bounds check
+                // Walk the pointer out to the target so the memory model decides
+                // what happens at the boundary: a fixed tape raises
+                // MemoryOutOfBounds, an unbounded tape grows to cover the target.
+                // Stepping one cell at a time (rather than once, as before) is what
+                // makes offsets larger than 1 safe - a single step left the tape
+                // short of the target and the write below indexed past its end.
                 if target_ptr >= state.memory.len() {
-                    // Try to grow memory if unbounded model
-                    state.memory_model.try_increment_pointer(
-                        &mut state.pointer,
-                        &mut state.memory,
-                        state.step_count,
-                        None,
-                        0,
-                    )?;
+                    while state.pointer.get() < target_ptr {
+                        state.memory_model.try_increment_pointer(
+                            &mut state.pointer,
+                            &mut state.memory,
+                            state.step_count,
+                            None,
+                            0,
+                        )?;
+                    }
+                    state.peak_pointer = state.peak_pointer.max(state.pointer.get());
                     // Restore original pointer
                     state.pointer = crate::types::MemoryAddress::new(ptr);
                 }
@@ -344,8 +403,15 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
 
             // Loop while current cell is non-zero
             while state.memory[state.pointer.get()] != 0 {
+                // Check limits per iteration, not only per instruction: a loop with
+                // an empty body (`[]`) executes no instructions, so without this the
+                // step limit and timeout would never be consulted and it would hang.
+                check_limits(state, limits)?;
+                // The `[` condition check is itself a step, which is also what lets
+                // the step limit make progress on an empty body.
+                state.step_count = crate::types::StepCount::new(state.step_count.get() + 1);
                 state.loop_iterations += 1;
-                execute_block(body, state, config, input, output)?;
+                execute_block(body, state, config, limits, input, output)?;
             }
 
             state.loop_depth -= 1;
@@ -533,5 +599,96 @@ mod tests {
 
         // Should be 2 steps: Add(5) + SeekRight
         assert_eq!(stats.total_steps.get(), 2);
+    }
+
+    fn run_optimized(
+        source: &str,
+        config: ExecutionConfig,
+    ) -> crate::error::Result<ExecutionStats> {
+        let instructions = parse(source).unwrap();
+        let optimized = optimize(&instructions);
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        interpret_optimized(&optimized.instructions, config, &mut input, &mut output)
+    }
+
+    /// A MultiplyAdd target more than one cell past the end of a fixed tape used to
+    /// index past `memory.len()` and panic: the bounds check stepped the pointer only
+    /// once, which cannot reach an offset of 2.
+    #[test]
+    fn test_multiply_add_beyond_tape_end_errors_instead_of_panicking() {
+        let source = format!("{}+++[->>+<<]", ">".repeat(98));
+        let result = run_optimized(
+            &source,
+            ExecutionConfigBuilder::new().with_memory_size(100).build(),
+        );
+        assert!(
+            matches!(result, Err(BfError::MemoryOutOfBounds { .. })),
+            "expected MemoryOutOfBounds, got {:?}",
+            result
+        );
+    }
+
+    /// The same shape on an unbounded tape must grow far enough to cover the target.
+    #[test]
+    fn test_multiply_add_grows_unbounded_memory_to_reach_target() {
+        let source = format!("{}+++[->>+<<]", ">".repeat(8));
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(10, 1000)
+            .unwrap()
+            .build();
+        assert!(run_optimized(&source, config).is_ok());
+    }
+
+    /// A loop with an empty body executes no instructions, so limits have to be
+    /// checked per iteration or `[]` spins forever.
+    #[test]
+    fn test_empty_loop_respects_step_limit() {
+        let result = run_optimized(
+            "+[]",
+            ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_max_steps(1000)
+                .build(),
+        );
+        assert!(matches!(result, Err(BfError::StepLimitExceeded { .. })));
+    }
+
+    /// The optimized path used to ignore `timeout_ms` entirely.
+    #[test]
+    fn test_timeout_is_enforced() {
+        let result = run_optimized(
+            "+[.]", // Output blocks fusion, so this stays a real infinite loop
+            ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_timeout_ms(20)
+                .build(),
+        );
+        assert!(matches!(result, Err(BfError::ExecutionTimeout { .. })));
+    }
+
+    /// `allow_negative_pointer` was hardcoded to `false` on the optimized path, so
+    /// `<` at cell 0 errored where the debug interpreter allowed it.
+    #[test]
+    fn test_left_honours_allow_negative_pointer() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_negative_pointer(true)
+            .build();
+        assert!(run_optimized("<", config).is_ok());
+    }
+
+    /// `[+]` reaches zero only by wrapping past 255, which checked cells reject.
+    /// Folding it to a store of 0 would disagree with the debug interpreter.
+    #[test]
+    fn test_increment_clear_loop_still_overflows_under_checked_cells() {
+        let result = run_optimized(
+            "+++++[+]",
+            ExecutionConfigBuilder::new()
+                .with_memory_size(100)
+                .with_checked_cells()
+                .build(),
+        );
+        assert!(matches!(result, Err(BfError::CellOverflow { .. })));
     }
 }

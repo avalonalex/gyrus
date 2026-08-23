@@ -227,7 +227,15 @@ impl ExecutionConfigBuilder<Unbuilt> {
     }
 
     /// Set fixed-size memory model
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is 0. A zero-length tape has no cell 0 to read or write, so
+    /// the first instruction would otherwise fail with an opaque out-of-bounds panic
+    /// deep inside the interpreter. `with_unbounded_memory` rejects 0 the same way.
+    #[track_caller]
     pub fn with_memory_size(mut self, size: usize) -> ExecutionConfigBuilder<ReadyToBuild> {
+        assert!(size > 0, "memory size must be greater than 0");
         self.memory_model = Some(MemoryModel::Fixed(FixedMemory::new(MemorySize::new(size))));
         ExecutionConfigBuilder {
             memory_model: self.memory_model,

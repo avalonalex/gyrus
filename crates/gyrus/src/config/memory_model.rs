@@ -76,7 +76,7 @@ impl MemoryBehavior for FixedMemory {
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
-                max: MemorySize::new(self.size.get() - 1),
+                max: MemorySize::new(self.size.get().saturating_sub(1)),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
                 loop_call_stack: None,
@@ -110,7 +110,7 @@ impl MemoryBehavior for FixedMemory {
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: -1,
-                max: MemorySize::new(self.size.get() - 1),
+                max: MemorySize::new(self.size.get().saturating_sub(1)),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
                 loop_call_stack: None,
@@ -178,7 +178,7 @@ impl MemoryBehavior for UnboundedMemory {
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: pointer.get() as isize,
-                max: MemorySize::new(self.max_size.get() - 1),
+                max: MemorySize::new(self.max_size.get().saturating_sub(1)),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
                 loop_call_stack: None,
@@ -216,7 +216,7 @@ impl MemoryBehavior for UnboundedMemory {
             return Err(BfError::MemoryOutOfBounds {
                 instruction_index: step_count.into(),
                 attempted: -1,
-                max: MemorySize::new(self.max_size.get() - 1),
+                max: MemorySize::new(self.max_size.get().saturating_sub(1)),
                 memory_dump: Some(Box::new(dump)),
                 source_location,
                 loop_call_stack: None,

@@ -168,7 +168,11 @@ impl InterpreterContext {
 
         // Create built-in hooks directly (no Arc<Mutex> wrappers!)
         let stats_hook = StatsTrackerHook::new();
-        let warning_hook = WarningCollectorHook::new();
+        // Seed the expansion baseline with the tape's starting length, otherwise the
+        // first growth is mistaken for the baseline and never reported.
+        let warning_hook = WarningCollectorHook::with_initial_memory_size(
+            config.memory_model().initial_size().get(),
+        );
 
         // Create debug tracking hook if debug info is provided
         let debug_hook = debug_info.map(|info| DebugTrackingHook::new(info.clone()));
