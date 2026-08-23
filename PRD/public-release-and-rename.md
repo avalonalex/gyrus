@@ -73,8 +73,8 @@ repository is still private and single-author (118 commits, one identity).
 
 - **R7** — The rename is a single mechanical commit that leaves the test suite
   green (currently 302 passing: 222 lib + 25 + 6 integration + 49 doctests).
-- **R8** — Publishing to crates.io remains possible but is *not* required by
-  this PRD; the rename must not make it harder.
+- **R8** — ~~Publishing to crates.io remains possible.~~ Superseded: the project
+  is GitHub-only and the manifests set `publish = false`.
 
 ## Design
 
@@ -214,7 +214,12 @@ documentation, archive, or delete.
   *strongest* ones to redistribute, while the unlicensed bylined programs are
   the weakest. Purging would have cost the benchmark corpus for no legal gain.
 - `benchmarks/mandelbrot`: **untracked going forward**, blob left in history.
-- Commit email and crates.io publishing: still open.
+- Commit email: still open.
+- **crates.io: not publishing.** Decided 2026-08-23. This is a learning
+  project, not a dependency anyone should take on, and a registry name is a
+  commitment to maintain. `publish = false` in `[workspace.package]` makes
+  `cargo publish` fail rather than relying on nobody running it. This closes
+  the two packaging blockers below, which only ever mattered for publishing.
 
 ### Phase 0 (original) — Decisions (blocking, human)
 
@@ -226,6 +231,7 @@ documentation, archive, or delete.
 - Decide commit email: 118 commits use `yuhanhao@gmail.com`; switch to GitHub's
   noreply address going forward, rewrite, or accept it as public.
 - Decide whether v0.3.0 publishes to crates.io or is GitHub-only for now.
+  → Resolved: GitHub-only, permanently.
 
 ### Phase 1 — Rename ✅ COMPLETE (eec7c76)
 
@@ -345,8 +351,7 @@ jobs:
     - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-3. Optionally `cargo publish` the three crates in dependency order:
-   `gyrus`, then `gyrus-cli`, `gyrus-tool`.
+
 
 ## Success Criteria
 
@@ -365,7 +370,6 @@ jobs:
       public and Actions minutes are free. Gates verified locally in the
       meantime.
 - [x] README describes the project as it is, with no unearned superlatives.
-- [ ] `cargo package -p gyrus` succeeds (whether or not it is published).
 
 ## Dependencies
 
@@ -375,13 +379,10 @@ jobs:
 
 ## Risks and Open Questions
 
-- **Publishing blocker: bench include paths** — `cargo package -p gyrus` ships
-  `benches/` but not `programs/`, so the `include_str!("../../../programs/...")`
-  calls in `benches/interpreter.rs` cannot resolve from a published crate. Fix
-  by excluding benches from the package, or by reading the programs at runtime.
-- **Publishing blocker: license text** — `LICENSE` sits at the repo root,
-  outside `crates/gyrus/`, so cargo will not include it in the published crate.
-  Copy it into each published crate directory before `cargo publish`.
+- ~~Publishing blockers~~ — two problems (`benches/` packaged without
+  `programs/`, so its `include_str!` paths cannot resolve; `LICENSE` outside the
+  crate directory) applied only to `cargo publish`. Moot now that the project is
+  GitHub-only. They would need fixing if that decision ever reverses.
 
 - **History rewrite** — Dropping `benchmarks/mandelbrot` from history means
   rewriting all 118 commits. Free now (private, single-author, no forks),
@@ -392,9 +393,8 @@ jobs:
   whole is not purely MIT/Apache. Cleanest resolution is removal.
 - **Cristofani's collection** — the terms on `brainfuck.org` need to be read and
   quoted in `CREDITS.md` rather than assumed permissive.
-- **crates.io squatting** — `gyrus` is free today; it will not be reserved until
-  a publish happens. If the name matters, publishing a 0.3.0 early is the only
-  way to hold it.
+- **crates.io name** — `gyrus` is unclaimed and will stay that way; someone else
+  may take it. Accepted: the GitHub repository is the project's identity.
 - **Name collision check** — crates.io and GitHub are clear; a quick search for
   an existing well-known "gyrus" in adjacent tooling is worth five minutes
   before committing.

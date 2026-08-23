@@ -322,11 +322,8 @@ This is a Cargo workspace with the following crates:
     └── location.rs       - Source tracking
     ```
   - Can be used as a library by other Rust projects
-  - **Not yet published to crates.io.** Two things block it: `benches/` is
-    packaged but `programs/` is not, so the `include_str!` calls in
-    `benches/interpreter.rs` cannot resolve from a published crate; and
-    `LICENSE` sits at the repo root, outside the package directory, so cargo
-    will not ship it.
+  - **Not published to crates.io, by decision.** `publish = false` is set in
+    `[workspace.package]`; use it from a path or git dependency instead.
 
 - **`gyrus-cli`** (binary): Command-line interpreter
   - Location: `crates/gyrus-cli/`
@@ -343,7 +340,7 @@ This is a Cargo workspace with the following crates:
 **Benefits of workspace structure**:
 - ✅ Clear separation between library, execution CLI, and development tools
 - ✅ Easy to add new binaries (debugger, REPL, JIT compiler)
-- ✅ Library can be published to crates.io independently
+- ✅ Library is usable on its own as a path or git dependency
 - ✅ Each crate can have its own version
 - ✅ Faster incremental compilation
 - ✅ Clean module boundaries prevent coupling
