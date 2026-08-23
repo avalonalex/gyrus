@@ -394,6 +394,22 @@ scripts/check-msrv.sh                 # workspace really builds on its declared 
 scripts/check-readme-commands.py      # every flag the README documents exists
 ```
 
+### Benchmarking and profiling
+
+```bash
+scripts/benchmark.sh                  # time each mode, diff output vs benchmarks/expected/
+scripts/benchmark.sh --full           # include the --debug runs for hanoi and mandelbrot
+scripts/benchmark.sh --profile PROG   # loop profile via --trace
+cargo bench                           # criterion micro-benchmarks
+```
+
+`benchmark.sh` diffs every run against a golden output in `benchmarks/expected/`
+and, for the fast programs, checks that the optimized and `--debug`
+interpreters agree byte for byte — so it doubles as a differential test of the
+optimizer. A timing that improves while the output moves is a bug, and the
+script fails rather than printing the number. Only re-record with `--record`
+after confirming the new output is correct.
+
 `check-msrv.sh` reads `rust-version` out of `Cargo.toml` instead of restating
 it, and installs that toolchain if it is missing. Run it after touching
 dependencies or using a new language feature — the declared MSRV was already

@@ -135,6 +135,21 @@ repo license covers the Rust code, not the bundled BF programs.
 `crates/ferrous-cortex-tool/Cargo.toml:8`; also
 `internal/architecture-status.md:657`. Fix as part of the rename.
 
+**B8 — `benchmarks/` held a broken native reference.** ✅ Resolved 2026-08-23.
+The directory contained `mandelbrot.rs`, a Rust program whose header claimed it
+"generates the same ASCII art as mandelbrot.bf". It does not. The BF program
+emits a clean 48x129 grid of `A`-`Z`, `[`, and space; the Rust program emits
+variable-length lines (129-132 bytes) containing non-ASCII bytes, because
+`b'A' + iteration` runs past `Z` and wraps beyond 127. Beyond the bug, the
+coordinates do not match either: a parameter sweep reproduces at most 37% of
+the reference cells in f64, or 52% with fixed-point arithmetic, because
+Bosman's program uses a fixed-point scheme that would have to be reverse
+engineered out of 11 KB of dense BrainFuck to port faithfully.
+
+It was deleted rather than fixed: the thing worth benchmarking is BrainFuck
+execution, not a native baseline. `benchmarks/` now holds golden outputs for
+`scripts/benchmark.sh`.
+
 **B4 — Committed build artifact.** `benchmarks/mandelbrot` is a 460 KB Mach-O
 arm64 executable tracked in git. Delete it, add it to `.gitignore`, and — while
 the repo is still private — decide whether to strip it from history (see Risks).
