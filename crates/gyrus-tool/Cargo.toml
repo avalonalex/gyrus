@@ -4,8 +4,8 @@ version = "0.3.0"
 edition = "2024"
 authors = ["gyrus Contributors"]
 description = "Development and analysis tools for BrainFuck programs"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/avalonalex/gyrus"
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "gyrus-tool"
