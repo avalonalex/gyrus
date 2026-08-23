@@ -13,7 +13,8 @@
 //! - `<<<` → `Left(3)` - Combine pointer movements
 //!
 //! ## Loop Pattern Recognition
-//! - `[-]` or `[+]` → `Zero` - Clear current cell
+//! - `[-]` → `Zero` - Clear current cell (not `[+]`: it reaches zero only by
+//!   wrapping past 255, which checked cells reject)
 //! - `[>]` → `SeekRight(0)` - Find next zero cell
 //! - `[<]` → `SeekLeft(0)` - Find previous zero cell
 //! - `[->>+<<]` → `MoveRight(2)` - Move value to offset
@@ -101,7 +102,7 @@ pub enum OptimizedInstruction {
     Output(SourceRange),
     /// Read input into current cell (,)
     Input(SourceRange),
-    /// Set current cell to zero (optimized [-] or [+])
+    /// Set current cell to zero (optimized `[-]`)
     Zero(SourceRange),
     /// Seek right to next zero cell (optimized [>])
     SeekRight(SourceRange),
@@ -198,14 +199,24 @@ pub fn optimize(instructions: &[Instruction]) -> OptimizedProgram {
 
 /// Count original instructions (including nested loops)
 fn count_original_instructions(instructions: &[Instruction]) -> usize {
+    instructions.iter().map(count_original_instruction).sum()
+}
+
+/// Same count over a borrowed view, so callers holding `&[&Instruction]` do not
+/// have to deep-clone the block (nested loop bodies included) just to size it.
+fn count_original_refs(instructions: &[&Instruction]) -> usize {
     instructions
         .iter()
-        .map(|inst| match inst {
-            Instruction::Loop(body) => 1 + count_original_instructions(body),
-            Instruction::LoopCheck => 0, // Internal, don't count
-            _ => 1,
-        })
+        .map(|inst| count_original_instruction(inst))
         .sum()
+}
+
+fn count_original_instruction(instruction: &Instruction) -> usize {
+    match instruction {
+        Instruction::Loop(body) => 1 + count_original_instructions(body),
+        Instruction::LoopCheck => 0, // Internal, counted as part of its Loop
+        _ => 1,
+    }
 }
 
 /// Optimize a block of instructions, returning (optimized instructions, next index)
@@ -219,9 +230,13 @@ fn optimize_block(
 
     while i < instructions.len() {
         match &instructions[i] {
-            // Skip internal LoopCheck instructions
+            // Skip internal LoopCheck instructions.
+            //
+            // LoopCheck does not occupy an index of its own: `count_original_instructions`
+            // scores it 0 and scores the enclosing `Loop` as 1, because the `Loop`
+            // container and its LoopCheck are the same `[` in the source. Advancing
+            // here as well would count that `[` twice.
             Instruction::LoopCheck => {
-                current_index += 1;
                 i += 1;
             }
 
@@ -235,10 +250,12 @@ fn optimize_block(
                     current_index += 1 + count_original_instructions(body);
                     i += 1;
                 } else {
-                    // General loop - recursively optimize body
+                    // General loop - recursively optimize body.
+                    // body_start already includes the +1 for the '[' itself, so the
+                    // index the body ends on is the index the loop ends on.
                     let body_start = current_index + 1; // +1 for the loop instruction itself
                     let (optimized_body, next_index) = optimize_block(body, body_start);
-                    current_index = next_index + 1; // +1 to account for the loop instruction
+                    current_index = next_index;
                     result.push(OptimizedInstruction::Loop(
                         optimized_body,
                         SourceRange::new(loop_start, current_index),
@@ -347,20 +364,19 @@ fn recognize_loop_pattern(body: &[Instruction], loop_start: usize) -> Option<Opt
         .filter(|inst| !matches!(inst, Instruction::LoopCheck))
         .collect();
 
-    let loop_end = loop_start
-        + 1
-        + count_original_instructions(&body.iter().map(|&i| i.clone()).collect::<Vec<_>>());
+    let loop_end = loop_start + 1 + count_original_refs(&body);
 
-    // Pattern: [-] or [+] → Zero
-    if body.len() == 1 {
-        match body[0] {
-            Instruction::DecrementValue | Instruction::IncrementValue => {
-                return Some(OptimizedInstruction::Zero(SourceRange::new(
-                    loop_start, loop_end,
-                )));
-            }
-            _ => {}
-        }
+    // Pattern: [-] → Zero
+    //
+    // Deliberately not [+]: reaching zero by incrementing relies on the cell
+    // wrapping past 255, which `CellModel::U8Checked` rejects. Folding it to a
+    // store of 0 would silently succeed where the debug interpreter reports
+    // CellOverflow. [+] is an anti-pattern the validator already warns about,
+    // so leaving it as a real loop costs nothing worth having.
+    if body.len() == 1 && matches!(body[0], Instruction::DecrementValue) {
+        return Some(OptimizedInstruction::Zero(SourceRange::new(
+            loop_start, loop_end,
+        )));
     }
 
     // Pattern: [>] → SeekRight
@@ -627,6 +643,87 @@ mod tests {
         assert_eq!(
             optimized.instructions[1].source_range(),
             SourceRange::single(2)
+        );
+    }
+
+    /// Source ranges are indices into the flat instruction stream the interpreter
+    /// and debug symbols use, where a `[` occupies exactly one index (its LoopCheck).
+    /// An unfused loop used to advance the cursor twice for that single `[` - once
+    /// for the Loop container and once for its LoopCheck - so everything after a loop
+    /// was reported two indices too far, and everything inside it one too far.
+    #[test]
+    fn test_source_ranges_survive_an_unfused_loop() {
+        // "[>.]+" -> LoopCheck=0, '>'=1, '.'=2, '+'=3
+        let optimized = optimize(&crate::parser::parse("[>.]+").unwrap());
+
+        let OptimizedInstruction::Loop(body, loop_range) = &optimized.instructions[0] else {
+            panic!(
+                "expected a general Loop, got {:?}",
+                optimized.instructions[0]
+            );
+        };
+        assert_eq!(*loop_range, SourceRange::new(0, 3));
+        assert_eq!(body[0].source_range(), SourceRange::new(1, 2), "the '>'");
+        assert_eq!(body[1].source_range(), SourceRange::new(2, 3), "the '.'");
+        assert_eq!(
+            optimized.instructions[1].source_range(),
+            SourceRange::new(3, 4),
+            "the '+' after the loop"
+        );
+    }
+
+    /// The same accounting has to hold through nesting.
+    #[test]
+    fn test_source_ranges_survive_nested_unfused_loops() {
+        // "+[>[.]<]-" -> '+'=0, outer '['=1, '>'=2, inner '['=3, '.'=4, '<'=5, '-'=6
+        let optimized = optimize(&crate::parser::parse("+[>[.]<]-").unwrap());
+
+        assert_eq!(
+            optimized.instructions[0].source_range(),
+            SourceRange::new(0, 1)
+        );
+        assert_eq!(
+            optimized.instructions[1].source_range(),
+            SourceRange::new(1, 6)
+        );
+        assert_eq!(
+            optimized.instructions[2].source_range(),
+            SourceRange::new(6, 7)
+        );
+
+        let OptimizedInstruction::Loop(outer, _) = &optimized.instructions[1] else {
+            panic!("expected outer Loop");
+        };
+        assert_eq!(outer[0].source_range(), SourceRange::new(2, 3), "the '>'");
+        assert_eq!(
+            outer[1].source_range(),
+            SourceRange::new(3, 5),
+            "inner loop"
+        );
+        assert_eq!(outer[2].source_range(), SourceRange::new(5, 6), "the '<'");
+    }
+
+    /// `[-]` folds to a store of zero, but `[+]` must not: it only reaches zero by
+    /// wrapping past 255, which `CellModel::U8Checked` reports as an overflow.
+    #[test]
+    fn test_only_decrement_clear_loop_folds_to_zero() {
+        let zeroed = optimize(&[Instruction::Loop(vec![
+            Instruction::LoopCheck,
+            Instruction::DecrementValue,
+        ])]);
+        assert!(matches!(
+            zeroed.instructions[0],
+            OptimizedInstruction::Zero(_)
+        ));
+
+        let kept = optimize(&[Instruction::Loop(vec![
+            Instruction::LoopCheck,
+            Instruction::IncrementValue,
+        ])]);
+        assert!(
+            matches!(kept.instructions[0], OptimizedInstruction::Loop(_, _)),
+            "[+] must stay a real loop, got {:?}",
+            kept.instructions[0]
         );
     }
 

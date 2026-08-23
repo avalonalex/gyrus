@@ -316,11 +316,29 @@ pub struct WarningCollectorHook {
 
 impl WarningCollectorHook {
     /// Create a new warning collector.
+    ///
+    /// Prefer [`WarningCollectorHook::with_initial_memory_size`] when the tape's
+    /// starting length is known: without it the first expansion is treated as the
+    /// baseline and goes unreported.
     #[inline]
     pub fn new() -> Self {
         Self {
             warnings: Vec::new(),
             last_memory_size: 0,
+        }
+    }
+
+    /// Create a warning collector that knows the tape's starting length.
+    ///
+    /// Expansion is detected by comparing against the previously seen length, and
+    /// `after_instruction` only runs once an instruction has already executed. Seeding
+    /// the baseline here is what lets a program whose *first* instruction grows the
+    /// tape report that growth.
+    #[inline]
+    pub fn with_initial_memory_size(initial_size: usize) -> Self {
+        Self {
+            warnings: Vec::new(),
+            last_memory_size: initial_size,
         }
     }
 
@@ -351,12 +369,19 @@ impl ExecutionHook for WarningCollectorHook {
     ) -> HookDecision {
         let current_memory_size = context.memory().len();
 
-        // Detect memory expansion
+        // Detect memory expansion.
+        //
+        // The `last_memory_size > 0` guard exists only for a hook built with `new()`,
+        // which has no baseline to compare the first observation against. Interpreter-
+        // owned hooks are seeded via `with_initial_memory_size`, so growth on the very
+        // first instruction is reported.
         if current_memory_size > self.last_memory_size && self.last_memory_size > 0 {
             // Memory was expanded - record warning
             // This happens with unbounded memory model when pointer goes beyond current size
             self.warnings.push(RuntimeWarning::MemoryExpanded {
-                instruction_index: InstructionIndex::new((context.step_count().get() - 1) as usize),
+                instruction_index: InstructionIndex::new(
+                    context.step_count().get().saturating_sub(1) as usize,
+                ),
                 from_size: MemorySize::new(self.last_memory_size),
                 to_size: MemorySize::new(current_memory_size),
                 source_location: context.source_location().cloned(),
@@ -590,6 +615,20 @@ pub struct DebugTrackingHook {
 
     /// Stack of active loop contexts for nested loops
     loop_stack: Vec<crate::debug::LoopContext>,
+
+    /// Running iteration count per loop, keyed by its '[' instruction index.
+    ///
+    /// `on_loop_enter`/`on_loop_exit` fire once per *iteration*, so the frame for
+    /// iteration N is already popped by the time iteration N+1 enters. Without
+    /// carrying the count here every frame reported "iteration 1".
+    ///
+    /// The stored value pairs the count with the enclosing loop's iteration at the
+    /// time it was recorded. When the parent advances to its next iteration the
+    /// stamp no longer matches and the inner count restarts at 1, which is what
+    /// makes a nested loop report its own iteration rather than a lifetime total.
+    /// Keying by loop index keeps the map bounded by the number of loops in the
+    /// program rather than by the number of iterations executed.
+    last_iteration: std::collections::HashMap<usize, (u64, u64)>,
 }
 
 impl DebugTrackingHook {
@@ -598,6 +637,7 @@ impl DebugTrackingHook {
         Self {
             debug_info,
             loop_stack: Vec::new(),
+            last_iteration: std::collections::HashMap::new(),
         }
     }
 
@@ -625,19 +665,16 @@ impl ExecutionHook for DebugTrackingHook {
     ) -> HookDecision {
         // Only track loops when loop_info is available (debug symbols enabled)
         if let Some(info) = loop_info {
-            // Determine iteration number
-            let iteration = if let Some(ctx) = self.loop_stack.last() {
-                if ctx.loop_instruction_index == info.loop_instruction_index {
-                    // Same loop, increment iteration
-                    ctx.iteration + 1
-                } else {
-                    // Different loop (nested), start at 1
-                    1
-                }
-            } else {
-                // No active loops, start at 1
-                1
+            // Determine iteration number. The previous iteration's frame has already
+            // been popped by on_loop_exit, so the running count lives in
+            // `last_iteration` rather than on the stack.
+            let parent_stamp = self.loop_stack.last().map_or(0, |ctx| ctx.iteration);
+            let iteration = match self.last_iteration.get(&info.loop_instruction_index) {
+                Some((stamp, count)) if *stamp == parent_stamp => count + 1,
+                _ => 1,
             };
+            self.last_iteration
+                .insert(info.loop_instruction_index, (parent_stamp, iteration));
 
             // Look up source location for the '[' instruction
             let source_location = self
@@ -812,6 +849,60 @@ mod tests {
         // Total inner: 2 + 4 + 6 = 12
         // Total loop_iterations = 3 (outer) + 12 (inner) = 15
         assert!(stats.loop_iterations >= 3); // At least the outer loops
+    }
+
+    /// `after_instruction` only runs once an instruction has already executed, so a
+    /// collector that starts with no baseline treats the first expansion as the
+    /// baseline and never reports it. Every growth here should be reported.
+    #[test]
+    fn test_warning_collector_reports_the_first_memory_expansion() {
+        let (instructions, debug_info) = crate::parser::parse_with_debug(">>>").unwrap();
+        let config = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(1, 100)
+            .unwrap()
+            .build();
+
+        let mut input = crate::io::StringIo::empty();
+        let mut output = crate::io::StringIo::empty();
+        let stats = crate::interpreter::interpret_with_io(
+            &instructions,
+            config,
+            &mut input,
+            &mut output,
+            Some(&debug_info),
+        )
+        .unwrap();
+
+        assert_eq!(
+            stats.warnings.len(),
+            3,
+            "each '>' grew the tape by one cell: {:?}",
+            stats.warnings
+        );
+    }
+
+    /// `on_loop_enter`/`on_loop_exit` fire once per iteration, so the frame carrying
+    /// the count is already popped when the next iteration enters. The hook has to
+    /// carry the count itself, or every loop reports "iteration 1" forever.
+    #[test]
+    fn test_debug_tracking_hook_counts_iterations() {
+        // Tape of 10 cells: the pointer reaches 3, 6, 9, then fails on iteration 4.
+        let source = "+++[>>>-]";
+        let (instructions, debug_info) = crate::parser::parse_with_debug(source).unwrap();
+        let config = ExecutionConfigBuilder::new().with_memory_size(10).build();
+
+        let error = interpret_with_config(&instructions, config, Some(&debug_info))
+            .expect_err("should run off the end of the tape");
+
+        let crate::error::BfError::MemoryOutOfBounds {
+            loop_call_stack, ..
+        } = &error
+        else {
+            panic!("expected MemoryOutOfBounds, got {:?}", error);
+        };
+        let stack = loop_call_stack.as_ref().expect("loop call stack");
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].iteration, 4, "error is on the 4th iteration");
     }
 
     #[test]
@@ -1049,7 +1140,11 @@ impl ProfilingHook {
 
             for ch in line.chars() {
                 let char_offset = current_offset;
-                current_offset += ch.len_utf8();
+                // Advance by one per char, not by len_utf8: SourceLocation.offset is a
+                // char index (the parser advances it once per char), so counting bytes
+                // here desynchronised the lookup after the first non-ASCII character
+                // and every later instruction fell through to "not executed".
+                current_offset += 1;
 
                 // Check if this is a line comment start
                 if ch == '*' {
