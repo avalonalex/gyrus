@@ -822,6 +822,25 @@ already. The minified code is functionally identical to the original.
 
 ## Development
 
+### Checks
+
+```bash
+cargo test --workspace                # the full suite
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+
+scripts/check-msrv.sh                 # builds on the MSRV declared in Cargo.toml
+scripts/check-readme-commands.py      # every flag documented here really exists
+```
+
+The last two guard claims that rot quietly: the declared MSRV, and this file's
+own command lines. Both were wrong at some point, which is why they are scripts
+now. `check-readme-commands.py` needs `cargo build --release --workspace` first.
+
+Dependencies are declared at breaking-change granularity (`"2"`, not
+`"2.0.17"`), so `cargo update` picks up compatible upgrades on its own and
+`Cargo.lock` records exactly what is in use.
+
 ### Running Tests
 
 gyrus has a comprehensive testing infrastructure: unit tests, integration tests
