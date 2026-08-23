@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document explores compilation options for FerrousCortex using **Cranelift** as the code generation backend. The goal is to provide both **debug builds** (with source location tracking) and **optimized builds** (maximum performance) while avoiding the complexity of LLVM.
+This document explores compilation options for gyrus using **Cranelift** as the code generation backend. The goal is to provide both **debug builds** (with source location tracking) and **optimized builds** (maximum performance) while avoiding the complexity of LLVM.
 
 **Recommendation:** Hybrid approach with both JIT and AOT capabilities, starting with JIT for development velocity.
 
@@ -10,7 +10,7 @@ This document explores compilation options for FerrousCortex using **Cranelift**
 
 ### Current State (v0.2.x)
 
-FerrousCortex has three execution modes:
+gyrus has three execution modes:
 1. **Optimized interpreter** (default): 13× faster than baseline
 2. **Debug interpreter** (`--debug`): Source tracking for errors
 3. **Trace interpreter** (`--trace`): Profiling with heatmap
@@ -238,8 +238,8 @@ Optimized IR (OptimizedInstruction[])
 ### How It Works
 
 Both JIT and AOT share the same IR translation layer:
-- **JIT mode**: `ferrous-cortex-jit program.bf` (instant execution)
-- **AOT mode**: `ferrous-cortex-compile program.bf -o program` (create binary)
+- **JIT mode**: `gyrus-jit program.bf` (instant execution)
+- **AOT mode**: `gyrus-compile program.bf -o program` (create binary)
 
 ### Pros
 
@@ -375,10 +375,10 @@ Based on Cranelift benchmarks and WebAssembly experience:
 
 ```
 crates/
-├── ferrous-cortex/              # Core library (existing)
-├── ferrous-cortex-cli/          # Interpreter CLI (existing)
-├── ferrous-cortex-tool/         # Dev tools (existing)
-├── ferrous-cortex-codegen/      # NEW: IR → Cranelift translation
+├── gyrus/              # Core library (existing)
+├── gyrus-cli/          # Interpreter CLI (existing)
+├── gyrus-tool/         # Dev tools (existing)
+├── gyrus-codegen/      # NEW: IR → Cranelift translation
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── translator.rs        # OptimizedInstruction → Cranelift IR
@@ -386,7 +386,7 @@ crates/
 │   │   ├── debug.rs             # Debug info emission
 │   │   └── patterns.rs          # Optimized pattern compilation
 │   └── Cargo.toml
-└── ferrous-cortex-jit/          # NEW: JIT runtime
+└── gyrus-jit/          # NEW: JIT runtime
     ├── src/
     │   ├── lib.rs
     │   ├── compiler.rs          # JIT compilation pipeline
@@ -398,25 +398,25 @@ crates/
 ### Dependencies
 
 ```toml
-# ferrous-cortex-codegen/Cargo.toml
+# gyrus-codegen/Cargo.toml
 [dependencies]
 cranelift-codegen = "0.109"
 cranelift-frontend = "0.109"
 cranelift-module = "0.109"
-ferrous-cortex = { path = "../ferrous-cortex" }
+gyrus = { path = "../gyrus" }
 
-# ferrous-cortex-jit/Cargo.toml
+# gyrus-jit/Cargo.toml
 [dependencies]
 cranelift-codegen = "0.109"
 cranelift-jit = "0.109"
 cranelift-module = "0.109"
-ferrous-cortex = { path = "../ferrous-cortex" }
-ferrous-cortex-codegen = { path = "../ferrous-cortex-codegen" }
+gyrus = { path = "../gyrus" }
+gyrus-codegen = { path = "../gyrus-codegen" }
 ```
 
 ### API Design
 
-#### ferrous-cortex-codegen
+#### gyrus-codegen
 
 ```rust
 pub struct Translator {
@@ -448,7 +448,7 @@ impl Translator {
 }
 ```
 
-#### ferrous-cortex-jit
+#### gyrus-jit
 
 ```rust
 pub struct JitCompiler {
@@ -482,18 +482,18 @@ impl CompiledProgram {
 
 ```bash
 # Interpreter (current, default)
-ferrous-cortex program.bf                  # Optimized interpreter (13×)
-ferrous-cortex program.bf --debug          # Debug interpreter
-ferrous-cortex program.bf --trace          # Trace interpreter
+gyrus program.bf                  # Optimized interpreter (13×)
+gyrus program.bf --debug          # Debug interpreter
+gyrus program.bf --trace          # Trace interpreter
 
 # JIT compiled (NEW)
-ferrous-cortex program.bf --jit            # JIT compile and run (100-1000×)
-ferrous-cortex program.bf --jit --debug    # JIT with debug info
-ferrous-cortex program.bf --jit --opt-level speed  # Optimization level
+gyrus program.bf --jit            # JIT compile and run (100-1000×)
+gyrus program.bf --jit --debug    # JIT with debug info
+gyrus program.bf --jit --opt-level speed  # Optimization level
 
 # AOT compiled (FUTURE)
-ferrous-cortex-compile program.bf -o program       # Create standalone binary
-ferrous-cortex-compile program.bf -o program --debug  # Debug build
+gyrus-compile program.bf -o program       # Create standalone binary
+gyrus-compile program.bf -o program --debug  # Debug build
 ```
 
 ## Debug Builds vs Opt Builds
@@ -776,7 +776,7 @@ fn translate_with_instrumentation(
 ```
 
 ```rust
-// Runtime function (in ferrous-cortex-jit or linked into AOT binary)
+// Runtime function (in gyrus-jit or linked into AOT binary)
 extern "C" fn debug_hook(
     inst_index: u32,
     memory: *mut u8,
@@ -817,7 +817,7 @@ extern "C" fn debug_hook(
 - ❌ Larger compiled code size (extra calls everywhere)
 
 **When to use:**
-- Interactive TUI debugger (`ferrous-cortex --debug --interactive`)
+- Interactive TUI debugger (`gyrus --debug --interactive`)
 - Execution tracing and profiling
 - Teaching/learning mode with step-through
 - When you need custom debug features not supported by DWARF
@@ -955,16 +955,16 @@ pub fn execute_program(
 **CLI integration:**
 ```bash
 # Interpreter - maximum debug features (existing)
-ferrous-cortex program.bf --debug --trace
+gyrus program.bf --debug --trace
 
 # JIT with DWARF - fast + debugger support
-ferrous-cortex program.bf --jit --debug
+gyrus program.bf --jit --debug
 
 # JIT instrumented - full hooks for TUI debugger
-ferrous-cortex program.bf --jit --debug --instrumented
+gyrus program.bf --jit --debug --instrumented
 
 # JIT release - maximum speed
-ferrous-cortex program.bf --jit
+gyrus program.bf --jit
 ```
 
 **Advantages:**
@@ -1038,7 +1038,7 @@ ferrous-cortex program.bf --jit
 
 ## Integration with Existing Architecture
 
-FerrousCortex already has excellent foundations for debug support:
+gyrus already has excellent foundations for debug support:
 
 ✅ **`SourceRange` in every `OptimizedInstruction`**
 - Already tracks source location spans
@@ -1242,4 +1242,4 @@ builder.set_srcloc(srcloc);
 4. **Documentation**: Update user docs with compilation options
 5. **Benchmarking**: Measure real-world performance
 
-This approach provides a clear path to **100-1000× performance improvement** while maintaining FerrousCortex's focus on reliability, debuggability, and user experience.
+This approach provides a clear path to **100-1000× performance improvement** while maintaining gyrus's focus on reliability, debuggability, and user experience.

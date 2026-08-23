@@ -1,6 +1,6 @@
 * Copy input to output (cat)
 *
-* Usage: echo "Hello" | ferrous-cortex cat.bf
+* Usage: echo "Hello" | gyrus cat.bf
 * Output: Hello
 *
 * Works with both EOF->0 and EOF->NoChange behaviors

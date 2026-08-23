@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Build a **visual terminal debugger** with full step-through execution, breakpoints, and memory inspection, leveraging FerrousCortex's existing hook infrastructure. Extend it with an **interactive tutorial mode** inspired by "The Little Schemer" to teach BrainFuck concepts and demonstrate Turing completeness.
+Build a **visual terminal debugger** with full step-through execution, breakpoints, and memory inspection, leveraging gyrus's existing hook infrastructure. Extend it with an **interactive tutorial mode** inspired by "The Little Schemer" to teach BrainFuck concepts and demonstrate Turing completeness.
 
 **Key Goals:**
 1. **Visual debugging:** See code, memory, and execution state simultaneously
@@ -113,7 +113,7 @@ crossterm = "0.27"
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ FerrousCortex Debugger │ hanoi.bf │ Running │ Step: 1234/∞ │ [F1] Help      │
+│ gyrus Debugger │ hanoi.bf │ Running │ Step: 1234/∞ │ [F1] Help      │
 ├────────────────────────────┬─────────────────────────────────────────────────┤
 │ Source Code (60%)          │ Memory View (40%)                               │
 │                            │                                                 │
@@ -143,7 +143,7 @@ crossterm = "0.27"
 #### 1. Header Bar (1 line)
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ FerrousCortex Debugger │ hanoi.bf │ Running │ Step: 1234/∞ │ [F1] Help      │
+│ gyrus Debugger │ hanoi.bf │ Running │ Step: 1234/∞ │ [F1] Help      │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -489,7 +489,7 @@ For users familiar with Vim:
 ### DebuggerHook Structure
 
 ```rust
-use ferrous_cortex::hooks::{ExecutionHook, HookContext, HookDecision};
+use gyrus::hooks::{ExecutionHook, HookContext, HookDecision};
 use std::collections::HashSet;
 
 pub struct DebuggerHook {
@@ -691,7 +691,7 @@ The tutorial follows Socratic dialogue style:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ FerrousCortex Tutorial │ Lesson 3: Loops │ Progress: 3/12                    │
+│ gyrus Tutorial │ Lesson 3: Loops │ Progress: 3/12                    │
 ├────────────────────────────┬─────────────────────────────────────────────────┤
 │ Instruction                │ Your Code                                       │
 │                            │                                                 │
@@ -722,7 +722,7 @@ The tutorial follows Socratic dialogue style:
 
 #### Lesson 0: Welcome
 ```
-Welcome to FerrousCortex!
+Welcome to gyrus!
 
 BrainFuck is one of the simplest programming languages,
 but it's Turing complete - it can compute anything!
@@ -962,12 +962,12 @@ impl Tutorial {
 
 ```
 crates/
-├── ferrous-cortex/              # Core library (existing)
-├── ferrous-cortex-cli/          # Interpreter CLI (existing)
-├── ferrous-cortex-tool/         # Dev tools (existing)
-├── ferrous-cortex-codegen/      # Cranelift IR translation (future)
-├── ferrous-cortex-jit/          # JIT compiler (future)
-├── ferrous-cortex-tui/          # NEW: Shared TUI components
+├── gyrus/              # Core library (existing)
+├── gyrus-cli/          # Interpreter CLI (existing)
+├── gyrus-tool/         # Dev tools (existing)
+├── gyrus-codegen/      # Cranelift IR translation (future)
+├── gyrus-jit/          # JIT compiler (future)
+├── gyrus-tui/          # NEW: Shared TUI components
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── panels/
@@ -982,7 +982,7 @@ crates/
 │   │   ├── theme.rs             # Color scheme (BF syntax)
 │   │   └── layout.rs            # Common layouts
 │   └── Cargo.toml
-├── ferrous-cortex-debug/        # NEW: Debugger binary
+├── gyrus-debug/        # NEW: Debugger binary
 │   ├── src/
 │   │   ├── main.rs
 │   │   ├── debugger.rs          # Debugger state machine
@@ -990,7 +990,7 @@ crates/
 │   │   ├── breakpoint.rs        # Breakpoint management
 │   │   └── ui.rs                # Debugger UI (uses tui crate)
 │   └── Cargo.toml
-└── ferrous-cortex-tutorial/     # NEW: Tutorial binary (separate!)
+└── gyrus-tutorial/     # NEW: Tutorial binary (separate!)
     ├── src/
     │   ├── main.rs
     │   ├── tutorial.rs          # Tutorial state machine
@@ -1005,19 +1005,19 @@ crates/
 
 ### Why Separate Crates?
 
-**ferrous-cortex-tui (shared library):**
+**gyrus-tui (shared library):**
 - ✅ Reusable TUI components
 - ✅ Common BF syntax highlighting theme
 - ✅ Memory view, source view, output panels
 - ✅ Both debugger and tutorial use these
 
-**ferrous-cortex-debug (debugger binary):**
+**gyrus-debug (debugger binary):**
 - 🎯 **Focus:** Professional debugging for developers
 - 📦 **Binary size:** ~5MB (no tutorial lessons)
 - 👥 **Audience:** BF developers, serious users
 - ⚙️ **Features:** Breakpoints, watch, step-through
 
-**ferrous-cortex-tutorial (tutorial binary):**
+**gyrus-tutorial (tutorial binary):**
 - 🎯 **Focus:** Teaching BF concepts to beginners
 - 📦 **Binary size:** ~3MB (no debugging complexity)
 - 👥 **Audience:** Learners, students, educators
@@ -1036,7 +1036,7 @@ crates/
 
 **Goal:** Build reusable TUI library
 
-- [ ] Create `ferrous-cortex-tui` crate
+- [ ] Create `gyrus-tui` crate
   - [ ] Add ratatui + crossterm dependencies
   - [ ] Set up library structure
 - [ ] Implement panels:
@@ -1063,8 +1063,8 @@ crates/
 
 **Goal:** Step-through execution with source and memory view
 
-- [ ] Create `ferrous-cortex-debug` crate
-  - [ ] Depend on `ferrous-cortex-tui`
+- [ ] Create `gyrus-debug` crate
+  - [ ] Depend on `gyrus-tui`
   - [ ] Set up debugger binary
 - [ ] Implement `DebuggerHook`
   - [ ] Integration with hook system
@@ -1120,8 +1120,8 @@ crates/
 
 **Goal:** Interactive lessons teaching BF
 
-- [ ] Create `ferrous-cortex-tutorial` crate
-  - [ ] Depend on `ferrous-cortex-tui`
+- [ ] Create `gyrus-tutorial` crate
+  - [ ] Depend on `gyrus-tui`
   - [ ] Set up tutorial binary
 - [ ] Lesson framework
   - [ ] Lesson data structure
@@ -1195,54 +1195,54 @@ crates/
 
 ## Dependencies
 
-### ferrous-cortex-tui (Shared Library)
+### gyrus-tui (Shared Library)
 
 ```toml
 [package]
-name = "ferrous-cortex-tui"
+name = "gyrus-tui"
 version = "0.3.0"
 edition = "2024"
 
 [dependencies]
-ferrous-cortex = { path = "../ferrous-cortex" }
+gyrus = { path = "../gyrus" }
 ratatui = "0.26"
 crossterm = "0.27"
 ```
 
-### ferrous-cortex-debug (Debugger Binary)
+### gyrus-debug (Debugger Binary)
 
 ```toml
 [package]
-name = "ferrous-cortex-debug"
+name = "gyrus-debug"
 version = "0.3.0"
 edition = "2024"
 
 [[bin]]
-name = "ferrous-cortex-debug"
+name = "gyrus-debug"
 path = "src/main.rs"
 
 [dependencies]
-ferrous-cortex = { path = "../ferrous-cortex" }
-ferrous-cortex-tui = { path = "../ferrous-cortex-tui" }
+gyrus = { path = "../gyrus" }
+gyrus-tui = { path = "../gyrus-tui" }
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 ```
 
-### ferrous-cortex-tutorial (Tutorial Binary)
+### gyrus-tutorial (Tutorial Binary)
 
 ```toml
 [package]
-name = "ferrous-cortex-tutorial"
+name = "gyrus-tutorial"
 version = "0.3.0"
 edition = "2024"
 
 [[bin]]
-name = "ferrous-cortex-tutorial"
+name = "gyrus-tutorial"
 path = "src/main.rs"
 
 [dependencies]
-ferrous-cortex = { path = "../ferrous-cortex" }
-ferrous-cortex-tui = { path = "../ferrous-cortex-tui" }
+gyrus = { path = "../gyrus" }
+gyrus-tui = { path = "../gyrus-tui" }
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 ```
@@ -1253,35 +1253,35 @@ clap = { version = "4.5", features = ["derive"] }
 
 ```bash
 # Basic debugger
-ferrous-cortex-debug program.bf
+gyrus-debug program.bf
 
 # Debug with specific memory model
-ferrous-cortex-debug program.bf --memory-model unbounded
+gyrus-debug program.bf --memory-model unbounded
 
 # Debug with checked cells
-ferrous-cortex-debug program.bf --cell-model checked
+gyrus-debug program.bf --cell-model checked
 
 # Help
-ferrous-cortex-debug --help
+gyrus-debug --help
 ```
 
 ### Tutorial
 
 ```bash
 # Start tutorial from beginning
-ferrous-cortex-tutorial
+gyrus-tutorial
 
 # Start at specific lesson
-ferrous-cortex-tutorial --lesson 5
+gyrus-tutorial --lesson 5
 
 # List all lessons
-ferrous-cortex-tutorial --list
+gyrus-tutorial --list
 
 # Tutorial with custom memory size (for advanced lessons)
-ferrous-cortex-tutorial --memory-size 100
+gyrus-tutorial --memory-size 100
 
 # Help
-ferrous-cortex-tutorial --help
+gyrus-tutorial --help
 ```
 
 ## Documentation Needs
@@ -1311,17 +1311,17 @@ The TUI system with separate debugger and tutorial will:
 
 **Three-Crate Architecture:**
 
-1. **ferrous-cortex-tui** (library)
+1. **gyrus-tui** (library)
    - Shared panels, widgets, theme
    - Source view, memory view, output
    - Reusable across tools
 
-2. **ferrous-cortex-debug** (binary)
+2. **gyrus-debug** (binary)
    - Professional debugging tool
    - For BF developers
    - ~5MB binary
 
-3. **ferrous-cortex-tutorial** (binary)
+3. **gyrus-tutorial** (binary)
    - Interactive BF learning
    - For students and beginners
    - ~3MB binary
@@ -1340,4 +1340,4 @@ The TUI system with separate debugger and tutorial will:
 - Code reuse via shared library
 - Professional UX with consistent design
 
-This positions FerrousCortex as the **most comprehensive BrainFuck development environment** available, with both professional tools and educational resources! 🎯
+This positions gyrus as the **most comprehensive BrainFuck development environment** available, with both professional tools and educational resources! 🎯

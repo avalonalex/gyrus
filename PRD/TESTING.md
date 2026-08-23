@@ -55,7 +55,7 @@ Testing infrastructure has been significantly improved with **136 total tests** 
 
 **Status**: COMPLETE
 
-**Location**: `crates/ferrous-cortex/src/test_utils.rs` (12 tests)
+**Location**: `crates/gyrus/src/test_utils.rs` (12 tests)
 
 **Features**:
 - `run_bf(source, input)` - Simple test helper
@@ -604,4 +604,4 @@ The testing infrastructure is **production-ready** with:
 - **D.B. Cristofani's BF Programs**: http://www.hevanet.com/cristofd/brainfuck/
 - **Fibonacci Algorithm**: `programs/advanced/fibonacci_README.md`
 - **Test Manifest**: `programs/test_manifest.toml`
-- **Test Utilities**: `crates/ferrous-cortex/src/test_utils.rs`
+- **Test Utilities**: `crates/gyrus/src/test_utils.rs`

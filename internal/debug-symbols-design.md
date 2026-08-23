@@ -558,7 +558,7 @@ The summary shows compression ratio (instructions / source bytes):
 
 ### Implementation
 
-**Location**: `crates/ferrous-cortex-cli/src/main.rs`
+**Location**: `crates/gyrus-cli/src/main.rs`
 
 **Key functions:**
 - `display_debug_symbols()`: Formats and prints symbol table
@@ -603,7 +603,7 @@ Call stack (nested loops):
 
 **Example output:**
 ```bash
-$ ferrous-cortex --trace program.bf
+$ gyrus --trace program.bf
 [trace] line 1, col 1: + (cell[0]: 0 → 1)
 [trace] line 1, col 2: + (cell[0]: 1 → 2)
 [trace] line 1, col 3: + (cell[0]: 2 → 3)
@@ -703,7 +703,7 @@ Index   Instruction   Line   Column
 
 - **PRD**: `PRD/debug-symbols-and-runtime-diagnostics.md` - Full vision and requirements
 - **CLAUDE.md**: User-facing documentation about debug symbols
-- **Examples**: `crates/ferrous-cortex/examples/debug_info_inspector.rs`
+- **Examples**: `crates/gyrus/examples/debug_info_inspector.rs`
 
 ---
 

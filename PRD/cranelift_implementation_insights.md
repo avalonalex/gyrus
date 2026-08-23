@@ -8,7 +8,7 @@ Analysis of Rodrigo Duarte's excellent [BrainFuck compiler series](https://rodri
 
 ## Their Journey (Matches Our Roadmap!)
 
-| Part | Implementation | Performance | Status in FerrousCortex |
+| Part | Implementation | Performance | Status in gyrus |
 |------|---------------|-------------|------------------------|
 | 1 | Optimized Interpreter | ~7× speedup | ✅ Done (13× speedup) |
 | 2 | Hand-written x86-64 JIT | - | ⏭️ Skipping (too platform-specific) |
@@ -221,15 +221,15 @@ bf-compiler/
 
 **Our Structure (Planned):**
 ```
-FerrousCortex/
-├── ferrous-cortex/           # Core library (existing)
+gyrus/
+├── gyrus/           # Core library (existing)
 │   ├── optimizer.rs          # OptimizedInstruction IR ✅
 │   └── ...
-├── ferrous-cortex-codegen/   # NEW: IR → Cranelift translation
+├── gyrus-codegen/   # NEW: IR → Cranelift translation
 │   ├── translator.rs         # OptimizedInstruction → Cranelift IR
 │   ├── runtime.rs            # I/O functions, memory helpers
 │   └── patterns.rs           # Optimized pattern compilation
-└── ferrous-cortex-jit/       # NEW: JIT runtime
+└── gyrus-jit/       # NEW: JIT runtime
     ├── compiler.rs           # JIT compilation pipeline
     ├── executor.rs           # Execute compiled code
     └── main.rs               # CLI
@@ -487,12 +487,12 @@ This enables:
 
 **Goal:** Compile and execute `+++.` (add 3 and print)
 
-- [ ] Create `ferrous-cortex-codegen` crate
+- [ ] Create `gyrus-codegen` crate
   - [ ] Add cranelift dependencies
   - [ ] Create `Translator` struct
   - [ ] Implement function signature creation
   - [ ] Implement entry block setup
-- [ ] Create `ferrous-cortex-jit` crate
+- [ ] Create `gyrus-jit` crate
   - [ ] Add cranelift-jit dependency
   - [ ] Create `JitCompiler` struct
   - [ ] Set up JIT module
@@ -563,8 +563,8 @@ This enables:
 
 ### Code Size (Estimated)
 
-- `ferrous-cortex-codegen`: ~800 lines (translator + runtime)
-- `ferrous-cortex-jit`: ~400 lines (compiler + executor + CLI)
+- `gyrus-codegen`: ~800 lines (translator + runtime)
+- `gyrus-jit`: ~400 lines (compiler + executor + CLI)
 - **Total:** ~1200 lines for complete JIT implementation
 
 ### Dependencies

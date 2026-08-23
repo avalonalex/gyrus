@@ -127,7 +127,7 @@ Add(3, SourceRange { start: 0, end: 3 })  // Maps to original instructions 0-2
 
 ### 7. CLI Integration
 **Tasks**:
-- Add `--optimize` flag to `ferrous-cortex-cli`
+- Add `--optimize` flag to `gyrus-cli`
 - Parse → optimize → interpret_optimized
 - Preserve error messages with SourceRange
 - Add `--show-optimized` to display IR (debug)
@@ -141,16 +141,16 @@ Add(3, SourceRange { start: 0, end: 3 })  // Maps to original instructions 0-2
 ## 📂 Files Modified/Created
 
 ### New Files
-- `crates/ferrous-cortex/src/optimizer.rs` (542 lines) - enhanced with MultiplyAdd
-- `crates/ferrous-cortex/examples/optimizer.rs` (125 lines) - added multiply examples
+- `crates/gyrus/src/optimizer.rs` (542 lines) - enhanced with MultiplyAdd
+- `crates/gyrus/examples/optimizer.rs` (125 lines) - added multiply examples
 - `internal/benchmark_baseline.md`
 - `internal/optimizer_design.md`
 - `internal/optimization_progress.md` (this file)
 - `internal/nanopass_enhancements.md` - documentation of enhancements
 
 ### Modified Files
-- `crates/ferrous-cortex/src/lib.rs` - Added optimizer module and exports
-- `crates/ferrous-cortex/benches/interpreter.rs` - Added hanoi and mandelbrot benchmarks
+- `crates/gyrus/src/lib.rs` - Added optimizer module and exports
+- `crates/gyrus/benches/interpreter.rs` - Added hanoi and mandelbrot benchmarks
 
 ## 🧪 How to Test
 
@@ -161,18 +161,18 @@ cargo run --example optimizer
 
 ### Run optimizer tests:
 ```bash
-cargo test -p ferrous-cortex optimizer::
+cargo test -p gyrus optimizer::
 ```
 
 ### Run benchmarks (when ready):
 ```bash
 # Quick mode (faster)
-cargo bench -p ferrous-cortex --bench interpreter -- --quick hanoi
-cargo bench -p ferrous-cortex --bench interpreter -- --quick mandelbrot
+cargo bench -p gyrus --bench interpreter -- --quick hanoi
+cargo bench -p gyrus --bench interpreter -- --quick mandelbrot
 
 # Full mode (more accurate, takes 5-10 minutes each)
-cargo bench -p ferrous-cortex --bench interpreter -- hanoi
-cargo bench -p ferrous-cortex --bench interpreter -- mandelbrot
+cargo bench -p gyrus --bench interpreter -- hanoi
+cargo bench -p gyrus --bench interpreter -- mandelbrot
 ```
 
 ## 💡 Key Insights

@@ -1,12 +1,12 @@
 # BrainFuck Programs
 
-This directory contains BrainFuck programs for testing and demonstrating FerrousCortex functionality.
+This directory contains BrainFuck programs for testing and demonstrating gyrus functionality.
 
 ## Directory Structure
 
 ### `basic/` - Introductory Programs
 
-Simple programs demonstrating core BrainFuck features and FerrousCortex capabilities.
+Simple programs demonstrating core BrainFuck features and gyrus capabilities.
 
 - **`hello_world.bf`** - Classic "Hello World!" program
 - **`simple.bf`** - Minimal program that prints 'H'
@@ -84,7 +84,7 @@ cargo run -- programs/warnings/mixed_warnings.bf --quiet  # Suppress warnings
 
 ### `tests/` - Feature Testing Programs
 
-Programs designed to test specific FerrousCortex features.
+Programs designed to test specific gyrus features.
 
 - **`test_eof.bf`** - Tests EOF behavior (default: set to zero)
 - **`test_eof_nochange.bf`** - Tests EOF with no-change behavior
@@ -181,4 +181,4 @@ Include comments using `*` for better documentation:
 
 - [Error Handling Documentation](errors/README.md)
 - [Main README](../README.md)
-- [Library Examples](../examples/) - Rust code showing how to use FerrousCortex as a library
+- [Library Examples](../examples/) - Rust code showing how to use gyrus as a library

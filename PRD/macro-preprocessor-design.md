@@ -35,7 +35,7 @@ Macro Source (.bfm) → Macro Preprocessor → Pure BF → Parser → AST → In
 
 ### Crate Structure
 
-**New Crate**: `ferrous-cortex-macro` (`crates/ferrous-cortex-macro/`)
+**New Crate**: `gyrus-macro` (`crates/gyrus-macro/`)
 
 **Purpose**:
 - Library crate for macro preprocessing
@@ -57,31 +57,31 @@ src/
 
 ### Integration Points
 
-**CLI Integration** (`ferrous-cortex-cli`):
+**CLI Integration** (`gyrus-cli`):
 ```bash
 # Execute macro source directly
-ferrous-cortex program.bfm
+gyrus program.bfm
 
 # Expand macros and save to .bf
-ferrous-cortex program.bfm --expand -o program.bf
+gyrus program.bfm --expand -o program.bf
 
 # Show expansion only (no execution)
-ferrous-cortex program.bfm --expand
+gyrus program.bfm --expand
 ```
 
-**Tool Integration** (`ferrous-cortex-tool`):
+**Tool Integration** (`gyrus-tool`):
 ```bash
 # Expand macros
-ferrous-cortex-tool expand program.bfm
+gyrus-tool expand program.bfm
 
 # Validate macro syntax
-ferrous-cortex-tool check program.bfm
+gyrus-tool check program.bfm
 
 # Debug macro expansion
-ferrous-cortex-tool macro-debug program.bfm --step
+gyrus-tool macro-debug program.bfm --step
 
 # Generate source map
-ferrous-cortex-tool source-map program.bfm --output map.json
+gyrus-tool source-map program.bfm --output map.json
 ```
 
 ## Macro Language Design
@@ -459,7 +459,7 @@ Available symbols: counter, temp
 ### Phase 1: Foundation (Week 1-2)
 
 **Deliverables**:
-- ✅ Create `ferrous-cortex-macro` crate
+- ✅ Create `gyrus-macro` crate
 - ✅ Implement lexer for macro syntax
 - ✅ Basic symbol table
 - ✅ `@define` directive
@@ -549,11 +549,11 @@ Expands and executes correctly
 ### Phase 6: CLI Integration (Week 11-12)
 
 **Deliverables**:
-- ✅ `ferrous-cortex` accepts `.bfm` files
+- ✅ `gyrus` accepts `.bfm` files
 - ✅ `--expand` flag
-- ✅ `ferrous-cortex-tool expand` command
-- ✅ `ferrous-cortex-tool check` command
-- ✅ `ferrous-cortex-tool macro-debug` command
+- ✅ `gyrus-tool expand` command
+- ✅ `gyrus-tool check` command
+- ✅ `gyrus-tool macro-debug` command
 - ✅ Documentation and examples
 
 **Success Criteria**:
@@ -585,7 +585,7 @@ Compiles to efficient BF code
 - **Debugging**: Errors reference meaningful source, not BF gibberish
 - **Productivity**: Write complex programs faster
 
-### For FerrousCortex Project
+### For gyrus Project
 - **Differentiation**: First BF toolkit with modern macro system
 - **Ecosystem**: Enable library development (math, string, algorithms)
 - **Education**: Lower barrier to learning BF
@@ -798,15 +798,15 @@ fn test_circular_macro_detection() {
 
 ```bash
 # Test expansion
-ferrous-cortex-tool expand tests/macros/hello.bfm > /tmp/hello.bf
+gyrus-tool expand tests/macros/hello.bfm > /tmp/hello.bf
 diff /tmp/hello.bf tests/macros/hello.expected.bf
 
 # Test execution
-ferrous-cortex tests/macros/fibonacci.bfm > /tmp/output.txt
+gyrus tests/macros/fibonacci.bfm > /tmp/output.txt
 diff /tmp/output.txt tests/macros/fibonacci.expected.txt
 
 # Test error handling
-ferrous-cortex tests/macros/error_undefined.bfm 2>&1 | grep "Undefined symbol"
+gyrus tests/macros/error_undefined.bfm 2>&1 | grep "Undefined symbol"
 ```
 
 ### Test Programs
@@ -820,7 +820,7 @@ Create comprehensive test suite:
 
 ## Dependencies
 
-**New Dependencies** (`ferrous-cortex-macro/Cargo.toml`):
+**New Dependencies** (`gyrus-macro/Cargo.toml`):
 ```toml
 [dependencies]
 # Core dependencies
@@ -992,7 +992,7 @@ clap = { version = "4.5", features = ["derive"] }  # If adding CLI tools
 
 ## Conclusion
 
-A macro preprocessor transforms FerrousCortex from a BrainFuck interpreter into a **complete development toolkit**. By adding high-level abstractions while preserving compatibility with pure BrainFuck, we enable:
+A macro preprocessor transforms gyrus from a BrainFuck interpreter into a **complete development toolkit**. By adding high-level abstractions while preserving compatibility with pure BrainFuck, we enable:
 
 1. **Readable code** - Named variables and meaningful structure
 2. **Maintainable programs** - Easy to modify and extend
@@ -1000,6 +1000,6 @@ A macro preprocessor transforms FerrousCortex from a BrainFuck interpreter into 
 4. **Better debugging** - Source maps connect macros to runtime
 5. **Ecosystem growth** - Foundation for IDE support and tooling
 
-This positions FerrousCortex as the premier environment for serious BrainFuck development, educational use, and algorithmic exploration.
+This positions gyrus as the premier environment for serious BrainFuck development, educational use, and algorithmic exploration.
 
 **Start with Phase 1 (basic macros and constants), validate with users, then expand based on feedback.**

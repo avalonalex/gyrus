@@ -1,6 +1,6 @@
 # Internal Documentation
 
-This directory contains **internal design documentation** for FerrousCortex developers and contributors.
+This directory contains **internal design documentation** for gyrus developers and contributors.
 
 ## Purpose
 

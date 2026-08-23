@@ -27,32 +27,32 @@ Successfully refactored the CLI to make optimization the **default execution mod
 **Before:**
 ```bash
 # Default: Standard interpreter (slow)
-ferrous-cortex program.bf
+gyrus program.bf
 
 # Optimized: Requires flag (opt-in)
-ferrous-cortex program.bf --optimize
+gyrus program.bf --optimize
 
 # Profiling: Separate flag
-ferrous-cortex program.bf --profile
+gyrus program.bf --profile
 ```
 
 **After (Current):**
 ```bash
 # Default: Optimized interpreter (FAST!)
-ferrous-cortex program.bf
+gyrus program.bf
 
 # Debug: Standard interpreter with source tracking
-ferrous-cortex program.bf --debug
+gyrus program.bf --debug
 
 # Trace: Profiling with heatmap
-ferrous-cortex program.bf --trace
+gyrus program.bf --trace
 ```
 
 ## Implementation Details
 
 ### Code Changes
 
-**File: `crates/ferrous-cortex-cli/src/main.rs`**
+**File: `crates/gyrus-cli/src/main.rs`**
 
 1. **Removed flags:**
    - `--optimize` (now default behavior)
@@ -153,7 +153,7 @@ if cli.verbose && !cli.quiet {
 ### Mode 1: Default (Optimized) ✅
 
 ```bash
-$ cargo run --release -p ferrous-cortex-cli -- programs/basic/simple.bf --verbose
+$ cargo run --release -p gyrus-cli -- programs/basic/simple.bf --verbose
 Configuration:
   Execution mode: Optimized (default)
   Memory model: Fixed(30000 bytes)
@@ -181,7 +181,7 @@ Bytes written: 0
 ### Mode 2: Debug Mode ✅
 
 ```bash
-$ cargo run --release -p ferrous-cortex-cli -- programs/basic/simple.bf --debug --verbose
+$ cargo run --release -p gyrus-cli -- programs/basic/simple.bf --debug --verbose
 Configuration:
   Execution mode: Debug (standard + symbols)
   Memory model: Fixed(30000 bytes)
@@ -209,7 +209,7 @@ Program completed at: line 2, column 46 (offset 79)
 ### Mode 3: Trace Mode ✅
 
 ```bash
-$ cargo run --release -p ferrous-cortex-cli -- programs/basic/simple.bf --trace
+$ cargo run --release -p gyrus-cli -- programs/basic/simple.bf --trace
 H
 ================================================================================
 Execution Heatmap
@@ -239,7 +239,7 @@ Loop Profile (by time):
 ### Error Handling ✅
 
 ```bash
-$ echo '>' | cargo run --release -p ferrous-cortex-cli -- /dev/stdin --memory-size 1
+$ echo '>' | cargo run --release -p gyrus-cli -- /dev/stdin --memory-size 1
 Error: Memory pointer out of bounds at instruction 0
 
 Hint: Attempted to access cell 1, but memory size is fixed at 1 cells.
@@ -269,10 +269,10 @@ Hint: Use --debug for source location tracking and better error messages
 **Command:**
 ```bash
 # Baseline (debug mode)
-time cargo run --release -p ferrous-cortex-cli -- programs/advanced/hanoi.bf --debug
+time cargo run --release -p gyrus-cli -- programs/advanced/hanoi.bf --debug
 
 # Optimized (default)
-time cargo run --release -p ferrous-cortex-cli -- programs/advanced/hanoi.bf
+time cargo run --release -p gyrus-cli -- programs/advanced/hanoi.bf
 ```
 
 ### simple.bf (Print 'H')
@@ -294,11 +294,11 @@ time cargo run --release -p ferrous-cortex-cli -- programs/advanced/hanoi.bf
 Example:
 ```bash
 # User's first attempt - SLOW
-$ ferrous-cortex hanoi.bf
+$ gyrus hanoi.bf
 # Takes 60 seconds...
 
 # User has to discover --optimize flag
-$ ferrous-cortex hanoi.bf --optimize
+$ gyrus hanoi.bf --optimize
 # Takes 4.6 seconds!
 ```
 
@@ -310,11 +310,11 @@ $ ferrous-cortex hanoi.bf --optimize
 Example:
 ```bash
 # User's first attempt - FAST!
-$ ferrous-cortex hanoi.bf
+$ gyrus hanoi.bf
 # Takes 4.6 seconds ✓
 
 # When debugging is needed, use explicit flag
-$ ferrous-cortex buggy.bf --debug
+$ gyrus buggy.bf --debug
 # Shows source locations and detailed errors
 ```
 
@@ -323,7 +323,7 @@ $ ferrous-cortex buggy.bf --debug
 ### Help Text
 The CLI help automatically reflects the new flags:
 ```bash
-$ ferrous-cortex --help
+$ gyrus --help
 Options:
       --debug      Enable debug mode: use standard interpreter with source location tracking
       --trace      Enable trace mode: profile execution and show heatmap at end
@@ -339,13 +339,13 @@ Should document the new execution modes:
 Update all examples to show:
 ```bash
 # Fast execution (default)
-ferrous-cortex program.bf
+gyrus program.bf
 
 # Debugging
-ferrous-cortex program.bf --debug --verbose
+gyrus program.bf --debug --verbose
 
 # Profiling
-ferrous-cortex program.bf --trace
+gyrus program.bf --trace
 ```
 
 ## Alignment with Project Goals

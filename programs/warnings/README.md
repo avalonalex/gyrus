@@ -1,6 +1,6 @@
 # Runtime Warnings Examples
 
-This directory contains BrainFuck programs that demonstrate the runtime warning system in FerrousCortex.
+This directory contains BrainFuck programs that demonstrate the runtime warning system in gyrus.
 
 ## What are Runtime Warnings?
 
@@ -23,7 +23,7 @@ All runtime warnings include **syntax-highlighted source code** with:
 Demonstrates memory expansion warnings in unbounded mode.
 
 ```bash
-ferrous-cortex programs/warnings/memory_expansion.bf \
+gyrus programs/warnings/memory_expansion.bf \
   --memory-model unbounded \
   --unbounded-initial 5 \
   --unbounded-max 20 \
@@ -63,7 +63,7 @@ At line 4, column 6:
 Use the `--verbose` flag to see runtime warnings:
 
 ```bash
-ferrous-cortex programs/warnings/memory_expansion.bf \
+gyrus programs/warnings/memory_expansion.bf \
   --memory-model unbounded \
   --unbounded-initial 5 \
   --unbounded-max 20 \
@@ -99,7 +99,7 @@ For strict arithmetic checking during development, use `--cell-model checked` wh
 
 ```bash
 # Checked mode: errors on overflow/underflow instead of wrapping
-ferrous-cortex your_program.bf --cell-model checked
+gyrus your_program.bf --cell-model checked
 ```
 
 ## Historical Note

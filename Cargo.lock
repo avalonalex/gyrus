@@ -272,35 +272,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
-name = "ferrous-cortex"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "proptest",
- "rand",
- "termcolor",
- "thiserror",
-]
-
-[[package]]
-name = "ferrous-cortex-cli"
-version = "0.2.0"
-dependencies = [
- "clap",
- "ferrous-cortex",
-]
-
-[[package]]
-name = "ferrous-cortex-tool"
-version = "0.3.0"
-dependencies = [
- "clap",
- "ferrous-cortex",
- "rand",
- "serde_json",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -316,6 +287,35 @@ dependencies = [
  "libc",
  "r-efi",
  "wasip2",
+]
+
+[[package]]
+name = "gyrus"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "proptest",
+ "rand",
+ "termcolor",
+ "thiserror",
+]
+
+[[package]]
+name = "gyrus-cli"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "gyrus",
+]
+
+[[package]]
+name = "gyrus-tool"
+version = "0.3.0"
+dependencies = [
+ "clap",
+ "gyrus",
+ "rand",
+ "serde_json",
 ]
 
 [[package]]

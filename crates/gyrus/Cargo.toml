@@ -1,0 +1,32 @@
+[package]
+name = "gyrus"
+version.workspace = true
+edition.workspace = true
+description = "A production-grade BrainFuck interpreter and debugger with rich error messages, syntax highlighting, and configurable memory models"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/avalonalex/gyrus"
+documentation = "https://docs.rs/gyrus"
+readme = "../../README.md"
+keywords = ["brainfuck", "interpreter", "debugger", "esoteric"]
+categories = ["development-tools", "parser-implementations"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+thiserror.workspace = true
+termcolor = "1.4"  # Cross-platform terminal colors
+rand = "0.9.2"  # Random program generation for fuzzing/testing
+
+[dev-dependencies]
+proptest = "1.5"  # Property-based testing
+criterion = { version = "0.7.0", features = ["html_reports"] }  # Benchmarking
+
+[[bench]]
+name = "interpreter"
+harness = false
+
+[[bench]]
+name = "parser"
+harness = false

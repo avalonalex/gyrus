@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-FerrousCortex is an industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust. The project uses Rust edition 2024.
+gyrus is an industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust. The project uses Rust edition 2024.
 
 **Project Structure**: Cargo workspace with multiple crates
 
-- **ferrous-cortex** (`crates/ferrous-cortex/`): Core library crate
-- **ferrous-cortex-cli** (`crates/ferrous-cortex-cli/`): CLI binary crate
+- **gyrus** (`crates/gyrus/`): Core library crate
+- **gyrus-cli** (`crates/gyrus-cli/`): CLI binary crate
 - Future: debugger, REPL, JIT compiler as separate crates
 
 ## Documentation Organization
@@ -28,7 +28,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 **Core Modules:**
 
-1. **parser** (`crates/ferrous-cortex/src/parser.rs` - 431 lines + 22 tests)
+1. **parser** (`crates/gyrus/src/parser.rs` - 431 lines + 22 tests)
    - BrainFuck source → AST (Abstract Syntax Tree)
    - Recursive descent parser that converts source text into `Vec<Instruction>`
    - **Location tracking**: Maintains line, column, and offset for every position
@@ -41,7 +41,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
    - **Multiple error reporting**: Shows all bracket errors in a single pass
    - Public API: `parse(source: &str) -> Result<Vec<Instruction>, BfError>`
 
-2. **interpreter** (`crates/ferrous-cortex/src/interpreter.rs` - 484 lines + 20 tests)
+2. **interpreter** (`crates/gyrus/src/interpreter.rs` - 484 lines + 20 tests)
    - AST → Execution with safety limits and statistics
    - Tree-walking interpreter with configurable memory
    - **Multiple memory models**:
@@ -58,12 +58,12 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
    - Direct I/O to stdin/stdout
    - Public API: `interpret()`, `interpret_with_config()`
 
-3. **validator** (`crates/ferrous-cortex/src/validator.rs` - 145 lines + 5 tests)
+3. **validator** (`crates/gyrus/src/validator.rs` - 145 lines + 5 tests)
    - AST → Warnings for suspicious patterns
    - Detects: empty loops, infinite loops, extreme nesting, inefficient patterns
    - Public API: `validate(instructions: &[Instruction]) -> Vec<BfWarning>`
 
-4. **minify** (`crates/ferrous-cortex/src/minify.rs` - 75 lines + 5 tests)
+4. **minify** (`crates/gyrus/src/minify.rs` - 75 lines + 5 tests)
    - AST → Minimal BrainFuck source (removes comments)
    - Public API: `minify(instructions: &[Instruction]) -> String`
 
@@ -82,7 +82,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 - **stats** (`stats.rs`): Execution statistics `ExecutionStats`
 - **lib** (`lib.rs` - 21 lines): Pure module interface with re-exports
 
-**CLI** (`crates/ferrous-cortex-cli/src/main.rs`)
+**CLI** (`crates/gyrus-cli/src/main.rs`)
    - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
    - Flags: `--verbose`, `--quiet`, `--debug`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
@@ -108,7 +108,7 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 
 ## Memory and Cell Models: Orthogonal Configuration
 
-FerrousCortex separates two independent concerns for maximum flexibility:
+gyrus separates two independent concerns for maximum flexibility:
 
 1. **MemoryModel**: Controls pointer movement (`>`, `<` instructions)
 2. **CellModel**: Controls cell arithmetic (`+`, `-` instructions)
@@ -261,8 +261,8 @@ ExecutionConfig::builder()
 
 This is a Cargo workspace with the following crates:
 
-- **`ferrous-cortex`** (library): Core BrainFuck interpreter, parser, and runtime
-  - Location: `crates/ferrous-cortex/`
+- **`gyrus`** (library): Core BrainFuck interpreter, parser, and runtime
+  - Location: `crates/gyrus/`
   - **Structure**: 10 modules, 1,502 lines total
   - **Tests**: 52 tests co-located with implementation
     - Parser: 22 tests
@@ -286,17 +286,17 @@ This is a Cargo workspace with the following crates:
   - Can be used as a library by other Rust projects
   - Ready for publication to crates.io
 
-- **`ferrous-cortex-cli`** (binary): Command-line interpreter
-  - Location: `crates/ferrous-cortex-cli/`
+- **`gyrus-cli`** (binary): Command-line interpreter
+  - Location: `crates/gyrus-cli/`
   - Focused on **program execution** only
   - Handles runtime configuration (memory models, limits, timeouts)
-  - Binary name: `ferrous-cortex`
+  - Binary name: `gyrus`
 
-- **`ferrous-cortex-tool`** (binary): Development and analysis tools
-  - Location: `crates/ferrous-cortex-tool/`
+- **`gyrus-tool`** (binary): Development and analysis tools
+  - Location: `crates/gyrus-tool/`
   - Focused on **development workflows**
   - Subcommand-based CLI (minify, validate, debug-info)
-  - Binary name: `ferrous-cortex-tool`
+  - Binary name: `gyrus-tool`
 
 **Benefits of workspace structure**:
 - ✅ Clear separation between library, execution CLI, and development tools
@@ -315,18 +315,18 @@ cargo build                           # Build entire workspace
 cargo build --release                 # Optimized build
 
 # Run interpreter
-cargo run -p ferrous-cortex-cli -- programs/basic/hello_world.bf
+cargo run -p gyrus-cli -- programs/basic/hello_world.bf
 
 # Run development tools
-cargo run -p ferrous-cortex-tool -- minify programs/basic/hello_world.bf
-cargo run -p ferrous-cortex-tool -- validate programs/tests/warnings_test.bf
-cargo run -p ferrous-cortex-tool -- debug-info programs/basic/simple.bf
-cargo run -p ferrous-cortex-tool -- view programs/basic/simple.bf --line-numbers
+cargo run -p gyrus-tool -- minify programs/basic/hello_world.bf
+cargo run -p gyrus-tool -- validate programs/tests/warnings_test.bf
+cargo run -p gyrus-tool -- debug-info programs/basic/simple.bf
+cargo run -p gyrus-tool -- view programs/basic/simple.bf --line-numbers
 
 # Build specific crate
-cargo build -p ferrous-cortex         # Build library only
-cargo build -p ferrous-cortex-cli     # Build interpreter only
-cargo build -p ferrous-cortex-tool    # Build tool only
+cargo build -p gyrus         # Build library only
+cargo build -p gyrus-cli     # Build interpreter only
+cargo build -p gyrus-tool    # Build tool only
 ```
 
 ### Testing
@@ -354,7 +354,7 @@ Example BrainFuck programs are in `programs/`:
 
 ## Library Usage Examples
 
-Rust examples demonstrating library usage are in `crates/ferrous-cortex/examples/`:
+Rust examples demonstrating library usage are in `crates/gyrus/examples/`:
 - `basic_usage.rs` - Core parsing, execution, error handling
 - `custom_io.rs` - Implementing custom I/O traits
 - `memory_models.rs` - Different memory model configurations

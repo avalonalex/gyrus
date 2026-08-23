@@ -1,4 +1,4 @@
-# FerrousCortex
+# gyrus
 
 An industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust.
 
@@ -22,7 +22,7 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
   - Maximum step count to prevent infinite loops
   - Execution timeout in milliseconds
   - Customizable memory size
-- **Development tools** (`ferrous-cortex-tool`)
+- **Development tools** (`gyrus-tool`)
   - Program validation with static analysis
   - Code minification (95%+ size reduction)
   - Debug symbol inspection with JSON/CSV/table output
@@ -50,26 +50,26 @@ An industry-strength BrainFuck interpreter/compiler and visual debugger written 
 
 ```bash
 git clone <repository-url>
-cd FerrousCortex
+cd gyrus
 cargo build --release
 ```
 
-The compiled binary will be available at `target/release/ferrous-cortex`.
+The compiled binary will be available at `target/release/gyrus`.
 
 ## Usage
 
-FerrousCortex provides two command-line tools:
+gyrus provides two command-line tools:
 
-1. **`ferrous-cortex`** - BrainFuck interpreter for executing programs
-2. **`ferrous-cortex-tool`** - Development tools for analyzing and processing BF code
+1. **`gyrus`** - BrainFuck interpreter for executing programs
+2. **`gyrus-tool`** - Development tools for analyzing and processing BF code
 
 ### Running a BrainFuck Program
 
 ```bash
-cargo run -p ferrous-cortex-cli -- <path-to-bf-file>
+cargo run -p gyrus-cli -- <path-to-bf-file>
 
 # Or using the compiled binary
-./target/release/ferrous-cortex <path-to-bf-file>
+./target/release/gyrus <path-to-bf-file>
 ```
 
 ### Examples
@@ -95,20 +95,20 @@ See the `programs/errors/` directory for comprehensive error handling demonstrat
 
 ```bash
 # Parse error with detailed context
-cargo run -p ferrous-cortex-cli -- programs/errors/unmatched_bracket.bf
+cargo run -p gyrus-cli -- programs/errors/unmatched_bracket.bf
 
 # Memory bounds error
-cargo run -p ferrous-cortex-cli -- programs/errors/memory_overflow.bf --memory-size 100
+cargo run -p gyrus-cli -- programs/errors/memory_overflow.bf --memory-size 100
 
 # Infinite loop with step limit
-cargo run -p ferrous-cortex-cli -- programs/errors/infinite_loop.bf --max-steps 10000
+cargo run -p gyrus-cli -- programs/errors/infinite_loop.bf --max-steps 10000
 ```
 
 See [`programs/errors/README.md`](programs/errors/README.md) for detailed error examples documentation.
 
-#### Using FerrousCortex as a Library
+#### Using gyrus as a Library
 
-The `crates/ferrous-cortex/examples/` directory contains Rust examples showing library usage:
+The `crates/gyrus/examples/` directory contains Rust examples showing library usage:
 
 ```bash
 # Basic usage - parsing, execution, error handling
@@ -127,32 +127,32 @@ cargo run --example validation
 cargo run --example minify
 ```
 
-See [`crates/ferrous-cortex/examples/README.md`](crates/ferrous-cortex/examples/README.md) for detailed library examples.
+See [`crates/gyrus/examples/README.md`](crates/gyrus/examples/README.md) for detailed library examples.
 
 ### Command-Line Options
 
-#### ferrous-cortex (Interpreter)
+#### gyrus (Interpreter)
 
 Execute BrainFuck programs with configurable runtime options:
 
 ```bash
 # Show all available options
-ferrous-cortex --help
+gyrus --help
 
 # Run with verbose output
-ferrous-cortex program.bf --verbose
+gyrus program.bf --verbose
 
 # Limit execution to 10000 steps
-ferrous-cortex program.bf --max-steps 10000
+gyrus program.bf --max-steps 10000
 
 # Set execution timeout to 5 seconds
-ferrous-cortex program.bf --timeout 5000
+gyrus program.bf --timeout 5000
 
 # Use custom memory size (1MB)
-ferrous-cortex program.bf --memory-size 1000000
+gyrus program.bf --memory-size 1000000
 
 # Combine multiple options
-ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
+gyrus program.bf --verbose --max-steps 100000 --timeout 10000
 ```
 
 **Available Options:**
@@ -171,37 +171,37 @@ ferrous-cortex program.bf --verbose --max-steps 100000 --timeout 10000
 | `--unbounded-max <BYTES>` | Maximum size for unbounded memory model | 1000000 |
 | `--eof-behavior <BEHAVIOR>` | EOF behavior: zero, neg-one, no-change, or error | zero |
 
-#### ferrous-cortex-tool (Development Tools)
+#### gyrus-tool (Development Tools)
 
 Analyze, validate, and process BrainFuck programs:
 
 ```bash
 # Show all available commands
-ferrous-cortex-tool --help
+gyrus-tool --help
 
 # Minify a program (strip comments)
-ferrous-cortex-tool minify program.bf
+gyrus-tool minify program.bf
 
 # Save minified output to file
-ferrous-cortex-tool minify program.bf -o program.min.bf --verbose
+gyrus-tool minify program.bf -o program.min.bf --verbose
 
 # Validate a program and show warnings
-ferrous-cortex-tool validate program.bf
+gyrus-tool validate program.bf
 
 # Validate in strict mode (exit with error if warnings found)
-ferrous-cortex-tool validate program.bf --strict
+gyrus-tool validate program.bf --strict
 
 # Inspect debug symbols
-ferrous-cortex-tool debug-info program.bf
+gyrus-tool debug-info program.bf
 
 # Output debug info as JSON
-ferrous-cortex-tool debug-info program.bf --format json
+gyrus-tool debug-info program.bf --format json
 
 # View program with syntax highlighting
-ferrous-cortex-tool view program.bf --line-numbers
+gyrus-tool view program.bf --line-numbers
 
 # Plain output (no colors)
-ferrous-cortex-tool view program.bf --plain
+gyrus-tool view program.bf --plain
 ```
 
 **Available Commands:**
@@ -228,7 +228,7 @@ ferrous-cortex-tool view program.bf --plain
 
 ### Comments
 
-FerrousCortex supports two types of comments:
+gyrus supports two types of comments:
 
 1. **Implicit comments**: Any character that isn't one of the 8 BF commands is ignored
 2. **Line comments**: Use `*` to start a line comment - everything after `*` on that line is ignored
@@ -251,7 +251,7 @@ Line comments make it safe to write documentation without accidentally including
 
 ## Error Handling
 
-FerrousCortex provides detailed error messages to help debug BrainFuck programs:
+gyrus provides detailed error messages to help debug BrainFuck programs:
 
 ### Parse Errors
 
@@ -268,7 +268,7 @@ Error: Unmatched '[' at line 3, column 12
 
 #### Multiple Bracket Errors
 
-FerrousCortex detects **all** bracket matching errors in a single pass, saving you time by showing all issues at once:
+gyrus detects **all** bracket matching errors in a single pass, saving you time by showing all issues at once:
 
 ```
 Found 3 bracket matching error(s):
@@ -313,7 +313,7 @@ Runtime errors can include **syntax-highlighted source code** showing exactly wh
 
 ```bash
 # Debug mode: errors show source locations
-ferrous-cortex program.bf --debug
+gyrus program.bf --debug
 ```
 
 ```
@@ -376,22 +376,22 @@ Use `--max-steps` or `--timeout` to prevent runaway programs:
 
 ```bash
 # Prevent infinite loops with step limit
-ferrous-cortex suspicious_program.bf --max-steps 1000000
+gyrus suspicious_program.bf --max-steps 1000000
 
 # Or use a timeout
-ferrous-cortex suspicious_program.bf --timeout 5000
+gyrus suspicious_program.bf --timeout 5000
 ```
 
 ## Memory Models
 
-FerrousCortex supports three different memory models to handle different BrainFuck variants and use cases:
+gyrus supports three different memory models to handle different BrainFuck variants and use cases:
 
 ### Fixed Memory (Default)
 
 Traditional BrainFuck behavior with a fixed-size memory array.
 
 ```bash
-ferrous-cortex program.bf --memory-model fixed --memory-size 30000
+gyrus program.bf --memory-model fixed --memory-size 30000
 ```
 
 **Characteristics:**
@@ -405,7 +405,7 @@ ferrous-cortex program.bf --memory-model fixed --memory-size 30000
 Memory grows dynamically as needed, up to a maximum limit.
 
 ```bash
-ferrous-cortex program.bf --memory-model unbounded \
+gyrus program.bf --memory-model unbounded \
   --unbounded-initial 1000 \
   --unbounded-max 1000000
 ```
@@ -419,7 +419,7 @@ ferrous-cortex program.bf --memory-model unbounded \
 **Example:**
 ```bash
 # Start with 100 bytes, allow growth up to 10MB
-ferrous-cortex program.bf --memory-model unbounded \
+gyrus program.bf --memory-model unbounded \
   --unbounded-initial 100 \
   --unbounded-max 10000000
 ```
@@ -431,11 +431,11 @@ ferrous-cortex program.bf --memory-model unbounded \
 
 ## Cell Models and Arithmetic Behavior
 
-FerrousCortex provides **configurable cell arithmetic** to support different use cases. Cell arithmetic is completely independent from memory models - you can mix any cell model with any memory model.
+gyrus provides **configurable cell arithmetic** to support different use cases. Cell arithmetic is completely independent from memory models - you can mix any cell model with any memory model.
 
 ### Understanding Memory vs Cell Models
 
-FerrousCortex distinguishes between two orthogonal (independent) configuration axes:
+gyrus distinguishes between two orthogonal (independent) configuration axes:
 
 | Aspect | Controlled By | What It Affects |
 |--------|--------------|-----------------|
@@ -453,7 +453,7 @@ Configure cell arithmetic with the `--cell-model` flag:
 Standard BrainFuck behavior with wrapping arithmetic. This is the **default** and aligns with traditional BrainFuck semantics and future JIT/AOT compilation.
 
 ```bash
-ferrous-cortex program.bf --cell-model wrapping
+gyrus program.bf --cell-model wrapping
 ```
 
 **Characteristics:**
@@ -477,7 +477,7 @@ ferrous-cortex program.bf --cell-model wrapping
 Strict overflow detection mode that raises errors on overflow/underflow. Use this to catch bugs where your program unexpectedly reaches cell boundaries.
 
 ```bash
-ferrous-cortex program.bf --cell-model checked
+gyrus program.bf --cell-model checked
 ```
 
 **Characteristics:**
@@ -501,13 +501,13 @@ Since CellModel and MemoryModel are orthogonal, all combinations are valid:
 
 ```bash
 # Fixed memory + Wrapping cells (traditional BrainFuck, default)
-ferrous-cortex program.bf --memory-model fixed --cell-model wrapping
+gyrus program.bf --memory-model fixed --cell-model wrapping
 
 # Fixed memory + Checked cells (strict debugging)
-ferrous-cortex program.bf --memory-model fixed --cell-model checked
+gyrus program.bf --memory-model fixed --cell-model checked
 
 # Unbounded memory + Wrapping cells (dynamic memory, standard arithmetic)
-ferrous-cortex program.bf --memory-model unbounded --cell-model wrapping
+gyrus program.bf --memory-model unbounded --cell-model wrapping
 ```
 
 **Example combinations:**
@@ -539,10 +539,10 @@ The validator provides different warnings based on your cell model:
 
 ```bash
 # Validate with wrapping model
-ferrous-cortex program.bf --validate --cell-model wrapping
+gyrus program.bf --validate --cell-model wrapping
 
 # Validate with checked model
-ferrous-cortex program.bf --validate --cell-model checked
+gyrus program.bf --validate --cell-model checked
 ```
 
 **Example - `[+]` pattern:**
@@ -564,7 +564,7 @@ Cell will reach 255 and then increment will panic.
 
 **Production execution with wrapping:**
 ```bash
-ferrous-cortex programs/basic/hello_world.bf --verbose
+gyrus programs/basic/hello_world.bf --verbose
 # Configuration:
 #   Memory model: Fixed(30000 bytes)
 #   Cell model: U8Wrapping
@@ -572,22 +572,22 @@ ferrous-cortex programs/basic/hello_world.bf --verbose
 
 **Debug mode with overflow checking:**
 ```bash
-ferrous-cortex my_program.bf --cell-model checked
+gyrus my_program.bf --cell-model checked
 # Will catch runtime overflow/underflow errors during execution
 ```
 
 **Testing with different models:**
 ```bash
 # Test with standard wrapping (production)
-ferrous-cortex program.bf --cell-model wrapping
+gyrus program.bf --cell-model wrapping
 
 # Test with checked mode to find overflow bugs
-ferrous-cortex program.bf --cell-model checked
+gyrus program.bf --cell-model checked
 ```
 
 ## EOF Handling
 
-FerrousCortex provides configurable end-of-file (EOF) handling for the input command (`,`). Different BrainFuck implementations handle EOF differently, so you can choose the behavior that matches your needs.
+gyrus provides configurable end-of-file (EOF) handling for the input command (`,`). Different BrainFuck implementations handle EOF differently, so you can choose the behavior that matches your needs.
 
 ### EOF Behaviors
 
@@ -598,7 +598,7 @@ Configure EOF handling with the `--eof-behavior` flag:
 Sets the current cell to 0 when EOF is reached.
 
 ```bash
-ferrous-cortex program.bf --eof-behavior zero
+gyrus program.bf --eof-behavior zero
 ```
 
 This is the most common behavior and matches many BrainFuck implementations. It's useful for programs that need to detect end of input by checking for a zero value.
@@ -617,7 +617,7 @@ This is the most common behavior and matches many BrainFuck implementations. It'
 Sets the current cell to 255 (-1 as unsigned byte) when EOF is reached.
 
 ```bash
-ferrous-cortex program.bf --eof-behavior neg-one
+gyrus program.bf --eof-behavior neg-one
 # Alternatives: negone, -1, 255
 ```
 
@@ -628,7 +628,7 @@ Some BrainFuck programs use 255 (which represents -1 in two's complement) as an 
 Leaves the cell value unchanged when EOF is reached.
 
 ```bash
-ferrous-cortex program.bf --eof-behavior no-change
+gyrus program.bf --eof-behavior no-change
 # Alternatives: nochange, unchanged
 ```
 
@@ -639,7 +639,7 @@ This behavior is useful when you want to preserve the previous cell value or hav
 Returns an error and stops execution when EOF is reached.
 
 ```bash
-ferrous-cortex program.bf --eof-behavior error
+gyrus program.bf --eof-behavior error
 ```
 
 This is the strictest mode - use it when your program requires valid input and EOF should be treated as an exceptional condition.
@@ -658,10 +658,10 @@ Error: End of input reached
 
 ## Execution Statistics
 
-FerrousCortex can track and display detailed execution statistics using the `--verbose` flag:
+gyrus can track and display detailed execution statistics using the `--verbose` flag:
 
 ```bash
-ferrous-cortex program.bf --verbose
+gyrus program.bf --verbose
 ```
 
 Verbose mode shows both the configuration and execution statistics.
@@ -677,7 +677,7 @@ Verbose mode shows both the configuration and execution statistics.
 
 **Example Output:**
 ```bash
-$ ferrous-cortex programs/basic/hello_world.bf --verbose
+$ gyrus programs/basic/hello_world.bf --verbose
 Configuration:
   Memory model: Fixed(30000 bytes)
   Max steps: unlimited
@@ -703,11 +703,11 @@ Bytes written: 13
 
 ## Program Validation
 
-FerrousCortex can validate your BrainFuck programs and warn about potential issues:
+gyrus can validate your BrainFuck programs and warn about potential issues:
 
 ```bash
 # Validate only (does not execute)
-ferrous-cortex program.bf --validate
+gyrus program.bf --validate
 ```
 
 ### What Validation Does
@@ -736,13 +736,13 @@ The validator checks for:
 
 ```bash
 # Development: Check for issues without running
-ferrous-cortex program.bf --validate
+gyrus program.bf --validate
 
 # CI/CD: Validate, then run if clean
-ferrous-cortex program.bf --validate && ferrous-cortex program.bf
+gyrus program.bf --validate && gyrus program.bf
 
 # CI/CD with verbose output
-ferrous-cortex program.bf --validate && ferrous-cortex program.bf --verbose
+gyrus program.bf --validate && gyrus program.bf --verbose
 ```
 
 ## Code Minification
@@ -751,13 +751,13 @@ Strip all comments and whitespace to create compact BrainFuck programs:
 
 ```bash
 # Output to stdout
-ferrous-cortex program.bf --minify
+gyrus program.bf --minify
 
 # Save to file
-ferrous-cortex program.bf --minify -o program.min.bf
+gyrus program.bf --minify -o program.min.bf
 
 # With verbose stats
-ferrous-cortex program.bf --minify -o program.min.bf --verbose
+gyrus program.bf --minify -o program.min.bf --verbose
 ```
 
 **Example:**
@@ -773,10 +773,10 @@ $ cat programs/basic/line_comments.bf
 ]           * Result: Cell 1 = 70
 >++.        * Add 2, print 'H'
 
-$ ferrous-cortex programs/basic/line_comments.bf --minify
+$ gyrus programs/basic/line_comments.bf --minify
 ++++++++++[>+++++++<-]>++.
 
-$ ferrous-cortex programs/basic/line_comments.bf --minify --verbose -o min.bf
+$ gyrus programs/basic/line_comments.bf --minify --verbose -o min.bf
 Minified 514 bytes to 26 bytes (saved to min.bf)
 ```
 
@@ -791,7 +791,7 @@ The minified code is functionally identical to the original.
 
 ### Running Tests
 
-FerrousCortex has a comprehensive testing infrastructure with **137 tests** including unit tests, property-based tests, and benchmarks.
+gyrus has a comprehensive testing infrastructure with **137 tests** including unit tests, property-based tests, and benchmarks.
 
 #### Run All Tests
 
@@ -856,7 +856,7 @@ open target/criterion/report/index.html
 #### Test Organization
 
 ```
-crates/ferrous-cortex/
+crates/gyrus/
 ├── src/
 │   ├── test_utils.rs        # Test helper functions
 │   ├── parser.rs            # Unit tests + property tests
@@ -882,9 +882,9 @@ cargo run -- path/to/your/program.bf
 ## Project Structure
 
 ```
-FerrousCortex/
+gyrus/
 ├── crates/
-│   ├── ferrous-cortex/      # Core library crate
+│   ├── gyrus/      # Core library crate
 │   │   ├── Cargo.toml
 │   │   ├── src/
 │   │   │   ├── lib.rs           # Module interface (21 lines)
@@ -910,7 +910,7 @@ FerrousCortex/
 │   │       ├── memory_models.rs # Memory model configuration
 │   │       ├── validation.rs    # Program validation
 │   │       └── minify.rs        # Code minification
-│   └── ferrous-cortex-cli/  # CLI binary crate
+│   └── gyrus-cli/  # CLI binary crate
 │       ├── Cargo.toml
 │       └── src/
 │           └── main.rs      # CLI interface and entry point
