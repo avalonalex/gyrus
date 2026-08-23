@@ -187,4 +187,4 @@ Include comments using `*` for better documentation:
 
 - [Error Handling Documentation](errors/README.md)
 - [Main README](../README.md)
-- [Library Examples](../examples/) - Rust code showing how to use gyrus as a library
+- [Library Examples](../crates/gyrus/examples/) - Rust code showing how to use gyrus as a library

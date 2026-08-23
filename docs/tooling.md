@@ -1,10 +1,107 @@
-# Debug Symbol Tools
+# Development Tools (`gyrus-tool`)
 
-## Quick Reference
+`gyrus` runs programs. `gyrus-tool` is everything else: validation,
+minification, syntax highlighting, and inspection of what the parser and
+optimizer did.
+
+Back to the [README](../README.md).
+
+## Program Validation
+
+gyrus can validate your BrainFuck programs and warn about potential issues:
+
+```bash
+# Validate only (does not execute)
+gyrus-tool validate program.bf
+```
+
+### What Validation Does
+
+**`gyrus-tool validate` (Lint Mode)**
+- Parses and analyzes the code for issues
+- Shows all warnings (or "No warnings found")
+- Never executes the program
+- Useful for checking code quality without running
+
+**Validation Target: U8 Wrapping**
+- Validation ALWAYS assumes u8 wrapping (production/JIT target)
+- Warns about inefficient patterns for standard BrainFuck
+- Independent of runtime cell model (`--cell-model` is for runtime only)
+
+### Warning Types
+
+The validator checks for:
+
+- **Empty loops**: `[]` - Does nothing and can be removed
+- **Inefficient increment loops**: `[+]` or `[++]` - Loop many times (~256, ~128 iterations) to reach zero via wrapping
+- **Extreme nesting**: Loops nested more than 10 levels deep (performance impact)
+- **Inefficient patterns**: Multiple operations that could be optimized (e.g., `[--]` instead of `[-]`)
+
+### Example Workflows
+
+```bash
+# Development: Check for issues without running
+gyrus-tool validate program.bf
+
+# CI/CD: Validate, then run if clean
+gyrus-tool validate program.bf && gyrus program.bf
+
+# CI/CD with verbose output
+gyrus-tool validate program.bf && gyrus program.bf --verbose
+```
+
+## Code Minification
+
+Strip all comments and whitespace to create compact BrainFuck programs:
+
+```bash
+# Output to stdout
+gyrus-tool minify program.bf
+
+# Save to file
+gyrus-tool minify program.bf -o program.min.bf
+
+# With verbose stats
+gyrus-tool minify program.bf -o program.min.bf --verbose
+```
+
+**Example:**
+```bash
+$ cat programs/basic/line_comments.bf
+* Line Comment Demo
+* Everything after * is completely ignored!
+
+++++++++++  * Cell 0 = 10
+[           * Loop 10 times
+  >+++++++  * Cell 1 += 7
+  <-        * Cell 0 -= 1
+]           * Result: Cell 1 = 70
+>++.        * Add 2, print 'H'
+
+$ gyrus-tool minify programs/basic/line_comments.bf
+++++++++++[>+++++++<-]>++.
+
+$ gyrus-tool minify programs/basic/line_comments.bf --verbose -o min.bf
+Minified 514 bytes to 26 bytes (94.9% reduction)
+```
+
+Minification removes:
+- All line comments (after `*`)
+- All implicit comments (non-BF characters)
+- All whitespace and formatting
+
+How much that saves depends entirely on how much of the file is prose:
+94.9% for a documented example like `line_comments.bf`, but 49.6% for a dense
+program like `third-party/advanced/life.bf`, which is nearly all instructions
+already. The minified code is functionally identical to the original.
+
+## Debug Symbol Tools
+
+### Quick Reference
 
 gyrus includes tools for inspecting and debugging BrainFuck programs at the source level.
 
-## Debug Symbol Inspector
+### Debug Symbol Inspector
 
 **Command**: `cargo run -- <program.bf> --inspect-debug`
 
@@ -81,7 +178,7 @@ The step indices follow depth-first search (DFS) order:
 
 When the inner loop repeats, it jumps back to step 8. When the outer loop repeats, it jumps back to step 4.
 
-## Runtime Warnings with Source Context
+### Runtime Warnings with Source Context
 
 Runtime warnings automatically show source context when using debug symbols and the `--verbose` flag:
 
@@ -107,7 +204,7 @@ At line 4, column 5:
 
 **Note**: Cell wrapping (255+1=0, 0-1=255) does not generate warnings as it's standard BrainFuck behavior.
 
-## Use Cases
+### Use Cases
 
 ### 1. Understanding Execution Order
 
@@ -137,7 +234,7 @@ If you suspect parser issues:
 - Verify line/column numbers are correct
 - Ensure offset values are sequential
 
-## Advanced Usage
+### Advanced Usage
 
 ### Combining Flags
 
@@ -167,7 +264,7 @@ cargo run -- program.bf --inspect-debug | grep -c "'['"
 cargo run -- program.bf --inspect-debug > symbols.txt
 ```
 
-## Implementation Details
+### Implementation Details
 
 **Files**:
 - `crates/gyrus/src/debug.rs` - DebugInfo data structure
@@ -179,13 +276,12 @@ cargo run -- program.bf --inspect-debug > symbols.txt
 - Memory overhead: ~24 bytes per instruction (SourceLocation struct)
 - No runtime overhead when not inspecting (tool exits before execution)
 
-## Related Documentation
+### Related Documentation
 
-- `internal/debug-symbols-design.md` - Complete design document with walkthrough
 - `programs/debug/README.md` - Debug example programs
 - `PRD/debug-symbols-and-runtime-diagnostics.md` - Requirements and roadmap
 
-## Future Enhancements
+### Future Enhancements
 
 Coming in future phases:
 - **Loop call stack**: Show nested loop context in warnings

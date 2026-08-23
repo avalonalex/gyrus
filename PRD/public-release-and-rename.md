@@ -234,7 +234,35 @@ principle for anything added later: a claim in the docs that a script can check
 should be checked by a script, because a claim nobody executes is a claim that
 will eventually be false.
 
-**S6 — Doc directory triage.** `internal/` (15 files) and `PRD/` (10 active +
+**S6 — Doc directory triage.** ✅ **Done 2026-08-23, aggressively.** The
+repository carried ~22,800 lines of Markdown against ~13,000 lines of Rust.
+Now ~8,500:
+
+- `internal/` (6,043 lines) — **deleted**. Milestone records
+  (`hook-system-complete.md`), progress logs, and status docs that contradicted
+  the code. Two files earned a place in `docs/` first: the debug-tools usage
+  guide and the optimizer design notes.
+- `PRD/archived/` (6,333 lines) — **deleted**. Completed features are described
+  by the code; the reasoning is in git history.
+- `README.md` — **1,081 lines to 143**. The reference material moved to
+  `docs/`, split by topic; the landing page keeps the pitch, one error message,
+  a quick start, and links.
+- `ARCHITECTURE.md` — moved to `docs/architecture.md`, absorbing the README's
+  project-structure section and the salvaged optimizer design.
+- `PRD/optimization-and-advanced-features.md` (2,544 lines) — **deleted** after
+  extracting the one part unique to it. Its four categories each restated a
+  focused PRD; the hook-integration design is now
+  `PRD/optimizer-hook-integration.md`.
+- `PRD/debug-symbols-and-runtime-diagnostics.md` — **deleted**, shipped.
+- `PRD/TESTING.md` — moved to `docs/testing.md`; it describes what exists, so it
+  is not a PRD.
+
+The new rule, recorded in `PRD/README.md` and `CLAUDE.md`: PRDs describe what
+does not exist yet and are deleted on completion rather than archived. The move
+broke five Markdown links (two already broken beforehand), which is why
+`scripts/check-doc-links.py` now exists.
+
+**S6 (original finding).** `internal/` (15 files) and `PRD/` (10 active +
 11 archived) include session artifacts — `hook-system-complete.md`,
 `phase2-debug-test-results.md`, `cli_refactoring_complete.md`. Per `CLAUDE.md`,
 outdated PRDs should be purged aggressively. Decide per file: keep as design

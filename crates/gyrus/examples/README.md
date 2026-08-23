@@ -767,8 +767,8 @@ Step 5: Increment cell at position 1
 
 ## See Also
 
-- [BrainFuck Programs](../programs/) - Sample .bf programs to run
-- [Main Documentation](../README.md) - Full CLI documentation
+- [BrainFuck Programs](../../../programs/) - Sample .bf programs to run
+- [Main Documentation](../../../README.md) - Full CLI documentation
 - [API Documentation](https://docs.rs/gyrus) - Complete API reference (when published)
 
 ## Contributing
