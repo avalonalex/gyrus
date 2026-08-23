@@ -920,18 +920,20 @@ gyrus/
 │   │   ├── hello_world.bf
 │   │   ├── simple.bf
 │   │   └── line_comments.bf
-│   ├── advanced/            # Complex programs
-│   │   ├── quine.bf
-│   │   └── factor.bf
 │   ├── tests/               # Feature testing programs
 │   │   ├── test_eof.bf
+│   │   ├── deep_nesting.bf
 │   │   └── warnings_test.bf
-│   └── errors/              # Error handling demonstrations
-│       ├── README.md        # Error examples documentation
-│       ├── unmatched_bracket.bf
-│       ├── memory_overflow.bf
-│       ├── infinite_loop.bf
-│       └── validation_warnings.bf
+│   ├── errors/              # Error handling demonstrations
+│   │   ├── README.md        # Error examples documentation
+│   │   ├── unmatched_bracket.bf
+│   │   ├── memory_overflow.bf
+│   │   ├── infinite_loop.bf
+│   │   └── validation_warnings.bf
+│   └── third-party/         # Programs by other authors (NOT MIT)
+│       ├── CREDITS.md       # Per-file attribution and licenses
+│       ├── advanced/        # Complex programs (quine, factor, mandelbrot, ...)
+│       └── utilities/       # Small utilities from Cristofani's collection
 ├── PRD/                     # Product requirement documents
 │   └── TESTING_STATUS.md    # Testing infrastructure status
 ├── ARCHITECTURE.md          # Architecture and design decisions
@@ -995,11 +997,11 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 
 The Rust code in this repository is licensed under the [MIT License](LICENSE).
 
-The BrainFuck programs under `programs/` include well-known works by other
-authors, retained under their original licenses and marked as such in each
-file's header — see [`programs/README.md`](programs/README.md) for attribution.
-They are aggregated here as a test and benchmark corpus; the MIT license above
-covers the interpreter, not those programs.
+The BrainFuck programs under `programs/third-party/` were written by other
+authors and keep their own licenses — including CC BY-SA 4.0 and, in one case,
+the GPL. They are aggregated here as a test and benchmark corpus; the MIT
+license above covers the interpreter, not those programs. Per-file attribution
+is in [`programs/third-party/CREDITS.md`](programs/third-party/CREDITS.md).
 
 ## Contributing
 

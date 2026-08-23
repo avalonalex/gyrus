@@ -337,8 +337,8 @@ For each new optimization:
 2. **Integration tests** - Test with real BrainFuck programs
 3. **Regression tests** - Ensure existing optimizations still work
 4. **Compression ratio benchmarks** - Measure improvement on standard programs:
-   - `programs/advanced/hanoi.bf`
-   - `programs/advanced/pi.bf`
+   - `programs/third-party/advanced/hanoi.bf`
+   - `programs/third-party/advanced/pi.bf`
    - `programs/basic/hello_world.bf`
 
 ---

@@ -81,7 +81,7 @@ fn test_line_comments() {
 #[test]
 fn test_quine() {
     // Quine outputs its own source code
-    let output = run_program("advanced/quine.bf", "", ExecutionConfig::default())
+    let output = run_program("third-party/advanced/quine.bf", "", ExecutionConfig::default())
         .expect("Quine should succeed");
 
     // Quine should output its own source (may need normalization)
@@ -95,7 +95,7 @@ fn test_quine() {
 #[test]
 fn test_factor() {
     let output = run_program(
-        "advanced/factor.bf",
+        "third-party/advanced/factor.bf",
         "12\n",
         ExecutionConfigBuilder::new()
             .with_memory_size(30000)
@@ -117,7 +117,7 @@ fn test_rot13() {
         .unwrap()
         .parent()
         .unwrap();
-    let full_path = base_path.join("programs/advanced/rot13.bf");
+    let full_path = base_path.join("programs/third-party/advanced/rot13.bf");
     let source = fs::read_to_string(&full_path).unwrap();
     let instructions = parse(&source).unwrap();
 
@@ -159,7 +159,7 @@ fn test_fibonacci() {
         .unwrap()
         .parent()
         .unwrap();
-    let full_path = base_path.join("programs/advanced/fibonacci.bf");
+    let full_path = base_path.join("programs/third-party/advanced/fibonacci.bf");
     let source = fs::read_to_string(&full_path).unwrap();
     let instructions = parse(&source).unwrap();
 
@@ -211,7 +211,7 @@ fn test_collatz() {
     // Collatz computes Collatz conjecture sequences (3n+1 problem)
     // For each input number, outputs the sequence until reaching 1
     let output = run_program(
-        "advanced/collatz.bf",
+        "third-party/advanced/collatz.bf",
         "5\n",
         ExecutionConfigBuilder::new()
             .with_memory_size(30000)
@@ -235,7 +235,7 @@ fn test_collatz() {
 #[test]
 fn test_cat() {
     let output = run_program(
-        "utilities/cat.bf",
+        "third-party/utilities/cat.bf",
         "Hello World",
         ExecutionConfig::default(),
     )
@@ -247,7 +247,7 @@ fn test_cat() {
 #[test]
 fn test_reverse() {
     let output = run_program(
-        "utilities/reverse.bf",
+        "third-party/utilities/reverse.bf",
         "hello",
         ExecutionConfigBuilder::new().with_memory_size(1000).build(),
     )
@@ -259,7 +259,7 @@ fn test_reverse() {
 #[test]
 fn test_strip_tabs_lf() {
     let output = run_program(
-        "utilities/strip_tabs_lf.bf",
+        "third-party/utilities/strip_tabs_lf.bf",
         "hello\tworld\n",
         ExecutionConfig::default(),
     )
@@ -270,7 +270,7 @@ fn test_strip_tabs_lf() {
 
 #[test]
 fn test_ascii_unary() {
-    let output = run_program_bytes("utilities/ascii_unary.bf", "AB", ExecutionConfig::default())
+    let output = run_program_bytes("third-party/utilities/ascii_unary.bf", "AB", ExecutionConfig::default())
         .expect("ASCII unary should succeed");
 
     // 'A' = 65, 'B' = 66
@@ -286,7 +286,7 @@ fn test_ascii_unary() {
 
 #[test]
 fn test_clearscreen() {
-    let output = run_program_bytes("utilities/clearscreen.bf", "", ExecutionConfig::default())
+    let output = run_program_bytes("third-party/utilities/clearscreen.bf", "", ExecutionConfig::default())
         .expect("Clear screen should succeed");
 
     // Should output 100 newlines
@@ -296,7 +296,7 @@ fn test_clearscreen() {
 
 #[test]
 fn test_beep() {
-    let output = run_program_bytes("utilities/beep.bf", "", ExecutionConfig::default())
+    let output = run_program_bytes("third-party/utilities/beep.bf", "", ExecutionConfig::default())
         .expect("Beep should succeed");
 
     // Should output ASCII 7 (bell)
@@ -305,7 +305,7 @@ fn test_beep() {
 
 #[test]
 fn test_true() {
-    let output = run_program("utilities/true.bf", "", ExecutionConfig::default())
+    let output = run_program("third-party/utilities/true.bf", "", ExecutionConfig::default())
         .expect("True should succeed");
 
     // Should output nothing (shortest quine!)
@@ -315,7 +315,7 @@ fn test_true() {
 #[test]
 fn test_brainfuck_print() {
     let output = run_program(
-        "utilities/brainfuck_print.bf",
+        "third-party/utilities/brainfuck_print.bf",
         "",
         ExecutionConfig::default(),
     )
@@ -426,7 +426,7 @@ fn test_infinite_loop_with_limit() {
 
 #[test]
 fn test_deep_nesting() {
-    let output = run_program("advanced/deep_nesting.bf", "", ExecutionConfig::default())
+    let output = run_program("tests/deep_nesting.bf", "", ExecutionConfig::default())
         .expect("Deep nesting should succeed");
 
     // Deep nesting program should execute without errors
@@ -498,7 +498,7 @@ fn test_corpus_debug_info_tracking() {
         "basic/simple.bf",          // Very simple: prints 'H'
         "basic/hello_world.bf",     // Classic: prints "Hello World!"
         "basic/line_comments.bf",   // Comment syntax test
-        "advanced/deep_nesting.bf", // Nested loops test
+        "tests/deep_nesting.bf", // Nested loops test
     ];
 
     for program_path in test_programs {

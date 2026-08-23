@@ -49,7 +49,7 @@ tags = ["basic", "comments"]
 
 [[test]]
 name = "quine"
-file = "advanced/quine.bf"
+file = "third-party/advanced/quine.bf"
 input = ""
 # Quine should output its own source code
 # Note: This requires reading the file and comparing
@@ -60,7 +60,7 @@ skip_output_check = true  # Special handling required
 
 [[test]]
 name = "factor"
-file = "advanced/factor.bf"
+file = "third-party/advanced/factor.bf"
 input = "12\n"
 # Factor.bf is complex and may need special handling
 expected_exit = "success"
@@ -152,7 +152,7 @@ config = { max_steps = 1000 }
 
 [[test]]
 name = "deep_nesting"
-file = "advanced/deep_nesting.bf"
+file = "tests/deep_nesting.bf"
 input = ""
 expected_exit = "success"
 expected_warnings = 1  # Extreme nesting warning
@@ -165,7 +165,7 @@ tags = ["stress", "validation"]
 
 # [[test]]
 # name = "fibonacci"
-# file = "advanced/fibonacci.bf"
+# file = "third-party/advanced/fibonacci.bf"
 # input = ""
 # expected_output = "1, 1, 2, 3, 5, 8, 13, 21, 34, 55"
 # description = "Fibonacci sequence generator"
@@ -173,7 +173,7 @@ tags = ["stress", "validation"]
 
 # [[test]]
 # name = "rot13"
-# file = "advanced/rot13.bf"
+# file = "third-party/advanced/rot13.bf"
 # input = "Hello World"
 # expected_output = "Uryyb Jbeyq"
 # description = "ROT13 cipher"
@@ -181,7 +181,7 @@ tags = ["stress", "validation"]
 
 # [[test]]
 # name = "mandelbrot"
-# file = "advanced/mandelbrot.bf"
+# file = "third-party/advanced/mandelbrot.bf"
 # input = ""
 # description = "Mandelbrot set renderer"
 # tags = ["graphics", "stress", "slow"]
@@ -189,21 +189,21 @@ tags = ["stress", "validation"]
 
 # [[test]]
 # name = "99_bottles"
-# file = "advanced/99_bottles.bf"
+# file = "third-party/advanced/99_bottles.bf"
 # input = ""
 # description = "99 Bottles of Beer song"
 # tags = ["text", "loops"]
 
 # [[test]]
 # name = "prime"
-# file = "advanced/prime.bf"
+# file = "third-party/advanced/prime.bf"
 # input = ""
 # description = "Prime number generator"
 # tags = ["math"]
 
 # [[test]]
 # name = "hanoi"
-# file = "advanced/hanoi.bf"
+# file = "third-party/advanced/hanoi.bf"
 # input = "3"
 # description = "Towers of Hanoi solver"
 # tags = ["algorithm", "recursion"]
