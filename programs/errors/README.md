@@ -4,7 +4,7 @@ This directory contains example BrainFuck programs that demonstrate gyrus's comp
 
 ## Overview
 
-gyrus provides production-grade error handling with:
+gyrus reports errors with:
 - **Rich error messages** with source context
 - **Line and column tracking** for precise error locations
 - **Visual error context** with caret (^) pointing to issues

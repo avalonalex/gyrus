@@ -1,7 +1,7 @@
 # PRD: Public Release — Rename to `gyrus` and Repository Hygiene
 
-**Status**: In Progress — Phases 1-3 complete except CI (deferred to Phase 5,
-see S3); Phase 4 (docs/tone) remaining
+**Status**: In Progress — Phases 1-4 complete except CI (deferred to Phase 5,
+see S3); Phase 5 (release) remaining
 **Last Updated**: 2026-08-23
 **Priority**: High (blocks first public push)
 
@@ -180,14 +180,19 @@ gate it runs passes locally today under the pinned toolchain: 302 tests, fmt
 clean, `clippy --all-targets --all-features -- -D warnings` exits 0, release
 build plus CLI smoke test.
 
-**S4 — Documentation drift.** `CLAUDE.md` claims 166 tests (actual: 302) and
+**S4 — Documentation drift.** ✅ Resolved, and the fix was structural: test and
+line counts are now *removed* from the docs rather than corrected, because they
+go stale on every commit — the stale figures found here (166 tests when there
+were 302; "1,502 lines" for a 12,968-line library) are what that policy is meant
+to prevent. Original finding follows. `CLAUDE.md` claims 166 tests (actual: 302) and
 lists 10 modules, but `crates/ferrous-cortex/src/` also contains `optimizer.rs`,
 `codegen.rs`, `io.rs`, `types.rs`, `debug.rs`, plus `interpreter/` and `hooks/`
 subdirectories. `README.md:986-987` still lists "Performance optimizations" and
 "JIT/AOT compiler backend" as unchecked roadmap items while an optimizer and an
 optimized interpreter exist. Newcomers judge the project by exactly these files.
 
-**S5 — Overclaiming.** "An industry-strength BrainFuck interpreter/compiler"
+**S5 — Overclaiming.** ✅ Resolved in the README, both crate descriptions, the
+programs docs, and the GitHub repo description. Original finding follows. "An industry-strength BrainFuck interpreter/compiler"
 (`README.md:3`) and "production-grade" (library crate description) invite
 eye-rolls. The `azores` README is the model to copy: state plainly what it is,
 that it's a learning-driven project, and that it was written with AI assistance.
@@ -252,7 +257,15 @@ documentation, archive, or delete.
    a private repo.
 4. Fix the one clippy warning so `-D warnings` passes.
 
-### Phase 4 — Docs (S4, S5, S6)
+### Phase 4 — Docs ✅ COMPLETE except doc-directory triage (S6)
+
+Beyond the planned work, the pass turned up documentation that was actively
+wrong rather than merely stale: the README documented `gyrus --validate` and
+`gyrus --minify`, which moved to `gyrus-tool` subcommands and now fail outright.
+Every command line in the README was checked against the binaries' `--help`
+output; all documented flags now exist. A blanket "95%+ size reduction" claim
+for minification was also false for dense programs (49.6% on `life.bf`) and now
+states what it depends on.
 
 1. Rewrite the README opening: honest tagline, AI-assistance disclosure, a
    30-second quickstart, one screenshot or code block of the highlighted error
@@ -351,7 +364,7 @@ jobs:
 - [ ] CI green on a pushed branch — deferred to Phase 5, when the repo is
       public and Actions minutes are free. Gates verified locally in the
       meantime.
-- [ ] README describes the project as it is, with no unearned superlatives.
+- [x] README describes the project as it is, with no unearned superlatives.
 - [ ] `cargo package -p gyrus` succeeds (whether or not it is published).
 
 ## Dependencies
