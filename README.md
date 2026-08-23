@@ -1,60 +1,90 @@
 # gyrus
 
-An industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust.
+A BrainFuck interpreter, optimizer, and debugger written in Rust.
+
+A *gyrus* is one of the folds of the cerebral cortex. The word also reads as
+*gyre* — a loop, a spiral — which is most of what a BrainFuck program is.
+
+> **Note**: this codebase is written with AI assistance (Claude). It is a
+> project for learning how interpreters, optimizers, and debuggers fit
+> together, not production software.
+
+## Why
+
+BrainFuck gives you eight instructions and no diagnostics: no line numbers, no
+variable names, no stack traces. When a program misbehaves, the language offers
+nothing to help. gyrus is an attempt to give it everything a real toolchain has.
+
+An unmatched bracket, for instance, is reported where it actually is — with
+context, and in colour in a real terminal:
+
+```
+$ gyrus programs/errors/unmatched_bracket.bf
+Error: Unmatched '[' at line 12, column 1
+   10 | >+          * Move and increment
+   11 |
+   12 | [>+++       * Opening bracket without matching close
+      | ^
+   13 |             * This will cause a parse error
+```
+
+All bracket errors are reported in one pass rather than one per run. Runtime
+errors carry the same context when built with `--debug`, because the parser
+keeps a source location for every instruction.
+
+## Quick start
+
+```bash
+git clone https://github.com/avalonalex/gyrus.git
+cd gyrus
+cargo build --release
+
+./target/release/gyrus programs/basic/hello_world.bf     # Hello World!
+./target/release/gyrus --verbose programs/basic/hello_world.bf
+./target/release/gyrus-tool view programs/basic/simple.bf --line-numbers
+```
+
+`rust-toolchain.toml` pins the compiler, so `cargo` picks the right one on its
+own. Building against another toolchain needs Rust **1.88** or newer (the code
+uses let-chains, which stabilized there).
 
 ## Features
 
-- Fast and efficient BrainFuck interpreter
-- **Rich error handling** with source location tracking and context
-  - Line and column numbers for parse errors and runtime errors
-  - **Syntax-highlighted error and warning messages** with color-coded BrainFuck commands
-  - Visual error context with caret (^) pointing to exact instruction
-  - **Multiple bracket error reporting** - shows ALL errors at once
-  - Detailed error messages for debugging
-  - Runtime warnings with source location (memory expansion in unbounded mode)
-- Support for all 8 BrainFuck commands: `><+-.,[]`
-- **Line comments** using `*` - makes documentation safe and easy
-- Nested loop support
-- **Multiple memory models** for different use cases
-  - Fixed: Traditional fixed-size array with bounds checking (production/JIT target)
-  - Unbounded: Dynamic growth up to configurable limit (development/prototyping)
-- **Configurable execution limits**
-  - Maximum step count to prevent infinite loops
-  - Execution timeout in milliseconds
-  - Customizable memory size
-- **Development tools** (`gyrus-tool`)
-  - Program validation with static analysis
-  - Code minification (95%+ size reduction)
-  - Debug symbol inspection with JSON/CSV/table output
-- **Verbose mode** with execution diagnostics
-  - Configuration details (memory model, limits, timeout)
-  - Execution statistics (step count, loop iterations, memory usage)
-  - I/O statistics (bytes read/written)
-  - Useful for performance analysis and debugging
-- **Configurable EOF handling** for input operations
-  - SetZero: Set cell to 0 on EOF (default)
-  - SetNegOne: Set cell to 255 (-1) on EOF
-  - NoChange: Leave cell unchanged on EOF
-  - Error: Fail on EOF with error message
-- Production-grade reliability with comprehensive error checking
-- Command-line interface with extensive options
+**Execution**
+- Three execution modes: an optimized interpreter (default), a debug
+  interpreter that tracks source locations, and a tracing interpreter
+  (`--trace`) that profiles execution and prints a heatmap of hot code
+- An optimizer that fuses instruction runs and recognizes clear, scan, and
+  multiply loops — Hello World compresses 103 instructions to 55
+- Memory models: fixed (bounds-checked) or unbounded (grows to a limit)
+- Cell models: `wrapping` (standard BrainFuck) or `checked` (errors on
+  overflow, for finding arithmetic bugs) — orthogonal to the memory model
+- Configurable EOF behavior: zero, -1, no change, or error
+- Execution limits by step count and by wall-clock timeout
+- A hook system (`ExecutionHook`) with five hook points, the foundation for
+  breakpoints, profilers, and tracers — and zero cost when unused
 
-## Installation
+**Diagnostics**
+- Every error carries a line, a column, and a syntax-highlighted excerpt
+- All bracket mismatches reported in a single pass
+- Static validation for empty loops, extreme nesting, and inefficient idioms,
+  aware of which cell model you are running
+- Execution statistics: steps, loop iterations, peak memory, I/O counts
 
-### Prerequisites
+**Tooling** (`gyrus-tool`)
+- `minify` — strip comments and whitespace (94.9% on the bundled
+  `line_comments.bf`: 514 bytes to 26)
+- `validate` — static analysis warnings
+- `view` — syntax-highlighted source with line numbers and nesting depth
+- `debug-info` — inspect the instruction-to-source mapping
+- `optimize` — show what the optimizer did, visually
+- `compile` — turn a string into a BrainFuck program that prints it
+- `generate` — random program generation for fuzzing
 
-- Rust 1.85+ with edition 2024 support
-- Cargo (comes with Rust)
-
-### Building from Source
-
-```bash
-git clone <repository-url>
-cd gyrus
-cargo build --release
-```
-
-The compiled binary will be available at `target/release/gyrus`.
+**Language**
+- All eight commands, arbitrarily nested
+- `*` line comments, so programs can be documented without accidental
+  instructions
 
 ## Usage
 
@@ -539,10 +569,10 @@ The validator provides different warnings based on your cell model:
 
 ```bash
 # Validate with wrapping model
-gyrus program.bf --validate --cell-model wrapping
+gyrus-tool validate program.bf --cell-model wrapping
 
 # Validate with checked model
-gyrus program.bf --validate --cell-model checked
+gyrus-tool validate program.bf --cell-model checked
 ```
 
 **Example - `[+]` pattern:**
@@ -707,12 +737,12 @@ gyrus can validate your BrainFuck programs and warn about potential issues:
 
 ```bash
 # Validate only (does not execute)
-gyrus program.bf --validate
+gyrus-tool validate program.bf
 ```
 
 ### What Validation Does
 
-**`--validate` (Lint Mode)**
+**`gyrus-tool validate` (Lint Mode)**
 - Parses and analyzes the code for issues
 - Shows all warnings (or "No warnings found")
 - Never executes the program
@@ -736,13 +766,13 @@ The validator checks for:
 
 ```bash
 # Development: Check for issues without running
-gyrus program.bf --validate
+gyrus-tool validate program.bf
 
 # CI/CD: Validate, then run if clean
-gyrus program.bf --validate && gyrus program.bf
+gyrus-tool validate program.bf && gyrus program.bf
 
 # CI/CD with verbose output
-gyrus program.bf --validate && gyrus program.bf --verbose
+gyrus-tool validate program.bf && gyrus program.bf --verbose
 ```
 
 ## Code Minification
@@ -751,13 +781,13 @@ Strip all comments and whitespace to create compact BrainFuck programs:
 
 ```bash
 # Output to stdout
-gyrus program.bf --minify
+gyrus-tool minify program.bf
 
 # Save to file
-gyrus program.bf --minify -o program.min.bf
+gyrus-tool minify program.bf -o program.min.bf
 
 # With verbose stats
-gyrus program.bf --minify -o program.min.bf --verbose
+gyrus-tool minify program.bf -o program.min.bf --verbose
 ```
 
 **Example:**
@@ -773,30 +803,34 @@ $ cat programs/basic/line_comments.bf
 ]           * Result: Cell 1 = 70
 >++.        * Add 2, print 'H'
 
-$ gyrus programs/basic/line_comments.bf --minify
+$ gyrus-tool minify programs/basic/line_comments.bf
 ++++++++++[>+++++++<-]>++.
 
-$ gyrus programs/basic/line_comments.bf --minify --verbose -o min.bf
-Minified 514 bytes to 26 bytes (saved to min.bf)
+$ gyrus-tool minify programs/basic/line_comments.bf --verbose -o min.bf
+Minified 514 bytes to 26 bytes (94.9% reduction)
 ```
 
-Minification achieves **95%+ size reduction** by removing:
+Minification removes:
 - All line comments (after `*`)
 - All implicit comments (non-BF characters)
 - All whitespace and formatting
 
-The minified code is functionally identical to the original.
+How much that saves depends entirely on how much of the file is prose:
+94.9% for a documented example like `line_comments.bf`, but 49.6% for a dense
+program like `third-party/advanced/life.bf`, which is nearly all instructions
+already. The minified code is functionally identical to the original.
 
 ## Development
 
 ### Running Tests
 
-gyrus has a comprehensive testing infrastructure with **137 tests** including unit tests, property-based tests, and benchmarks.
+gyrus has a comprehensive testing infrastructure: unit tests, integration tests
+over a corpus of real programs, property-based tests, and benchmarks.
 
 #### Run All Tests
 
 ```bash
-# Run all unit tests (137 tests)
+# Run all unit tests
 cargo test
 
 # Run with output
@@ -887,15 +921,20 @@ gyrus/
 │   ├── gyrus/      # Core library crate
 │   │   ├── Cargo.toml
 │   │   ├── src/
-│   │   │   ├── lib.rs           # Module interface (21 lines)
-│   │   │   ├── parser.rs        # Source → AST parsing (+ 22 tests + 5 property tests)
-│   │   │   ├── interpreter.rs   # AST → Execution (+ 20 tests)
-│   │   │   ├── validator.rs     # AST validation (+ 5 tests)
-│   │   │   ├── minify.rs        # AST → Source (+ 5 tests)
-│   │   │   ├── test_utils.rs    # Test helper functions (+ 12 tests)
+│   │   │   ├── lib.rs           # Module interface
+│   │   │   ├── parser.rs        # Source → AST parsing
+│   │   │   ├── interpreter/     # AST → Execution
+│   │   │   ├── optimizer.rs     # AST → OptimizedProgram
+│   │   │   ├── hooks/           # ExecutionHook trait and built-in hooks
+│   │   │   ├── validator.rs     # AST validation
+│   │   │   ├── minify.rs        # AST → Source
+│   │   │   ├── codegen.rs       # String → BrainFuck compiler
+│   │   │   ├── syntax.rs        # Syntax highlighting
+│   │   │   ├── debug.rs         # Debug symbol tables
+│   │   │   ├── test_utils.rs    # Test helpers, random programs
 │   │   │   ├── io.rs            # I/O abstraction traits
 │   │   │   ├── error.rs         # Error types and formatting
-│   │   │   ├── config.rs        # Configuration types
+│   │   │   ├── config/          # Configuration types
 │   │   │   ├── instruction.rs   # AST node definition
 │   │   │   ├── location.rs      # Source position tracking
 │   │   │   ├── types.rs         # Type-safe wrappers
@@ -945,16 +984,23 @@ gyrus/
 
 The core library follows idiomatic Rust structure with clear separation of concerns:
 
-- **lib.rs** (21 lines): Pure module interface with re-exports
-- **parser.rs** (431 lines): Converts BrainFuck source code to AST
-- **interpreter.rs** (484 lines): Executes AST with configurable runtime
-- **validator.rs** (145 lines): Analyzes AST for warnings and best practices
-- **minify.rs** (75 lines): Converts AST back to minimal source code
+- **lib.rs**: Pure module interface with re-exports
+- **parser.rs**: Converts BrainFuck source code to AST
+- **interpreter/**: Executes AST with configurable runtime — tree-walking,
+  optimized, and tracing paths
+- **optimizer.rs**: Rewrites the AST into fused, pattern-recognized instructions
+- **hooks/**: `ExecutionHook` trait, manager, and built-in hooks
+- **validator.rs**: Analyzes AST for warnings and best practices
+- **minify.rs**: Converts AST back to minimal source code
+- **codegen.rs**: Compiles a string into a BrainFuck program that prints it
 - **test_utils.rs**: Test helper functions and utilities
 - **io.rs**: I/O abstraction traits (BfInput, BfOutput, StringIo)
-- **Supporting modules**: error, config, instruction, location, stats, types
+- **Supporting modules**: error, syntax, debug, config, instruction, location,
+  stats, types
 
-All modules include comprehensive tests (**137 total** including unit tests, property tests, and cell model tests) with co-located implementation.
+Tests are co-located with the implementation, plus integration tests over a
+corpus of real programs, property tests, and doc tests. Run `cargo test
+--workspace` to see where things stand.
 
 ## Roadmap
 
@@ -977,16 +1023,20 @@ All modules include comprehensive tests (**137 total** including unit tests, pro
 - [x] Runtime warnings with source location (memory expansion in unbounded mode)
 - [x] Advanced I/O error handling (EOF behavior)
 - [x] I/O abstraction for library usage and testing
-- [x] Comprehensive testing infrastructure (118 library tests + integration tests)
+- [x] Comprehensive testing infrastructure (unit, integration, property, doc)
 - [x] Property-based testing with proptest
 - [x] Performance benchmarking with criterion
+
+- [x] Optimizer: instruction fusion, clear/scan/multiply loop recognition
+- [x] Tracing interpreter with an execution heatmap (`--trace`)
+- [x] Hook system (five hook points) — the foundation for the debugger below
+- [x] String-to-BrainFuck compiler (`gyrus-tool compile`)
 
 ### Planned
 - [ ] Visual TUI debugger with breakpoints
 - [ ] Step-by-step execution
 - [ ] Memory visualization
-- [ ] Performance optimizations (instruction fusion, loop detection)
-- [ ] JIT/AOT compiler backend
+- [ ] JIT/AOT compiler backend (Cranelift — see `PRD/compilation_backend.md`)
 - [ ] REPL mode
 
 ## References

@@ -4,13 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-gyrus is an industry-strength BrainFuck interpreter/compiler and visual debugger written in Rust. The project uses Rust edition 2024.
+gyrus is a BrainFuck interpreter, optimizer, and debugger written in Rust,
+built as a learning project. Rust edition 2024, MSRV 1.88 (the code uses
+let-chains); `rust-toolchain.toml` pins the development compiler.
 
 **Project Structure**: Cargo workspace with multiple crates
 
 - **gyrus** (`crates/gyrus/`): Core library crate
-- **gyrus-cli** (`crates/gyrus-cli/`): CLI binary crate
-- Future: debugger, REPL, JIT compiler as separate crates
+- **gyrus-cli** (`crates/gyrus-cli/`): `gyrus` binary — program execution
+- **gyrus-tool** (`crates/gyrus-tool/`): `gyrus-tool` binary — development tools
+- Future: TUI debugger, REPL, JIT compiler as separate crates
 
 ## Documentation Organization
 
@@ -24,11 +27,12 @@ gyrus is an industry-strength BrainFuck interpreter/compiler and visual debugger
 
 ### Module Structure (Idiomatic Rust)
 
-The library uses a clean module structure with `lib.rs` as a pure interface (21 lines):
+The library uses a clean module structure with `lib.rs` as a pure interface of
+re-exports and crate docs.
 
 **Core Modules:**
 
-1. **parser** (`crates/gyrus/src/parser.rs` - 431 lines + 22 tests)
+1. **parser** (`crates/gyrus/src/parser.rs`)
    - BrainFuck source → AST (Abstract Syntax Tree)
    - Recursive descent parser that converts source text into `Vec<Instruction>`
    - **Location tracking**: Maintains line, column, and offset for every position
@@ -41,7 +45,9 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
    - **Multiple error reporting**: Shows all bracket errors in a single pass
    - Public API: `parse(source: &str) -> Result<Vec<Instruction>, BfError>`
 
-2. **interpreter** (`crates/gyrus/src/interpreter.rs` - 484 lines + 20 tests)
+2. **interpreter** (`crates/gyrus/src/interpreter/`): `mod.rs` (entry points), `state.rs`
+   (VM state), `dispatch.rs` (instruction dispatch), `execution.rs` (the tree
+   walker), `optimized.rs` (the optimized executor)
    - AST → Execution with safety limits and statistics
    - Tree-walking interpreter with configurable memory
    - **Multiple memory models**:
@@ -58,12 +64,12 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
    - Direct I/O to stdin/stdout
    - Public API: `interpret()`, `interpret_with_config()`
 
-3. **validator** (`crates/gyrus/src/validator.rs` - 145 lines + 5 tests)
+3. **validator** (`crates/gyrus/src/validator.rs`)
    - AST → Warnings for suspicious patterns
    - Detects: empty loops, infinite loops, extreme nesting, inefficient patterns
    - Public API: `validate(instructions: &[Instruction]) -> Vec<BfWarning>`
 
-4. **minify** (`crates/gyrus/src/minify.rs` - 75 lines + 5 tests)
+4. **minify** (`crates/gyrus/src/minify.rs`)
    - AST → Minimal BrainFuck source (removes comments)
    - Public API: `minify(instructions: &[Instruction]) -> String`
 
@@ -76,18 +82,40 @@ The library uses a clean module structure with `lib.rs` as a pure interface (21 
 - **syntax** (`syntax.rs`): Syntax highlighting for BrainFuck source code
   - Color scheme: cyan for pointer ops, green for cell ops, orange for loops, gray for comments
   - Line numbers and loop nesting depth visualization
-- **config** (`config.rs`): `ExecutionConfig`, `MemoryModel`, `CellModel`, `EofBehavior`
+- **config** (`config/`): `ExecutionConfig`, `MemoryModel`, `CellModel`, `EofBehavior`
 - **instruction** (`instruction.rs`): AST node definition `Instruction` enum
 - **location** (`location.rs`): Source position tracking `SourceLocation`
 - **stats** (`stats.rs`): Execution statistics `ExecutionStats`
-- **lib** (`lib.rs` - 21 lines): Pure module interface with re-exports
+- **optimizer** (`optimizer.rs`): AST → `OptimizedProgram`.
+  Fuses instruction runs into `Add`/`Sub`/`Right`/`Left`, and recognizes clear
+  loops (`Zero`), scan loops (`SeekRight`/`SeekLeft`), and multiply loops
+  (`MultiplyAdd`)
+- **types** (`types.rs`): newtypes shared by the optimizer
+  and optimized interpreter
+- **hooks** (`hooks/mod.rs` + `hooks/builtin.rs`):
+  `ExecutionHook` trait with five hook points, `HookManager`, `HookContext`,
+  `HookDecision`, plus built-in hooks
+- **io** (`io.rs`): `BfInput`/`BfOutput` abstraction —
+  `StdIo`, `StringIo`, `DebugIo`
+- **codegen** (`codegen.rs`): string → BrainFuck compiler
+  (dynamic programming, ~12.3 ops/byte)
+- **debug** (`debug.rs`): debug symbol tables
+- **test_utils** (`test_utils.rs`): test helpers and
+  random program generation
+- **lib** (`lib.rs`): Pure module interface with re-exports
 
-**CLI** (`crates/gyrus-cli/src/main.rs`)
-   - Flow: read file → parse → (minify OR validate) → configure → interpret → (stats)
-   - Flags: `--verbose`, `--quiet`, `--debug`, `--max-steps`, `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`, `--unbounded-initial`, `--unbounded-max`, `--validate`, `--minify`, `-o/--output`, `--eof-behavior`
+**CLI** (`crates/gyrus-cli/src/main.rs`) — execution only
+   - Flow: read file → parse → optimize (unless `--debug`) → interpret → (stats)
+   - Flags: `--verbose`, `--quiet`, `--debug`, `--trace`, `--max-steps`,
+     `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`,
+     `--unbounded-initial`, `--unbounded-max`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
-   - Minify mode: Parse → minify → output (no execution)
-   - Validate mode: Parse → validate → show warnings (no execution, always assumes u8 wrapping)
+
+**Tool** (`crates/gyrus-tool/src/main.rs`) — development workflows
+   - Subcommands: `minify`, `validate`, `debug-info`, `view`, `generate`,
+     `compile`, `optimize`
+   - **Note**: minify and validate are subcommands here, NOT flags on `gyrus`.
+     `gyrus --minify` and `gyrus --validate` do not exist.
    - **Runtime warnings**: Only shown with `--verbose` flag (cell wrapping is common in BF programs)
    - **Debug symbols**: Opt-in with `--debug` flag (default: fast mode without source locations)
 
@@ -263,28 +291,42 @@ This is a Cargo workspace with the following crates:
 
 - **`gyrus`** (library): Core BrainFuck interpreter, parser, and runtime
   - Location: `crates/gyrus/`
-  - **Structure**: 10 modules, 1,502 lines total
-  - **Tests**: 52 tests co-located with implementation
-    - Parser: 22 tests
-    - Interpreter: 20 tests
-    - Validator: 5 tests
-    - Minify: 5 tests
   - **Module breakdown**:
     ```
     src/
-    ├── lib.rs           (21 lines)   - Module interface
-    ├── parser.rs        (431 lines)  - Source → AST
-    ├── interpreter.rs   (484 lines)  - AST → Execution
-    ├── validator.rs     (145 lines)  - AST validation
-    ├── minify.rs        (75 lines)   - AST → Source
-    ├── error.rs         (127 lines)  - Error types
-    ├── config.rs        (137 lines)  - Configuration
-    ├── instruction.rs   (11 lines)   - AST nodes
-    ├── location.rs      (35 lines)   - Source tracking
-    └── stats.rs         (36 lines)   - Statistics
+    ├── lib.rs            - Module interface and crate docs
+    ├── parser.rs         - Source → AST
+    ├── interpreter/      - AST → Execution
+    │   ├── mod.rs        -   entry points
+    │   ├── state.rs      -   VM state
+    │   ├── dispatch.rs   -   instruction dispatch
+    │   ├── execution.rs  -   tree-walking executor
+    │   ├── optimized.rs  -   optimized executor
+    │   └── tests.rs      -   interpreter test suite
+    ├── optimizer.rs      - AST → OptimizedProgram
+    ├── types.rs          - optimizer newtypes
+    ├── hooks/            - execution hooks
+    │   ├── mod.rs        -   trait, manager, context
+    │   └── builtin.rs    -   built-in hooks
+    ├── error.rs          - Error types and formatting
+    ├── syntax.rs         - Syntax highlighting
+    ├── io.rs             - I/O abstraction
+    ├── test_utils.rs     - Test helpers, random programs
+    ├── debug.rs          - Debug symbol tables
+    ├── validator.rs      - AST validation
+    ├── codegen.rs        - String → BrainFuck compiler
+    ├── config/           - ExecutionConfig and models
+    ├── minify.rs         - AST → Source
+    ├── stats.rs          - Statistics
+    ├── instruction.rs    - AST nodes
+    └── location.rs       - Source tracking
     ```
   - Can be used as a library by other Rust projects
-  - Ready for publication to crates.io
+  - **Not yet published to crates.io.** Two things block it: `benches/` is
+    packaged but `programs/` is not, so the `include_str!` calls in
+    `benches/interpreter.rs` cannot resolve from a published crate; and
+    `LICENSE` sits at the repo root, outside the package directory, so cargo
+    will not ship it.
 
 - **`gyrus-cli`** (binary): Command-line interpreter
   - Location: `crates/gyrus-cli/`
@@ -445,27 +487,27 @@ CLI integration:
 ## Testing
 
 The test suite covers:
-- **Parse tests**: All instruction types, nested loops, comments (5 tests)
-- **Error tests**: All error types with proper context (4 tests)
-- **Limit tests**: Step limits, timeouts, memory bounds (5 tests)
-- **Location tests**: Multiline programs, error positions (included above)
-- **Validation tests**: Empty loops, infinite loops, nesting, clean programs (5 tests)
-- **Comment tests**: Line comments, BF commands in comments, multiline (4 tests)
-- **Minify tests**: Simple, line comments, nested loops, round-trip (5 tests)
-- **Bracket matching tests**: Multiple errors, single errors, location tracking (9 tests)
-- **Memory model tests**: Fixed, unbounded behaviors (4 tests)
-- **Statistics tests**: Step counting, loop iterations, I/O tracking, memory tracking (6 tests)
-- **Error formatting tests**: Syntax highlighting, source location, caret positioning (8 tests, NEW)
-  - `test_error_formatting_with_source_location`: Multiline program with memory overflow
-  - `test_source_location_column_1`: Single character error at column 1
-  - `test_source_location_multiline_program`: Cell underflow on line 3
-  - `test_source_location_in_nested_loop`: Error inside nested loop structure
-  - `test_source_location_with_comments`: Source location with line comments
-  - `test_error_without_debug_info`: Backward compatibility (no debug info)
-  - `test_memory_overflow_formatting`: Full formatted output with memory dump
-  - `test_cell_overflow_formatting`: Full formatted output with syntax highlighting
-- **Hook system tests**: Basic hook infrastructure and manager behavior (8 tests)
-- **Total**: 166 library tests (164 passing, 2 ignored)
+- **Parse tests**: All instruction types, nested loops, comments
+- **Error tests**: All error types with proper context
+- **Limit tests**: Step limits, timeouts, memory bounds
+- **Location tests**: Multiline programs, error positions
+- **Validation tests**: Empty loops, infinite loops, nesting, clean programs
+- **Comment tests**: Line comments, BF commands in comments, multiline
+- **Minify tests**: Simple, line comments, nested loops, round-trip
+- **Bracket matching tests**: Multiple errors, single errors, location tracking
+- **Memory model tests**: Fixed, unbounded behaviors
+- **Statistics tests**: Step counting, loop iterations, I/O tracking, memory tracking
+- **Error formatting tests**: Syntax highlighting, source location, caret positioning
+- **Hook system tests**: Hook infrastructure and manager behavior
+- **Optimizer tests**: Run fusion, clear/scan/multiply loop recognition
+- **Program corpus** (`crates/gyrus/tests/program_corpus.rs`): real BrainFuck
+  programs run end to end, expectations declared in `programs/test_manifest.toml`
+- **Property tests** (`crates/gyrus/tests/property_debug_symbols.rs`): proptest
+  over debug symbol invariants
+
+Test and line counts are deliberately not recorded here — they change with
+every commit, and a stale number is worse than no number. Run
+`cargo test --workspace` for the current picture.
 
 To add new tests:
 1. Test parsing with `parse(source).unwrap()` or `parse_with_debug(source).unwrap()`
@@ -511,7 +553,7 @@ The roadmap includes:
 - ✅ Execution limits (step count, timeout) (Phase 3.1)
 - ✅ Configurable memory size (Phase 3.1)
 - ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (166 library tests + integration tests)
+- ✅ Comprehensive test suite (unit, integration, property, and doc tests)
   - Added 8 comprehensive tests for error formatting and source location tracking
   - Added 8 tests for hook infrastructure (context creation, manager dispatch, early exit)
   - Tests cover single-char programs, multiline, nested loops, comments, hooks
@@ -550,7 +592,7 @@ The roadmap includes:
   - Zero-cost abstraction when hooks disabled (Option<HookManager>)
   - Builder pattern integration: `with_hook()`, `with_hooks_enabled()`
   - 8 unit tests for hook infrastructure
-  - **Total tests**: 166 library tests (164 passing, 2 ignored)
+  - All tests passing
   - **Enables**: Interactive debuggers, profilers, execution tracers, time-travel debugging
 
 **Remaining (from PRD)**:
