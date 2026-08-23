@@ -181,6 +181,16 @@ pub(crate) fn extract_source_context_highlighted(source: &str, location: SourceL
     String::from_utf8(buffer).expect("UTF-8 conversion should not fail")
 }
 
+/// Render a list of errors as a numbered block, for `MultipleBracketErrors`.
+fn render_all(errors: &[BfError]) -> String {
+    errors
+        .iter()
+        .enumerate()
+        .map(|(i, e)| format!("Error {}:\n{}", i + 1, e))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 #[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum BfError {
@@ -196,8 +206,14 @@ pub enum BfError {
         context: String,
     },
 
-    #[error("Found {count} bracket matching errors (see details above)")]
-    MultipleBracketErrors { count: usize },
+    /// More than one bracket error in a single source file.
+    ///
+    /// Carries every error it found. The parser used to `eprintln!` the details
+    /// and hand back only a count, which meant a library consumer could not
+    /// capture, format, or test them -- they went to the process's stderr and
+    /// nowhere else.
+    #[error("found {} bracket matching errors:\n\n{}", errors.len(), render_all(errors))]
+    MultipleBracketErrors { errors: Vec<BfError> },
 
     #[error("Memory pointer out of bounds at instruction {instruction_index}")]
     MemoryOutOfBounds {

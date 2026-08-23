@@ -266,14 +266,7 @@ fn run_validate(
     })?;
 
     // Parse the program
-    let (instructions, _debug_info) = match parse_with_debug(&source) {
-        Ok(result) => result,
-        Err(BfError::MultipleBracketErrors { .. }) => {
-            // Errors already reported to stderr
-            std::process::exit(1);
-        }
-        Err(e) => return Err(e),
-    };
+    let (instructions, _debug_info) = parse_with_debug(&source)?;
 
     // Parse cell model (for future use when validation becomes model-aware)
     let _cell_model_parsed = match cell_model.to_lowercase().as_str() {

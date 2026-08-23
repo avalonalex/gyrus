@@ -118,24 +118,13 @@ fn run() -> Result<(), BfError> {
     // - Debug/trace mode: parse with debug symbols for source tracking
     let (instructions, debug_info) = if cli.debug || cli.trace {
         // Debug mode: parse with debug symbols for source location tracking
-        match parse_with_debug(&source) {
-            Ok((instructions, debug_info)) => (instructions, Some(debug_info)),
-            Err(BfError::MultipleBracketErrors { .. }) => {
-                // Errors already reported to stderr, just exit with error code
-                std::process::exit(1);
-            }
-            Err(e) => return Err(e),
-        }
+        // MultipleBracketErrors now carries every error and formats them all,
+        // so it needs no special case here.
+        let (instructions, debug_info) = parse_with_debug(&source)?;
+        (instructions, Some(debug_info))
     } else {
         // Fast mode (default): parse without debug symbols
-        match parse(&source) {
-            Ok(instructions) => (instructions, None),
-            Err(BfError::MultipleBracketErrors { .. }) => {
-                // Errors already reported to stderr, just exit with error code
-                std::process::exit(1);
-            }
-            Err(e) => return Err(e),
-        }
+        (parse(&source)?, None)
     };
 
     // Parse cell model
