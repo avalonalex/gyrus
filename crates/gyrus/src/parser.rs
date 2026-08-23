@@ -158,14 +158,11 @@ pub fn parse_with_debug(source: impl AsRef<str>) -> Result<(Vec<Instruction>, De
             // Single error - return it directly
             return Err(bracket_errors.into_iter().next().unwrap());
         } else {
-            // Multiple errors - report all details to stderr, then return summary error
-            let count = bracket_errors.len();
-            eprintln!("Found {} bracket matching error(s):\n", count);
-            for (i, error) in bracket_errors.iter().enumerate() {
-                eprintln!("Error {}:", i + 1);
-                eprintln!("{}\n", error);
-            }
-            return Err(BfError::MultipleBracketErrors { count });
+            // Multiple errors - hand all of them back. A library must not write
+            // diagnostics to the caller's stderr.
+            return Err(BfError::MultipleBracketErrors {
+                errors: bracket_errors,
+            });
         }
     }
 
@@ -548,6 +545,44 @@ mod tests {
         assert!(matches!(result, Err(BfError::UnmatchedCloseBracket { .. })));
     }
 
+    /// The whole point of `MultipleBracketErrors` carrying its errors: a library
+    /// consumer can inspect and format them. Previously the details went to the
+    /// process's stderr via `eprintln!` and the caller received only a count,
+    /// which could not be captured, rendered, or asserted on.
+    #[test]
+    fn test_multiple_bracket_errors_carry_their_locations() {
+        // Two unmatched '[' on different lines.
+        let source = "[+\n>>\n[-\n";
+        let Err(BfError::MultipleBracketErrors { errors }) = parse(source) else {
+            panic!("expected MultipleBracketErrors");
+        };
+        assert_eq!(errors.len(), 2);
+
+        let lines: Vec<usize> = errors
+            .iter()
+            .map(|e| match e {
+                BfError::UnmatchedOpenBracket { location, .. } => location.line,
+                other => panic!("expected UnmatchedOpenBracket, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec![1, 3],
+            "each error keeps the line it was found on"
+        );
+
+        // And the aggregate renders every one of them, rather than a bare count.
+        let rendered = BfError::MultipleBracketErrors { errors }.to_string();
+        assert!(
+            rendered.contains("found 2 bracket matching errors"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Error 1:") && rendered.contains("Error 2:"),
+            "{rendered}"
+        );
+    }
+
     #[test]
     fn test_bracket_matching_multiple_unmatched_open() {
         // Test with multiple unclosed opening brackets
@@ -557,7 +592,7 @@ mod tests {
         // Should return MultipleBracketErrors when there are multiple errors
         assert!(matches!(
             result,
-            Err(BfError::MultipleBracketErrors { count: 3 })
+            Err(BfError::MultipleBracketErrors { errors }) if errors.len() == 3
         ));
     }
 
@@ -570,7 +605,7 @@ mod tests {
         // Should return MultipleBracketErrors when there are multiple errors
         assert!(matches!(
             result,
-            Err(BfError::MultipleBracketErrors { count: 3 })
+            Err(BfError::MultipleBracketErrors { errors }) if errors.len() == 3
         ));
     }
 
@@ -584,7 +619,7 @@ mod tests {
         // Should return MultipleBracketErrors when there are multiple errors
         assert!(matches!(
             result,
-            Err(BfError::MultipleBracketErrors { count: 2 })
+            Err(BfError::MultipleBracketErrors { errors }) if errors.len() == 2
         ));
     }
 
