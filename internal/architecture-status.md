@@ -1,4 +1,4 @@
-# FerrousCortex Architecture & Project Structure
+# gyrus Architecture & Project Structure
 
 ## Current Implementation (v0.2.0)
 
@@ -7,9 +7,9 @@
 The project now follows idiomatic Rust structure with **workspace organization** and **clean module separation**:
 
 **Workspace Structure:**
-- ✅ `crates/ferrous-cortex/` - Core library (1,502 lines across 10 modules)
-- ✅ `crates/ferrous-cortex-cli/` - CLI binary
-- 🔮 Future: `ferrous-cortex-debugger/`, `ferrous-cortex-jit/`, `ferrous-cortex-repl/`
+- ✅ `crates/gyrus/` - Core library (1,502 lines across 10 modules)
+- ✅ `crates/gyrus-cli/` - CLI binary
+- 🔮 Future: `gyrus-debugger/`, `gyrus-jit/`, `gyrus-repl/`
 
 **Core Library Modules:**
 
@@ -41,7 +41,7 @@ The project now follows idiomatic Rust structure with **workspace organization**
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    FerrousCortex                         │
+│                    gyrus                         │
 │                   (Workspace Root)                       │
 └─────────────────────────────────────────────────────────┘
                           │
@@ -76,7 +76,7 @@ The project now follows idiomatic Rust structure with **workspace organization**
 ### Directory Layout
 
 ```
-FerrousCortex/
+gyrus/
 ├── Cargo.toml                      # Workspace root
 ├── README.md
 ├── ARCHITECTURE.md                 # This file
@@ -88,7 +88,7 @@ FerrousCortex/
 │   └── performance-optimizations.md
 │
 ├── crates/
-│   ├── ferrous-cortex/             # 📦 Core library crate
+│   ├── gyrus/             # 📦 Core library crate
 │   │   ├── Cargo.toml
 │   │   ├── README.md
 │   │   └── src/
@@ -144,14 +144,14 @@ FerrousCortex/
 │   │           ├── mod.rs
 │   │           └── execution.rs    # ExecutionStats
 │   │
-│   ├── ferrous-cortex-cli/         # 🔧 CLI binary crate
+│   ├── gyrus-cli/         # 🔧 CLI binary crate
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs
 │   │       ├── args.rs             # CLI argument parsing
 │   │       └── output.rs           # Output formatting
 │   │
-│   ├── ferrous-cortex-debugger/    # 🐛 Visual debugger (future)
+│   ├── gyrus-debugger/    # 🐛 Visual debugger (future)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs
@@ -162,13 +162,13 @@ FerrousCortex/
 │   │       │   └── controls.rs
 │   │       └── session.rs          # Debug session state
 │   │
-│   ├── ferrous-cortex-repl/        # 💬 REPL (future)
+│   ├── gyrus-repl/        # 💬 REPL (future)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs
 │   │       └── repl.rs
 │   │
-│   └── ferrous-cortex-jit/         # ⚡ JIT compiler (future, maybe)
+│   └── gyrus-jit/         # ⚡ JIT compiler (future, maybe)
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs
@@ -191,7 +191,7 @@ FerrousCortex/
 
 ---
 
-## Core Library Design (`ferrous-cortex` crate)
+## Core Library Design (`gyrus` crate)
 
 ### Module Organization
 
@@ -476,13 +476,13 @@ impl Debugger {
 
 ---
 
-## CLI Binary Design (`ferrous-cortex-cli`)
+## CLI Binary Design (`gyrus-cli`)
 
 ### Clean Separation
 
 ```rust
-// crates/ferrous-cortex-cli/src/main.rs
-use ferrous_cortex::{interpret_with_config, ExecutionConfig};
+// crates/gyrus-cli/src/main.rs
+use gyrus::{interpret_with_config, ExecutionConfig};
 
 fn main() {
     let args = Args::parse();
@@ -516,13 +516,13 @@ fn main() {
 **Step 1**: Create workspace
 ```bash
 # Create workspace Cargo.toml
-# Move current code to crates/ferrous-cortex/
-# Move main.rs to crates/ferrous-cortex-cli/
+# Move current code to crates/gyrus/
+# Move main.rs to crates/gyrus-cli/
 ```
 
 **Step 2**: Split `bf.rs` into modules (in-place)
 ```rust
-// Keep everything in ferrous-cortex crate first
+// Keep everything in gyrus crate first
 // Just split the file into modules:
 src/
   ├── lib.rs
@@ -535,7 +535,7 @@ src/
 ```
 
 **Step 3**: Update imports and make it work
-- Update CLI to use `ferrous_cortex::*`
+- Update CLI to use `gyrus::*`
 - Ensure all tests pass
 - Update documentation
 
@@ -564,7 +564,7 @@ src/
 **When adding optimizer**:
 ```bash
 # Add optimizer module
-crates/ferrous-cortex/src/optimizer/
+crates/gyrus/src/optimizer/
 # Implement IR optimization
 # Add --opt flag to CLI
 ```
@@ -572,15 +572,15 @@ crates/ferrous-cortex/src/optimizer/
 **When adding debugger**:
 ```bash
 # Create new crate
-crates/ferrous-cortex-debugger/
-# Depends on ferrous-cortex library
+crates/gyrus-debugger/
+# Depends on gyrus library
 # Implements TUI using ratatui or similar
 ```
 
 **When adding JIT**:
 ```bash
 # Create new crate (maybe)
-crates/ferrous-cortex-jit/
+crates/gyrus-jit/
 # Heavy dependencies (LLVM, cranelift)
 # Keep separate to not bloat main library
 ```
@@ -610,7 +610,7 @@ mod tests {
 #[test]
 fn test_hello_world_end_to_end() {
     let source = include_str!("../examples/hello_world.bf");
-    let output = ferrous_cortex::interpret(source).unwrap();
+    let output = gyrus::interpret(source).unwrap();
     assert_eq!(output, "Hello World!\n");
 }
 ```
@@ -624,7 +624,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 fn bench_interpreter(c: &mut Criterion) {
     c.bench_function("hello_world", |b| {
         b.iter(|| {
-            ferrous_cortex::interpret(black_box(HELLO_WORLD))
+            gyrus::interpret(black_box(HELLO_WORLD))
         });
     });
 }
@@ -640,12 +640,12 @@ criterion_main!(benches);
 ```toml
 [workspace]
 members = [
-    "crates/ferrous-cortex",
-    "crates/ferrous-cortex-cli",
+    "crates/gyrus",
+    "crates/gyrus-cli",
     # Future members:
-    # "crates/ferrous-cortex-debugger",
-    # "crates/ferrous-cortex-repl",
-    # "crates/ferrous-cortex-jit",
+    # "crates/gyrus-debugger",
+    # "crates/gyrus-repl",
+    # "crates/gyrus-jit",
 ]
 resolver = "2"
 
@@ -654,7 +654,7 @@ version = "0.2.0"
 authors = ["Your Name <your.email@example.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/FerrousCortex"
+repository = "https://github.com/avalonalex/gyrus"
 
 [workspace.dependencies]
 # Shared dependencies
@@ -662,7 +662,7 @@ thiserror = "2.0"
 clap = { version = "4.5", features = ["derive"] }
 
 # Internal dependencies
-ferrous-cortex = { path = "crates/ferrous-cortex" }
+gyrus = { path = "crates/gyrus" }
 
 [profile.release]
 lto = true
@@ -758,7 +758,7 @@ pub trait ExecutionBackend {
 - Zero-cost abstractions
 
 ### 6. Developer Experience
-- Clear imports: `use ferrous_cortex::parser::parse;`
+- Clear imports: `use gyrus::parser::parse;`
 - Good IDE support
 - Easy to onboard new contributors
 

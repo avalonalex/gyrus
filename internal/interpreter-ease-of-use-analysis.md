@@ -279,7 +279,7 @@ run_and_print(source)?; // Uses stdin/stdout
 6. ⏳ **Add convenience functions** (separate module?)
    - `run_brainfuck(source)` -> String
    - `run_with_input(source, input)` -> String
-   - Consider creating `ferrous_cortex::convenience` module
+   - Consider creating `gyrus::convenience` module
 
 ---
 

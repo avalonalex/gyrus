@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document tracks optimization patterns that are currently missed by the FerrousCortex optimizer. Each pattern includes examples, current behavior, desired behavior, and implementation notes.
+This document tracks optimization patterns that are currently missed by the gyrus optimizer. Each pattern includes examples, current behavior, desired behavior, and implementation notes.
 
 ## Current Optimizer Capabilities
 
@@ -63,7 +63,7 @@ Both patterns are **mathematically equivalent**:
 
 **Recommendation:** Option A (loop rotation) is cleanest - try each rotation and pick the one that matches a known pattern.
 
-**Code Location:** `crates/ferrous-cortex/src/optimizer.rs:343` (`recognize_loop_pattern`)
+**Code Location:** `crates/gyrus/src/optimizer.rs:343` (`recognize_loop_pattern`)
 
 ---
 
@@ -100,7 +100,7 @@ Currently we only recognize `[>]` and `[<]` for scanning by 1 cell. Many program
 - Modify pattern matcher to recognize `[>+]`, `[>>+]`, etc.
 - Update optimized interpreter to handle variable step sizes
 
-**Code Location:** `crates/ferrous-cortex/src/optimizer.rs:366-378` (SeekRight/SeekLeft pattern recognition)
+**Code Location:** `crates/gyrus/src/optimizer.rs:366-378` (SeekRight/SeekLeft pattern recognition)
 
 ---
 
@@ -139,7 +139,7 @@ Setting a cell to a specific value currently requires separate Zero + Add instru
 - Must handle both `[-]` and `[+]` zero patterns
 - Alternative: Post-optimization pass to fuse Zero + Add → Set
 
-**Code Location:** `crates/ferrous-cortex/src/optimizer.rs:211-340` (optimize_block function)
+**Code Location:** `crates/gyrus/src/optimizer.rs:211-340` (optimize_block function)
 
 **Consideration:** This might be premature - modern JIT compilers can easily fuse these at a lower level. Benefit may be minimal.
 
@@ -333,7 +333,7 @@ Inline simple loop bodies when beneficial.
 
 For each new optimization:
 
-1. **Unit tests** - Add to `crates/ferrous-cortex/src/optimizer.rs` tests
+1. **Unit tests** - Add to `crates/gyrus/src/optimizer.rs` tests
 2. **Integration tests** - Test with real BrainFuck programs
 3. **Regression tests** - Ensure existing optimizations still work
 4. **Compression ratio benchmarks** - Measure improvement on standard programs:
@@ -345,12 +345,12 @@ For each new optimization:
 
 ## Related Files
 
-- **Optimizer implementation:** `crates/ferrous-cortex/src/optimizer.rs`
-- **Optimized interpreter:** `crates/ferrous-cortex/src/optimized_interpreter.rs`
-- **Optimizer tests:** `crates/ferrous-cortex/src/optimizer.rs:484-653`
-- **Optimizer example:** `crates/ferrous-cortex/examples/optimizer.rs`
-- **CLI integration:** `crates/ferrous-cortex-cli/src/main.rs`
-- **Tool visualization:** `crates/ferrous-cortex-tool/src/main.rs` (optimize subcommand)
+- **Optimizer implementation:** `crates/gyrus/src/optimizer.rs`
+- **Optimized interpreter:** `crates/gyrus/src/optimized_interpreter.rs`
+- **Optimizer tests:** `crates/gyrus/src/optimizer.rs:484-653`
+- **Optimizer example:** `crates/gyrus/examples/optimizer.rs`
+- **CLI integration:** `crates/gyrus-cli/src/main.rs`
+- **Tool visualization:** `crates/gyrus-tool/src/main.rs` (optimize subcommand)
 
 ---
 

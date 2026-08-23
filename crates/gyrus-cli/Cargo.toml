@@ -1,0 +1,12 @@
+[package]
+name = "gyrus-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "gyrus"
+path = "src/main.rs"
+
+[dependencies]
+gyrus.workspace = true
+clap.workspace = true

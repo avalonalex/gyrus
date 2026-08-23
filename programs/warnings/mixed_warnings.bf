@@ -6,10 +6,10 @@
 * - Memory expansion (when using unbounded mode)
 *
 * Run with default settings to see cell warnings:
-*   ferrous-cortex programs/warnings/mixed_warnings.bf
+*   gyrus programs/warnings/mixed_warnings.bf
 *
 * Run with unbounded memory to see all warning types:
-*   ferrous-cortex programs/warnings/mixed_warnings.bf --memory-model unbounded --unbounded-initial 3 --unbounded-max 20
+*   gyrus programs/warnings/mixed_warnings.bf --memory-model unbounded --unbounded-initial 3 --unbounded-max 20
 *
 * Expected output: "ABC" (65, 66, 67)
 

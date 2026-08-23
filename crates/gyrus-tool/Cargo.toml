@@ -1,0 +1,18 @@
+[package]
+name = "gyrus-tool"
+version = "0.3.0"
+edition = "2024"
+authors = ["gyrus Contributors"]
+description = "Development and analysis tools for BrainFuck programs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/avalonalex/gyrus"
+
+[[bin]]
+name = "gyrus-tool"
+path = "src/main.rs"
+
+[dependencies]
+gyrus = { path = "../gyrus" }
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.9.2"

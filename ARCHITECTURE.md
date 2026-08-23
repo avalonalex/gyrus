@@ -1,6 +1,6 @@
-# FerrousCortex Architecture
+# gyrus Architecture
 
-This document describes the current architecture of FerrousCortex and provides design notes for future development.
+This document describes the current architecture of gyrus and provides design notes for future development.
 
 **Last updated**: 2025-10-30 (after hook system refactoring)
 
@@ -19,7 +19,7 @@ This document describes the current architecture of FerrousCortex and provides d
 
 ```
 crates/
-├── ferrous-cortex/          # Core library
+├── gyrus/          # Core library
 │   ├── parser.rs            # Source → AST (tree structure)
 │   ├── interpreter.rs       # AST → Execution (tree-walking)
 │   ├── hooks/               # Hook system for instrumentation
@@ -30,8 +30,8 @@ crates/
 │   │   └── cell_model.rs    # Wrapping/Checked cell behaviors
 │   ├── error.rs             # Rich error types with source locations
 │   └── ...
-├── ferrous-cortex-cli/      # CLI binary
-└── ferrous-cortex-tool/     # Development tools
+├── gyrus-cli/      # CLI binary
+└── gyrus-tool/     # Development tools
 ```
 
 ### The Hook System

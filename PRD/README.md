@@ -1,6 +1,6 @@
-# FerrousCortex PRD Directory
+# gyrus PRD Directory
 
-This directory contains Product Requirements Documents (PRDs) for FerrousCortex features and improvements.
+This directory contains Product Requirements Documents (PRDs) for gyrus features and improvements.
 
 ## Structure
 
@@ -69,7 +69,7 @@ See `archived/README.md` for completed features:
 
 ### Previously Completed (October 2025)
 - ✅ **Syntax Highlighter** - ANSI color highlighting for BF code
-- ✅ **Ferrous-Cortex-Tool** - Separated utility CLI from execution CLI
+- ✅ **gyrus-tool** - Separated utility CLI from execution CLI
 - ✅ **Plugin/Hook Architecture** - Extensible execution monitoring system
 - ✅ **Architectural Improvements** - Workspace migration, I/O abstraction
 - ✅ **Hook Refactoring** - Moved stats/limits to hooks, simplified VmState

@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/ferrous-cortex",
-    "crates/ferrous-cortex-cli",
-    "crates/ferrous-cortex-tool",
+    "crates/gyrus",
+    "crates/gyrus-cli",
+    "crates/gyrus-tool",
 ]
 resolver = "2"
 
@@ -16,7 +16,7 @@ thiserror = "2.0.17"
 clap = { version = "4.5.51", features = ["derive"] }
 
 # Internal dependencies
-ferrous-cortex = { path = "crates/ferrous-cortex" }
+gyrus = { path = "crates/gyrus" }
 
 [profile.release]
 lto = true

@@ -6,26 +6,26 @@ This document tracks baseline performance metrics for the interpreter before and
 
 ### Run All Benchmarks
 ```bash
-cargo bench -p ferrous-cortex --bench interpreter
+cargo bench -p gyrus --bench interpreter
 ```
 
 ### Run Specific Benchmarks
 ```bash
 # Quick mode (faster, less accurate)
-cargo bench -p ferrous-cortex --bench interpreter -- --quick hanoi
-cargo bench -p ferrous-cortex --bench interpreter -- --quick mandelbrot
+cargo bench -p gyrus --bench interpreter -- --quick hanoi
+cargo bench -p gyrus --bench interpreter -- --quick mandelbrot
 
 # Full mode (slower, more accurate)
-cargo bench -p ferrous-cortex --bench interpreter -- hanoi
-cargo bench -p ferrous-cortex --bench interpreter -- mandelbrot
+cargo bench -p gyrus --bench interpreter -- hanoi
+cargo bench -p gyrus --bench interpreter -- mandelbrot
 ```
 
 ### Run Simple Benchmarks (Fast)
 ```bash
-cargo bench -p ferrous-cortex --bench interpreter -- simple_arithmetic
-cargo bench -p ferrous-cortex --bench interpreter -- nested_loops
-cargo bench -p ferrous-cortex --bench interpreter -- pointer_movement
-cargo bench -p ferrous-cortex --bench interpreter -- hello_world
+cargo bench -p gyrus --bench interpreter -- simple_arithmetic
+cargo bench -p gyrus --bench interpreter -- nested_loops
+cargo bench -p gyrus --bench interpreter -- pointer_movement
+cargo bench -p gyrus --bench interpreter -- hello_world
 ```
 
 ## Baseline Results (Unoptimized Interpreter)

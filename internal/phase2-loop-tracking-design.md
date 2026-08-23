@@ -153,7 +153,7 @@ The solution is to track **two separate counters** at runtime:
 
 ### 1. Enhanced Parsing (Collect Loop Metadata)
 
-**File**: `crates/ferrous-cortex/src/parser.rs`
+**File**: `crates/gyrus/src/parser.rs`
 
 ```rust
 fn parse_block_with_debug(
@@ -242,7 +242,7 @@ LoopMetadata {
 
 ### 2. Runtime Tracking (Maintain Instruction Index)
 
-**File**: `crates/ferrous-cortex/src/interpreter.rs`
+**File**: `crates/gyrus/src/interpreter.rs`
 
 **Add to VmState**:
 ```rust
@@ -376,7 +376,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
 ### 3. Error Reporting with Loop Stack
 
-**File**: `crates/ferrous-cortex/src/config/memory_model.rs`
+**File**: `crates/gyrus/src/config/memory_model.rs`
 
 **Modified error creation**:
 ```rust
@@ -423,7 +423,7 @@ fn try_increment_pointer(
 
 ### 4. Enhanced Error Display
 
-**File**: `crates/ferrous-cortex/src/error.rs`
+**File**: `crates/gyrus/src/error.rs`
 
 ```rust
 #[derive(Debug, Clone)]
@@ -483,7 +483,7 @@ impl fmt::Display for BfError {
 
 ### Step 1: Extend DebugInfo (1-2 hours)
 
-**File**: `crates/ferrous-cortex/src/debug.rs`
+**File**: `crates/gyrus/src/debug.rs`
 
 - [ ] Add `LoopMetadata` struct
 - [ ] Add `loop_metadata: HashMap<usize, LoopMetadata>` to `DebugInfo`
@@ -493,7 +493,7 @@ impl fmt::Display for BfError {
 
 ### Step 2: Collect Loop Metadata During Parsing (2-3 hours)
 
-**File**: `crates/ferrous-cortex/src/parser.rs`
+**File**: `crates/gyrus/src/parser.rs`
 
 - [ ] Modify `parse_block_with_debug()` to track loop boundaries
 - [ ] Calculate `body_size` for each loop
@@ -502,7 +502,7 @@ impl fmt::Display for BfError {
 
 ### Step 3: Add Runtime Tracking to VmState (2-3 hours)
 
-**File**: `crates/ferrous-cortex/src/interpreter.rs`
+**File**: `crates/gyrus/src/interpreter.rs`
 
 - [ ] Add `instruction_index` field to `VmState`
 - [ ] Add `loop_stack` field to `VmState`
@@ -511,7 +511,7 @@ impl fmt::Display for BfError {
 
 ### Step 4: Update Execution Loop (4-6 hours)
 
-**File**: `crates/ferrous-cortex/src/interpreter.rs`
+**File**: `crates/gyrus/src/interpreter.rs`
 
 - [ ] Modify `execute_block()` signature to accept `start_index`
 - [ ] Update `instruction_index` before each instruction
@@ -522,8 +522,8 @@ impl fmt::Display for BfError {
 ### Step 5: Pass Context to Error Sites (2-3 hours)
 
 **Files**:
-- `crates/ferrous-cortex/src/config/memory_model.rs`
-- `crates/ferrous-cortex/src/config/cell_model.rs`
+- `crates/gyrus/src/config/memory_model.rs`
+- `crates/gyrus/src/config/cell_model.rs`
 
 - [ ] Update trait method signatures to accept `instruction_index` and `loop_stack`
 - [ ] Update all implementations (FixedMemory, UnboundedMemory, WrappingMemory)
@@ -532,7 +532,7 @@ impl fmt::Display for BfError {
 
 ### Step 6: Enhance Error Types (1-2 hours)
 
-**File**: `crates/ferrous-cortex/src/error.rs`
+**File**: `crates/gyrus/src/error.rs`
 
 - [ ] Add `LoopStackFrame` struct
 - [ ] Add `loop_call_stack` field to relevant errors
@@ -541,7 +541,7 @@ impl fmt::Display for BfError {
 
 ### Step 7: Testing (4-6 hours)
 
-**File**: `crates/ferrous-cortex/src/interpreter.rs`
+**File**: `crates/gyrus/src/interpreter.rs`
 
 - [ ] Test simple loop (1 level)
 - [ ] Test nested loops (2-3 levels)
@@ -841,8 +841,8 @@ Once Phase 2 is complete, we can build:
 
 - `internal/debug-symbols-design.md` - Phase 1 implementation details
 - `PRD/debug-symbols-and-runtime-diagnostics.md` - Original PRD
-- `crates/ferrous-cortex/src/debug.rs` - Current DebugInfo implementation
-- `crates/ferrous-cortex/src/interpreter.rs` - Execution engine
+- `crates/gyrus/src/debug.rs` - Current DebugInfo implementation
+- `crates/gyrus/src/interpreter.rs` - Execution engine
 
 ---
 
@@ -913,11 +913,11 @@ Phase 2 has been successfully implemented following the design document with all
 ### Key Files Modified
 
 **Core Implementation**:
-- `crates/ferrous-cortex/src/debug.rs` - Loop metadata structures and DebugInfo extensions
-- `crates/ferrous-cortex/src/parser.rs` - Loop metadata collection during parsing
-- `crates/ferrous-cortex/src/interpreter.rs` - instruction_index tracking and loop stack maintenance
-- `crates/ferrous-cortex/src/config/memory_model.rs` - Loop call stack building in error sites
-- `crates/ferrous-cortex/src/error.rs` - Loop call stack display in error messages
+- `crates/gyrus/src/debug.rs` - Loop metadata structures and DebugInfo extensions
+- `crates/gyrus/src/parser.rs` - Loop metadata collection during parsing
+- `crates/gyrus/src/interpreter.rs` - instruction_index tracking and loop stack maintenance
+- `crates/gyrus/src/config/memory_model.rs` - Loop call stack building in error sites
+- `crates/gyrus/src/error.rs` - Loop call stack display in error messages
 
 **Tests**:
 - Added 12 new tests across debug.rs, parser.rs, and interpreter.rs

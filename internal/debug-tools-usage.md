@@ -2,7 +2,7 @@
 
 ## Quick Reference
 
-FerrousCortex includes tools for inspecting and debugging BrainFuck programs at the source level.
+gyrus includes tools for inspecting and debugging BrainFuck programs at the source level.
 
 ## Debug Symbol Inspector
 
@@ -170,9 +170,9 @@ cargo run -- program.bf --inspect-debug > symbols.txt
 ## Implementation Details
 
 **Files**:
-- `crates/ferrous-cortex/src/debug.rs` - DebugInfo data structure
-- `crates/ferrous-cortex/src/parser.rs` - DFS traversal and index assignment
-- `crates/ferrous-cortex-cli/src/main.rs` - Display formatting (display_debug_symbols)
+- `crates/gyrus/src/debug.rs` - DebugInfo data structure
+- `crates/gyrus/src/parser.rs` - DFS traversal and index assignment
+- `crates/gyrus-cli/src/main.rs` - Display formatting (display_debug_symbols)
 
 **Design**:
 - O(1) lookup using HashMap<step_index, SourceLocation>

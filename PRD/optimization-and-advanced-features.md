@@ -8,7 +8,7 @@ This PRD is the next major feature area after completing error handling, I/O abs
 
 ## Overview
 
-This PRD synthesizes research from the BrainFuck esoteric programming community, particularly insights from esoteric.sange.fi, GitHub implementations, and optimization research papers. It identifies production-grade optimization techniques, language extensions, and developer tools that can significantly enhance FerrousCortex's performance and usability.
+This PRD synthesizes research from the BrainFuck esoteric programming community, particularly insights from esoteric.sange.fi, GitHub implementations, and optimization research papers. It identifies production-grade optimization techniques, language extensions, and developer tools that can significantly enhance gyrus's performance and usability.
 
 **Research Sources:**
 - Esoteric Languages Archive (sange.fi)
@@ -46,7 +46,7 @@ The BrainFuck community has developed sophisticated optimization techniques that
 - GUI debuggers (LazFuck)
 - Command-line debuggers (bfdb)
 
-**Notable Gap:** Most tools focus on either performance OR debugging, rarely both. **FerrousCortex's hook system solves this** - optimizations can preserve hook events for debuggers/profilers while still delivering production-grade performance. This PRD describes a three-tier strategy (see Hook System Integration section below) that balances speed with observability.
+**Notable Gap:** Most tools focus on either performance OR debugging, rarely both. **gyrus's hook system solves this** - optimizations can preserve hook events for debuggers/profilers while still delivering production-grade performance. This PRD describes a three-tier strategy (see Hook System Integration section below) that balances speed with observability.
 
 ## Goals
 
@@ -114,7 +114,7 @@ Before starting this PRD, the following must be complete:
 
 ### Why This Matters
 
-FerrousCortex has a **production-ready hook system** that fundamentally changes how we approach optimizations. The hook system provides:
+gyrus has a **production-ready hook system** that fundamentally changes how we approach optimizations. The hook system provides:
 
 - ✅ **Execution monitoring** via 5 hook points (before/after instruction, loop enter/exit, completion)
 - ✅ **Zero-cost abstraction** when hooks disabled
@@ -1392,10 +1392,10 @@ let config = ExecutionConfigBuilder::new()
 
 ```bash
 # Buffering flags
-ferrous-cortex program.bf --buffer none      # Unbuffered (debugging)
-ferrous-cortex program.bf --buffer line      # Line buffered (default interactive)
-ferrous-cortex program.bf --buffer block     # Block buffered (fastest)
-ferrous-cortex program.bf --buffer auto      # Smart detection (recommended)
+gyrus program.bf --buffer none      # Unbuffered (debugging)
+gyrus program.bf --buffer line      # Line buffered (default interactive)
+gyrus program.bf --buffer block     # Block buffered (fastest)
+gyrus program.bf --buffer auto      # Smart detection (recommended)
 ```
 
 **Impact**:
@@ -1564,7 +1564,7 @@ let config = ExecutionConfigBuilder::new()
 - **Hook System**: Runtime monitoring by external tools (profilers, debuggers, tracers)
   - User adds hooks via API after parsing
   - Transparent to the BF source code
-  - For developers building tools on top of FerrousCortex
+  - For developers building tools on top of gyrus
 
 - **Source-Level Extensions**: Explicit instructions in BF programs
   - Programmer embeds debugging/inspection points directly in code
@@ -1751,7 +1751,7 @@ pub struct ExecutionConfigBuilder<State> {
 **CLI:**
 ```bash
 # Output numbers as decimal instead of ASCII
-ferrous-cortex program.bf --output-format dec
+gyrus program.bf --output-format dec
 
 # Example: Output 65
 +++++++[>++++++++<-]>+.
@@ -1800,8 +1800,8 @@ fn parse_block(...) -> Result<Vec<Instruction>> {
 
 **Usage:**
 ```bash
-$ ferrous-cortex --repl
-FerrousCortex REPL v0.2.0
+$ gyrus --repl
+gyrus REPL v0.2.0
 Type 'help' for commands, 'exit' to quit.
 
 bf> +++++
@@ -1835,7 +1835,7 @@ save <file>   - Save session to file
 
 **Implementation:**
 ```rust
-// New binary: ferrous-cortex-repl
+// New binary: gyrus-repl
 pub fn repl_loop() -> Result<()> {
     let mut rl = Editor::<()>::new()?;
     let mut interpreter_state = InterpreterState::new();
@@ -1875,7 +1875,7 @@ pub fn repl_loop() -> Result<()> {
 
 **Usage:**
 ```bash
-$ ferrous-cortex debug program.bf
+$ gyrus debug program.bf
 
 Debugger started. Type 'help' for commands.
 
@@ -1954,7 +1954,7 @@ impl Debugger {
 
 **Example Output:**
 ```bash
-$ ferrous-cortex program.bf --verbose --show-optimizations
+$ gyrus program.bf --verbose --show-optimizations
 
 === Optimization Report ===
 
@@ -2062,7 +2062,7 @@ impl MemoryVisualizer {
 
 **Example Output:**
 ```bash
-$ ferrous-cortex program.bf --profile
+$ gyrus program.bf --profile
 
 === Performance Profile ===
 
@@ -2121,7 +2121,7 @@ impl Profiler {
 
 **Example:**
 ```bash
-$ ferrous-cortex compile program.bf --target c --output program.c
+$ gyrus compile program.bf --target c --output program.c
 $ gcc -O3 program.c -o program
 $ ./program
 ```
@@ -2168,7 +2168,7 @@ int main() {
 
 **Example:**
 ```bash
-$ ferrous-cortex compile program.bf --target llvm --output program.ll
+$ gyrus compile program.bf --target llvm --output program.ll
 $ llc program.ll -o program.s
 $ clang program.s -o program
 ```
@@ -2517,7 +2517,7 @@ proptest = "1.0"    # Already planned
 - nbfc (C): Basic compiler without optimization
 - Hamster (Scheme): Multi-target optimizing compiler
 
-**FerrousCortex Advantages:**
+**gyrus Advantages:**
 - Rust safety and performance
 - Rich error messages (already implemented)
 - Modular architecture (already implemented)
@@ -2528,9 +2528,9 @@ proptest = "1.0"    # Already planned
 
 ## Conclusion
 
-The BrainFuck esoteric community has developed sophisticated optimization techniques and tooling over decades. By implementing state-of-the-art optimizations and combining them with FerrousCortex's existing strengths (type safety, rich errors, clean architecture, **hook system**), we can create a best-in-class BrainFuck interpreter that excels at both performance and developer experience.
+The BrainFuck esoteric community has developed sophisticated optimization techniques and tooling over decades. By implementing state-of-the-art optimizations and combining them with gyrus's existing strengths (type safety, rich errors, clean architecture, **hook system**), we can create a best-in-class BrainFuck interpreter that excels at both performance and developer experience.
 
-**Key Innovation**: FerrousCortex's three-tier optimization strategy (parse-time, adaptive runtime, AOT/JIT) ensures that debuggers and profilers continue to work even with optimized code - solving the traditional performance-vs-observability tradeoff that plagues other implementations.
+**Key Innovation**: gyrus's three-tier optimization strategy (parse-time, adaptive runtime, AOT/JIT) ensures that debuggers and profilers continue to work even with optimized code - solving the traditional performance-vs-observability tradeoff that plagues other implementations.
 
 **Recommended Next Steps:**
 1. **Phase 1** (4 weeks): Implement Tier 1 optimizations (RLE, constant folding) - hook-transparent
@@ -2541,4 +2541,4 @@ The BrainFuck esoteric community has developed sophisticated optimization techni
 
 See "Hook System Integration" and "Design Decision: Hook Compatibility with Optimizations" sections above for detailed implementation guidelines.
 
-The investment in these features will position FerrousCortex as the premier production-grade BrainFuck interpreter, suitable for both education and serious BrainFuck development.
+The investment in these features will position gyrus as the premier production-grade BrainFuck interpreter, suitable for both education and serious BrainFuck development.

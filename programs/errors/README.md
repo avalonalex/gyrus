@@ -1,10 +1,10 @@
 # Error Handling Examples
 
-This directory contains example BrainFuck programs that demonstrate FerrousCortex's comprehensive error handling and diagnostic capabilities.
+This directory contains example BrainFuck programs that demonstrate gyrus's comprehensive error handling and diagnostic capabilities.
 
 ## Overview
 
-FerrousCortex provides production-grade error handling with:
+gyrus provides production-grade error handling with:
 - **Rich error messages** with source context
 - **Line and column tracking** for precise error locations
 - **Visual error context** with caret (^) pointing to issues
@@ -246,7 +246,7 @@ cargo run -- program.bf --minify --validate -o program.min.bf
 
 ## Understanding Error Messages
 
-FerrousCortex error messages follow this format:
+gyrus error messages follow this format:
 
 ```
 Error: [Error Type] at [Location]
@@ -321,4 +321,4 @@ Found a new error case that should be documented? Create an example file followi
 3. Expected error output
 4. Tips for fixing or understanding the error
 
-Submit examples that help users understand FerrousCortex's error handling!
+Submit examples that help users understand gyrus's error handling!

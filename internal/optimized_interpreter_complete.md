@@ -43,7 +43,7 @@ pub fn interpret_optimized_with_io<I: BfInput, O: BfOutput>(
 
 **Usage:**
 ```rust
-use ferrous_cortex::{parse, optimize, interpret_optimized_with_io, io::StringIo, ExecutionConfig};
+use gyrus::{parse, optimize, interpret_optimized_with_io, io::StringIo, ExecutionConfig};
 
 let source = "+++++[->+++<]"; // 5 * 3 = 15
 let instructions = parse(source)?;
@@ -218,12 +218,12 @@ Expected speedups (to be measured):
 **TODO**: Run benchmarks and update `internal/benchmark_baseline.md` with results:
 ```bash
 # Baseline (unoptimized)
-cargo bench -p ferrous-cortex --bench interpreter -- hanoi
-cargo bench -p ferrous-cortex --bench interpreter -- mandelbrot
+cargo bench -p gyrus --bench interpreter -- hanoi
+cargo bench -p gyrus --bench interpreter -- mandelbrot
 
 # Optimized (need to add benchmarks)
-cargo bench -p ferrous-cortex --bench interpreter_optimized -- hanoi
-cargo bench -p ferrous-cortex --bench interpreter_optimized -- mandelbrot
+cargo bench -p gyrus --bench interpreter_optimized -- hanoi
+cargo bench -p gyrus --bench interpreter_optimized -- mandelbrot
 ```
 
 ## Limitations & Future Work
@@ -255,7 +255,7 @@ cargo bench -p ferrous-cortex --bench interpreter_optimized -- mandelbrot
    - Update documentation with actual numbers
 
 2. **CLI integration**
-   - Add `--optimize` flag to `ferrous-cortex-cli`
+   - Add `--optimize` flag to `gyrus-cli`
    - Parse → optimize → interpret_optimized
    - Compare performance with standard mode
 
@@ -278,25 +278,25 @@ cargo bench -p ferrous-cortex --bench interpreter_optimized -- mandelbrot
 ## Files Created/Modified
 
 ### New Files
-- `crates/ferrous-cortex/src/interpreter/optimized.rs` (407 lines)
+- `crates/gyrus/src/interpreter/optimized.rs` (407 lines)
   - Optimized interpreter implementation
   - 5 unit tests
 
 ### Modified Files
-- `crates/ferrous-cortex/src/interpreter/mod.rs`
+- `crates/gyrus/src/interpreter/mod.rs`
   - Added `mod optimized;`
   - Added `interpret_optimized_with_io()` public API
   - Added documentation
 
-- `crates/ferrous-cortex/src/lib.rs`
+- `crates/gyrus/src/lib.rs`
   - Exported `interpret_optimized_with_io`
 
 ## Integration Example
 
 ```rust
-use ferrous_cortex::{parse, optimize, interpret_optimized_with_io, ExecutionConfigBuilder, io::StringIo};
+use gyrus::{parse, optimize, interpret_optimized_with_io, ExecutionConfigBuilder, io::StringIo};
 
-fn main() -> Result<(), ferrous_cortex::BfError> {
+fn main() -> Result<(), gyrus::BfError> {
     let source = "+++++[->+++>+<<]"; // Multi-target multiply
 
     // Step 1: Parse
