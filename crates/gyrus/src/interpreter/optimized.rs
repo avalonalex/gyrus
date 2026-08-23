@@ -56,7 +56,15 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     let limits = Limits::from_config(&config);
 
     // Execute the optimized program
-    execute_block(instructions, &mut state, &config, &limits, input, output)?;
+    // Monomorphize on whether any limit is configured. With neither --max-steps
+    // nor --timeout set -- the default, and the case every benchmark measures --
+    // CHECK_LIMITS is false and the compiler deletes the per-instruction check
+    // entirely. Leaving it in cost 25-35% on mandelbrot.
+    if limits.max_steps.is_some() || limits.timeout_ms.is_some() {
+        execute_block::<true, _, _>(instructions, &mut state, &config, &limits, input, output)?;
+    } else {
+        execute_block::<false, _, _>(instructions, &mut state, &config, &limits, input, output)?;
+    }
 
     // Collect final statistics.
     //
@@ -136,7 +144,7 @@ impl Limits {
 }
 
 /// Execute a block of optimized instructions
-fn execute_block<I: BfInput, O: BfOutput>(
+fn execute_block<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
     instructions: &[OptimizedInstruction],
     state: &mut VmState,
     config: &ExecutionConfig,
@@ -146,10 +154,19 @@ fn execute_block<I: BfInput, O: BfOutput>(
 ) -> ExecutionResult {
     for instruction in instructions {
         // Check execution limits
-        check_limits(state, limits)?;
+        if CHECK_LIMITS {
+            check_limits(state, limits)?;
+        }
 
         // Execute the instruction
-        execute_instruction(instruction, state, config, limits, input, output)?;
+        execute_instruction::<CHECK_LIMITS, _, _>(
+            instruction,
+            state,
+            config,
+            limits,
+            input,
+            output,
+        )?;
 
         // Increment step count (each optimized instruction = 1 step)
         state.step_count = crate::types::StepCount::new(state.step_count.get() + 1);
@@ -160,7 +177,7 @@ fn execute_block<I: BfInput, O: BfOutput>(
 
 /// Execute a single optimized instruction
 #[inline]
-fn execute_instruction<I: BfInput, O: BfOutput>(
+fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
     instruction: &OptimizedInstruction,
     state: &mut VmState,
     config: &ExecutionConfig,
@@ -296,7 +313,9 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                     break;
                 }
                 // A seek is a loop: honour step/time limits so it cannot spin forever
-                check_limits(state, limits)?;
+                if CHECK_LIMITS {
+                    check_limits(state, limits)?;
+                }
 
                 // Move right
                 state.memory_model.try_increment_pointer(
@@ -318,7 +337,9 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                 if state.memory[ptr] == 0 {
                     break;
                 }
-                check_limits(state, limits)?;
+                if CHECK_LIMITS {
+                    check_limits(state, limits)?;
+                }
 
                 // Move left
                 state.memory_model.try_decrement_pointer(
@@ -406,12 +427,14 @@ fn execute_instruction<I: BfInput, O: BfOutput>(
                 // Check limits per iteration, not only per instruction: a loop with
                 // an empty body (`[]`) executes no instructions, so without this the
                 // step limit and timeout would never be consulted and it would hang.
-                check_limits(state, limits)?;
+                if CHECK_LIMITS {
+                    check_limits(state, limits)?;
+                }
                 // The `[` condition check is itself a step, which is also what lets
                 // the step limit make progress on an empty body.
                 state.step_count = crate::types::StepCount::new(state.step_count.get() + 1);
                 state.loop_iterations += 1;
-                execute_block(body, state, config, limits, input, output)?;
+                execute_block::<CHECK_LIMITS, _, _>(body, state, config, limits, input, output)?;
             }
 
             state.loop_depth -= 1;
