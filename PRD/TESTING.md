@@ -602,6 +602,6 @@ The testing infrastructure is **production-ready** with:
 ## References
 
 - **D.B. Cristofani's BF Programs**: http://www.hevanet.com/cristofd/brainfuck/
-- **Fibonacci Algorithm**: `programs/advanced/fibonacci_README.md`
+- **Fibonacci Algorithm**: `programs/third-party/advanced/fibonacci_README.md`
 - **Test Manifest**: `programs/test_manifest.toml`
 - **Test Utilities**: `crates/gyrus/src/test_utils.rs`

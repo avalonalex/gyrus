@@ -2,6 +2,12 @@
 
 This directory contains BrainFuck programs for testing and demonstrating gyrus functionality.
 
+Programs written for this project live in `basic/`, `tests/`, `errors/`,
+`warnings/`, and `debug/`, and are MIT licensed along with the rest of gyrus.
+Programs written by **other authors** live under `third-party/` and keep their
+own licenses — see [`third-party/CREDITS.md`](third-party/CREDITS.md) for
+per-file attribution.
+
 ## Directory Structure
 
 ### `basic/` - Introductory Programs
@@ -20,27 +26,28 @@ cargo run -- programs/basic/hello_world.bf
 cargo run -- programs/basic/simple.bf
 ```
 
-### `advanced/` - Complex Programs
+### `third-party/advanced/` - Complex Programs
 
-More sophisticated BrainFuck programs showcasing advanced capabilities.
+Sophisticated BrainFuck programs by other authors, used as a correctness and
+performance corpus. See [`third-party/CREDITS.md`](third-party/CREDITS.md).
 
 - **`quine.bf`** - Self-replicating program (prints its own source code)
 - **`factor.bf`** - Integer factorization program
 - **`rot13.bf`** - ROT13 Caesar cipher (interactive/infinite loop)
 - **`fibonacci.bf`** - Fibonacci sequence generator with sophisticated multi-digit arithmetic (see fibonacci_README.md)
-- **`deep_nesting.bf`** - Deeply nested loops for testing parser and validator
 
 **Run examples:**
 ```bash
-cargo run -- programs/advanced/quine.bf
-cargo run -- programs/advanced/factor.bf
-echo "Hello World" | cargo run -- programs/advanced/rot13.bf  # Ctrl-C to stop
-cargo run -- programs/advanced/fibonacci.bf  # Ctrl-C to stop
+cargo run -- programs/third-party/advanced/quine.bf
+cargo run -- programs/third-party/advanced/factor.bf
+echo "Hello World" | cargo run -- programs/third-party/advanced/rot13.bf  # Ctrl-C to stop
+cargo run -- programs/third-party/advanced/fibonacci.bf  # Ctrl-C to stop
 ```
 
-### `utilities/` - Practical Utilities
+### `third-party/utilities/` - Practical Utilities
 
-Small, useful programs from D.B. Cristofani's collection demonstrating that BrainFuck can be practical.
+Small, useful programs from D.B. Cristofani's collection (CC BY-SA 4.0),
+demonstrating that BrainFuck can be practical.
 
 - **`cat.bf`** - Copy input to output (`,[ .[-],]`)
 - **`reverse.bf`** - Reverse input text
@@ -54,13 +61,13 @@ Small, useful programs from D.B. Cristofani's collection demonstrating that Brai
 
 **Run examples:**
 ```bash
-echo "hello" | cargo run -- programs/utilities/cat.bf
-echo "hello" | cargo run -- programs/utilities/reverse.bf  # outputs: olleh
-cargo run -- programs/utilities/beep.bf  # ring terminal bell
-cargo run -- programs/utilities/brainfuck_print.bf
+echo "hello" | cargo run -- programs/third-party/utilities/cat.bf
+echo "hello" | cargo run -- programs/third-party/utilities/reverse.bf  # outputs: olleh
+cargo run -- programs/third-party/utilities/beep.bf  # ring terminal bell
+cargo run -- programs/third-party/utilities/brainfuck_print.bf
 ```
 
-**Source**: http://www.hevanet.com/cristofd/brainfuck/
+**Source**: <http://brainfuck.org/> — see [`third-party/CREDITS.md`](third-party/CREDITS.md)
 
 ### `warnings/` - Runtime Warning Demonstrations
 
@@ -92,6 +99,7 @@ Programs designed to test specific gyrus features.
 - **`warnings_only.bf`** - Contains only warning-triggering patterns
 - **`infinite_loop.bf`** - Infinite loop for testing step limits
 - **`infinite_loop2.bf`** - Alternative infinite loop pattern
+- **`deep_nesting.bf`** - Deeply nested loops (12 levels) for testing parser and validator
 
 **Run examples:**
 ```bash
@@ -142,7 +150,7 @@ cargo run -- programs/basic/hello_world.bf --verbose
 cargo run -- programs/tests/infinite_loop.bf --max-steps 10000
 
 # Different memory models
-cargo run -- programs/advanced/factor.bf --memory-model unbounded
+cargo run -- programs/third-party/advanced/factor.bf --memory-model unbounded
 
 # Validate before running
 cargo run -- programs/tests/warnings_test.bf --validate
@@ -150,13 +158,11 @@ cargo run -- programs/tests/warnings_test.bf --validate
 
 ## Statistics
 
-- **Total programs**: 33
-- **Directories**: 5 (basic, advanced, utilities, tests, errors)
+- **Total programs**: 52
+- **Written for gyrus (MIT)**: 24 — basic (5), tests (7), errors (7), warnings (4), debug (1)
+- **Third-party**: 28 — `third-party/advanced` (19), `third-party/utilities` (9)
 - **Coverage**: Basic syntax, advanced algorithms, practical utilities, error cases, edge cases
-- **Sources**:
-  - Original implementations
-  - D.B. Cristofani's collection
-  - Community contributions
+- **Attribution**: see [`third-party/CREDITS.md`](third-party/CREDITS.md)
 
 ## Contributing Programs
 

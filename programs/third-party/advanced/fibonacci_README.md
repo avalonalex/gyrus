@@ -138,7 +138,7 @@ Because this program runs indefinitely, testing requires a step limit to simulat
 
 ```bash
 # Run manually (Ctrl-C to stop)
-cargo run -- programs/advanced/fibonacci.bf
+cargo run -- programs/third-party/advanced/fibonacci.bf
 
 # Automated test (see tests/program_corpus.rs)
 # - Let program run with step limit

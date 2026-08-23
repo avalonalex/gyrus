@@ -269,10 +269,10 @@ Hint: Use --debug for source location tracking and better error messages
 **Command:**
 ```bash
 # Baseline (debug mode)
-time cargo run --release -p gyrus-cli -- programs/advanced/hanoi.bf --debug
+time cargo run --release -p gyrus-cli -- programs/third-party/advanced/hanoi.bf --debug
 
 # Optimized (default)
-time cargo run --release -p gyrus-cli -- programs/advanced/hanoi.bf
+time cargo run --release -p gyrus-cli -- programs/third-party/advanced/hanoi.bf
 ```
 
 ### simple.bf (Print 'H')
