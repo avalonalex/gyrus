@@ -4,15 +4,19 @@
 
 If you are going to run BrainFuck in production, run it on gyrus.
 
-You are not going to run BrainFuck in production. But suppose you did. You would
-want an unmatched bracket to name the line it sits on. You would want to know
-which loop is burning 99% of your runtime. You would want the choice of an
-interpreter that refuses to let arithmetic wrap silently, and tells you that
-cell 0 overflowed at line 412, column 7, rather than rolling to zero and
-poisoning everything downstream. You would want a step limit and a wall-clock
-timeout, because a hung BrainFuck program tells you precisely nothing.
+When a bracket does not close, you get the line and the column, not a program
+that quietly does the wrong thing forever — and you get *every* unbalanced
+bracket in one pass, not the first one. When something is slow, `--trace` shows
+you which loop is burning 99% of your runtime. When arithmetic leaves the
+range you expected, `--cell-model checked` halts and reports that cell 0
+overflowed at line 412, column 7, instead of rolling to zero and poisoning
+everything downstream. A runaway program dies on a step limit or a wall-clock
+timeout rather than hanging the pipeline behind it. Memory is bounds-checked or
+grows on demand, and the three semantic knobs — memory model, cell model, EOF
+behaviour — are fully independent, so you can match whatever dialect your
+program was written against instead of arguing with the interpreter.
 
-gyrus has all of that. The language deserves none of it. That is the fun.
+The language deserves none of this. That is the fun.
 
 What it is being asked to support: BrainFuck has eight instructions, no
 variables, no functions, no types, and no error messages. It was built in 1993
