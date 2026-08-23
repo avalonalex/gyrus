@@ -831,6 +831,10 @@ cargo fmt --all -- --check
 
 scripts/check-msrv.sh                 # builds on the MSRV declared in Cargo.toml
 scripts/check-readme-commands.py      # every flag documented here really exists
+
+scripts/benchmark.sh                  # time the interpreter, verify output
+scripts/benchmark.sh --profile PROG   # execution profile via --trace
+cargo bench                           # criterion micro-benchmarks
 ```
 
 The last two guard claims that rot quietly: the declared MSRV, and this file's

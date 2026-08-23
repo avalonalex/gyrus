@@ -27,5 +27,3 @@ target
 
 /target
 
-# Compiled benchmark binaries (build with: rustc -O benchmarks/mandelbrot.rs)
-benchmarks/mandelbrot
