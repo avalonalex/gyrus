@@ -12,6 +12,15 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/avalonalex/gyrus"
 
+# Minimum supported Rust version, verified rather than assumed: 1.85 (the
+# edition-2024 floor) does NOT build this workspace — `src/interpreter/mod.rs`
+# and four other files use let-chains in 12 places, and those stabilized in
+# 1.88. On 1.88 the whole workspace compiles (including tests, benches, and
+# examples) and all 302 tests pass; on 1.85 it fails with 12 x E0658.
+#
+# Re-verify with: cargo +1.88 test --workspace
+rust-version = "1.88"
+
 # Shared dependencies across the workspace
 #
 # Versions are stated at the granularity of a *breaking* change, and nothing
