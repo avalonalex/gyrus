@@ -12,6 +12,12 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/avalonalex/gyrus"
 
+# Not published to crates.io. This is a learning project, not a dependency
+# anyone should take on, and a name on the registry is a commitment to keep.
+# `publish = false` makes `cargo publish` fail rather than relying on nobody
+# running it.
+publish = false
+
 # Minimum supported Rust version, verified rather than assumed: 1.85 (the
 # edition-2024 floor) does NOT build this workspace — `src/interpreter/mod.rs`
 # and four other files use let-chains in 12 places, and those stabilized in

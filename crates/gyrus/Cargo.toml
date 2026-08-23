@@ -3,17 +3,13 @@ name = "gyrus"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "A BrainFuck interpreter, optimizer, and debugger with source-located errors, syntax highlighting, and configurable memory and cell models"
 license.workspace = true
 repository.workspace = true
-documentation = "https://docs.rs/gyrus"
 readme = "../../README.md"
 keywords = ["brainfuck", "interpreter", "debugger", "esoteric"]
 categories = ["development-tools", "parser-implementations"]
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 thiserror.workspace = true
