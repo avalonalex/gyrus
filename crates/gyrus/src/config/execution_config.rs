@@ -257,20 +257,8 @@ impl ExecutionConfigBuilder<Unbuilt> {
         initial_size: usize,
         max_size: usize,
     ) -> Result<ExecutionConfigBuilder<ReadyToBuild>> {
-        if initial_size > max_size {
-            return Err(BfError::ConfigurationError {
-                message: format!(
-                    "initial_size ({}) cannot exceed max_size ({})",
-                    initial_size, max_size
-                ),
-            });
-        }
-
-        if initial_size == 0 {
-            return Err(BfError::ConfigurationError {
-                message: "initial_size must be greater than 0".to_string(),
-            });
-        }
+        // Validation lives in UnboundedMemory::new so that every route into the
+        // type is checked, not only this one.
 
         if max_size == 0 {
             return Err(BfError::ConfigurationError {
@@ -281,7 +269,7 @@ impl ExecutionConfigBuilder<Unbuilt> {
         self.memory_model = Some(MemoryModel::Unbounded(UnboundedMemory::new(
             MemorySize::new(initial_size),
             MemorySize::new(max_size),
-        )));
+        )?));
 
         Ok(ExecutionConfigBuilder {
             memory_model: self.memory_model,

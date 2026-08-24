@@ -154,16 +154,28 @@ pub struct OptimizedProgram {
     pub original_count: usize,
     /// Optimized instruction count (after optimization)
     pub optimized_count: usize,
+    /// The cell model these instructions were optimized for.
+    ///
+    /// Not every fold is valid under every cell model, so a program is only
+    /// meaningful under the model it was built for. Carrying it here lets
+    /// `interpret_optimized` reject a mismatch instead of silently running a
+    /// program whose folds do not hold. See [`optimize_with_cell_model`].
+    pub cell_model: CellModel,
 }
 
 impl OptimizedProgram {
-    /// Create a new optimized program
-    pub fn new(instructions: Vec<OptimizedInstruction>, original_count: usize) -> Self {
+    /// Create a new optimized program built for `cell_model`.
+    pub fn new(
+        instructions: Vec<OptimizedInstruction>,
+        original_count: usize,
+        cell_model: CellModel,
+    ) -> Self {
         let optimized_count = count_instructions(&instructions);
         Self {
             instructions,
             original_count,
             optimized_count,
+            cell_model,
         }
     }
 
@@ -193,10 +205,10 @@ fn count_instructions(instructions: &[OptimizedInstruction]) -> usize {
 /// Applies instruction fusion and pattern recognition to create an optimized IR.
 /// Preserves source location ranges for debugging.
 ///
-/// **The result is only valid under [`CellModel::U8Wrapping`].** Multiply-loop
-/// folding assumes wrapping arithmetic; run it under checked cells and an
-/// overflow the unfused program would have reported is silently wrapped away.
-/// Use [`optimize_with_cell_model`] when the cell model is not the default.
+/// The result records [`CellModel::U8Wrapping`], and `interpret_optimized`
+/// rejects it under any other model rather than running folds that do not hold
+/// there. Use [`optimize_with_cell_model`] when the cell model is not the
+/// default.
 pub fn optimize(instructions: &[Instruction]) -> OptimizedProgram {
     optimize_with_cell_model(instructions, CellModel::default())
 }
@@ -225,7 +237,7 @@ pub fn optimize_with_cell_model(
     let fold_multiply = matches!(cell_model, CellModel::U8Wrapping(_));
     let original_count = count_original_instructions(instructions);
     let optimized = optimize_block(instructions, 0, fold_multiply).0;
-    OptimizedProgram::new(optimized, original_count)
+    OptimizedProgram::new(optimized, original_count, cell_model)
 }
 
 /// Count original instructions (including nested loops)

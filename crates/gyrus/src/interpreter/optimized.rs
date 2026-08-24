@@ -13,8 +13,9 @@ use super::state::{ExecutionFlow, ExecutionResult, VmState};
 use crate::config::ExecutionConfig;
 use crate::error::{BfError, Result};
 use crate::io::{BfInput, BfOutput};
-use crate::optimizer::OptimizedInstruction;
+use crate::optimizer::{OptimizedInstruction, OptimizedProgram};
 use crate::stats::ExecutionStats;
+use crate::types::StepCount;
 
 /// Execute optimized instructions
 ///
@@ -32,12 +33,14 @@ use crate::stats::ExecutionStats;
 /// # Limitations
 ///
 /// - No debug symbol support (for debugging, use standard interpreter)
-/// - Step counting is approximate (each optimized instruction = 1 step)
+/// - Step counting is approximate: one step per optimized instruction, except
+///   seeks, which cost one step per cell examined so that `--max-steps` bounds
+///   a runaway seek the same way it bounds the unfused loop
 /// - Hooks are not yet supported (future enhancement)
 ///
 /// # Arguments
 ///
-/// * `instructions` - Optimized instruction sequence from `optimize()`
+/// * `program` - Optimized program from `optimize()` / `optimize_with_cell_model()`
 /// * `config` - Execution configuration (memory model, limits, etc.)
 /// * `input` - Input source
 /// * `output` - Output destination
@@ -46,25 +49,79 @@ use crate::stats::ExecutionStats;
 ///
 /// Execution statistics on success, or an error if execution fails.
 pub fn interpret_optimized<I: BfInput, O: BfOutput>(
-    instructions: &[OptimizedInstruction],
+    program: &OptimizedProgram,
     config: ExecutionConfig,
     input: &mut I,
     output: &mut O,
 ) -> Result<ExecutionStats> {
+    // A program is only meaningful under the cell model it was optimized for:
+    // `optimize` folds `[->+++<]` into a single wrapping multiply, which under
+    // checked cells skips the overflow the unfused loop reports. Refusing the
+    // mismatch here is what makes that safety property hold for every caller,
+    // rather than only for the ones that read the rustdoc.
+    if program.cell_model != *config.cell_model() {
+        return Err(BfError::ConfigurationError {
+            message: format!(
+                "program was optimized for {} but is being run with {}. \
+                 Build it with optimize_with_cell_model(instructions, config.cell_model()).",
+                program.cell_model,
+                config.cell_model()
+            ),
+        });
+    }
+
+    let instructions = &program.instructions;
     let mut state = VmState::new(*config.memory_model());
     let mut stats = ExecutionStats::default();
     let limits = Limits::from_config(&config);
 
-    // Execute the optimized program
+    // Execute the optimized program.
+    //
     // Monomorphize on whether any limit is configured. With neither --max-steps
     // nor --timeout set -- the default, and the case every benchmark measures --
     // CHECK_LIMITS is false and the compiler deletes the per-instruction check
     // entirely. Leaving it in cost 25-35% on mandelbrot.
-    if limits.max_steps.is_some() || limits.timeout_ms.is_some() {
-        execute_block::<true, _, _>(instructions, &mut state, &config, &limits, input, output)?;
-    } else {
-        execute_block::<false, _, _>(instructions, &mut state, &config, &limits, input, output)?;
-    }
+    //
+    // Monomorphize on the cell model for the same reason: it is fixed for the
+    // whole run, so testing it per instruction puts a branch the compiler
+    // cannot hoist inside every loop body. WRAPPING selects the whole-run
+    // arithmetic and deletes the &dyn CellBehavior path from the build.
+    let limited = limits.max_steps.is_some() || limits.timeout_ms.is_some();
+    let wrapping = matches!(program.cell_model, crate::config::CellModel::U8Wrapping(_));
+    match (limited, wrapping) {
+        (true, true) => execute_block::<true, true, _, _>(
+            instructions,
+            &mut state,
+            &config,
+            &limits,
+            input,
+            output,
+        )?,
+        (true, false) => execute_block::<true, false, _, _>(
+            instructions,
+            &mut state,
+            &config,
+            &limits,
+            input,
+            output,
+        )?,
+        (false, true) => execute_block::<false, true, _, _>(
+            instructions,
+            &mut state,
+            &config,
+            &limits,
+            input,
+            output,
+        )?,
+        (false, false) => execute_block::<false, false, _, _>(
+            instructions,
+            &mut state,
+            &config,
+            &limits,
+            input,
+            output,
+        )?,
+    };
 
     // Collect final statistics.
     //
@@ -144,7 +201,7 @@ impl Limits {
 }
 
 /// Execute a block of optimized instructions
-fn execute_block<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
+fn execute_block<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: BfOutput>(
     instructions: &[OptimizedInstruction],
     state: &mut VmState,
     config: &ExecutionConfig,
@@ -159,7 +216,7 @@ fn execute_block<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
         }
 
         // Execute the instruction
-        execute_instruction::<CHECK_LIMITS, _, _>(
+        execute_instruction::<CHECK_LIMITS, WRAPPING, _, _>(
             instruction,
             state,
             config,
@@ -177,7 +234,7 @@ fn execute_block<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
 
 /// Execute a single optimized instruction
 #[inline]
-fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
+fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: BfOutput>(
     instruction: &OptimizedInstruction,
     state: &mut VmState,
     config: &ExecutionConfig,
@@ -195,7 +252,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
             // cannot inline the single wrapping_add it wraps. Wrapping cells
             // add the whole run at once; checked cells keep the per-step loop,
             // which is what produces the overflow error at the right value.
-            if let crate::config::CellModel::U8Wrapping(_) = config.cell_model() {
+            if WRAPPING {
                 state.memory[ptr] = state.memory[ptr].wrapping_add(*n);
                 return Ok(ExecutionFlow::Continue);
             }
@@ -213,7 +270,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
 
         OptimizedInstruction::Sub(n, _range) => {
             let ptr = state.pointer.get();
-            if let crate::config::CellModel::U8Wrapping(_) = config.cell_model() {
+            if WRAPPING {
                 state.memory[ptr] = state.memory[ptr].wrapping_sub(*n);
                 return Ok(ExecutionFlow::Continue);
             }
@@ -350,17 +407,32 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
             // iteration through the memory model. A seek is a search, so it
             // cannot collapse to a single add -- but it is a search for a zero
             // byte in a slice, which the standard library scans far faster than
-            // a call per cell. Only taken when the zero is actually there and
-            // no limits are armed; otherwise the original loop runs, which is
-            // what grows an unbounded tape and reports a fixed one's overrun,
-            // and what consults the step limit per cell.
-            let ptr = state.pointer.get();
-            if !CHECK_LIMITS && let Some(offset) = state.memory[ptr..].iter().position(|&b| b == 0)
-            {
-                let end = ptr + offset;
-                state.pointer = crate::types::MemoryAddress::new(end);
-                state.peak_pointer = state.peak_pointer.max(end);
-                return Ok(ExecutionFlow::Continue);
+            // a call per cell.
+            //
+            // Either way the seek is charged one step per cell it examines. The
+            // unfused `[>]` costs a step per cell, so charging one per fused
+            // instruction would let a runaway seek outrun --max-steps forever:
+            // check_limits compares a step_count that never moved. Under limits
+            // the per-cell loop runs, so the limit fires on the same cell the
+            // debug interpreter stops on rather than a tape-length late.
+            let start = state.pointer.get();
+            if !CHECK_LIMITS {
+                if let Some(offset) = state.memory[start..].iter().position(|&b| b == 0) {
+                    let end = start + offset;
+                    state.pointer = crate::types::MemoryAddress::new(end);
+                    state.peak_pointer = state.peak_pointer.max(end);
+                    state.step_count = StepCount::new(state.step_count.get() + offset as u64);
+                    return Ok(ExecutionFlow::Continue);
+                }
+                // No zero on the tape as it stands. Every cell from `start` to
+                // the end is non-zero, so walking them can only succeed; skip to
+                // the last one rather than scanning them a second time, and let
+                // the loop take it from there -- growing an unbounded tape, or
+                // reporting a fixed one's overrun.
+                let last = state.memory.len() - 1;
+                state.step_count = StepCount::new(state.step_count.get() + (last - start) as u64);
+                state.pointer = crate::types::MemoryAddress::new(last);
+                state.peak_pointer = state.peak_pointer.max(last);
             }
             loop {
                 let ptr = state.pointer.get();
@@ -380,6 +452,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
                     None,
                     0,
                 )?;
+                state.step_count = StepCount::new(state.step_count.get() + 1);
             }
             state.peak_pointer = state.peak_pointer.max(state.pointer.get());
             Ok(ExecutionFlow::Continue)
@@ -387,12 +460,15 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
 
         OptimizedInstruction::SeekLeft(_range) => {
             // [<] → seek to previous zero cell. See SeekRight for why this is a
-            // scan rather than a per-cell call, and when it defers to the loop.
-            // rposition indexes the `..=ptr` prefix, so it is already absolute.
-            let ptr = state.pointer.get();
-            if !CHECK_LIMITS && let Some(found) = state.memory[..=ptr].iter().rposition(|&b| b == 0)
+            // scan rather than a per-cell call, why it is charged per cell, and
+            // when it defers to the loop. rposition indexes the `..=ptr` prefix,
+            // so it is already absolute.
+            let start = state.pointer.get();
+            if !CHECK_LIMITS
+                && let Some(found) = state.memory[..=start].iter().rposition(|&b| b == 0)
             {
                 state.pointer = crate::types::MemoryAddress::new(found);
+                state.step_count = StepCount::new(state.step_count.get() + (start - found) as u64);
                 return Ok(ExecutionFlow::Continue);
             }
             loop {
@@ -413,6 +489,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
                     None,
                     0,
                 )?;
+                state.step_count = StepCount::new(state.step_count.get() + 1);
             }
             Ok(ExecutionFlow::Continue)
         }
@@ -497,7 +574,9 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
                 // the step limit make progress on an empty body.
                 state.step_count = crate::types::StepCount::new(state.step_count.get() + 1);
                 state.loop_iterations += 1;
-                execute_block::<CHECK_LIMITS, _, _>(body, state, config, limits, input, output)?;
+                execute_block::<CHECK_LIMITS, WRAPPING, _, _>(
+                    body, state, config, limits, input, output,
+                )?;
             }
 
             state.loop_depth -= 1;
@@ -510,6 +589,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
 mod tests {
     use super::*;
     use crate::ExecutionConfigBuilder;
+    use crate::config::CellModel;
     use crate::io::StringIo;
     use crate::optimizer::{OptimizedInstruction, SourceRange, optimize, optimize_with_cell_model};
     use crate::parse;
@@ -521,12 +601,16 @@ mod tests {
     // the fast path must agree with the loop, and the loop must still produce
     // the errors it always did.
 
+    /// Optimize for the model the config actually uses, then run. Optimizing
+    /// with `optimize()` here would build a wrapping program and hand it to a
+    /// checked-cells config -- which `interpret_optimized` now rejects, but
+    /// which used to pass silently and made checked-cell tests test nothing.
     fn run_opt(src: &str, config: crate::config::ExecutionConfig) -> Result<String> {
         let instructions = parse(src).unwrap();
-        let program = optimize(&instructions);
+        let program = optimize_with_cell_model(&instructions, *config.cell_model());
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
-        interpret_optimized(&program.instructions, config, &mut input, &mut output)?;
+        interpret_optimized(&program, config, &mut input, &mut output)?;
         Ok(output.output_string())
     }
 
@@ -603,12 +687,8 @@ mod tests {
             .with_memory_size(100)
             .with_checked_cells()
             .build();
-        let instructions = parse(format!("{}[->+++<]>.", "+".repeat(100)).as_str()).unwrap();
-        let program = optimize_with_cell_model(&instructions, *config.cell_model());
-        let mut input = StringIo::empty();
-        let mut output = StringIo::empty();
-        let err = interpret_optimized(&program.instructions, config, &mut input, &mut output)
-            .unwrap_err();
+        let src = format!("{}[->+++<]>.", "+".repeat(100));
+        let err = run_opt(&src, config).unwrap_err();
         assert!(matches!(err, BfError::CellOverflow { .. }), "got {err:?}");
     }
 
@@ -635,12 +715,16 @@ mod tests {
 
     #[test]
     fn test_optimized_add() {
-        let instructions = vec![OptimizedInstruction::Add(5, SourceRange::new(0, 5))];
+        let program = OptimizedProgram::new(
+            vec![OptimizedInstruction::Add(5, SourceRange::new(0, 5))],
+            5,
+            CellModel::default(),
+        );
         let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats = interpret_optimized(&instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&program, config, &mut input, &mut output).unwrap();
 
         assert_eq!(stats.total_steps, crate::types::StepCount::new(1)); // Single optimized instruction
     }
@@ -655,8 +739,7 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         // Should be 2 steps: Add(3) + Zero
         assert_eq!(stats.total_steps, crate::types::StepCount::new(2));
@@ -677,8 +760,7 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         assert_eq!(stats.bytes_written, 2, "two Output instructions ran");
         assert_eq!(stats.bytes_read, 0, "program reads no input");
@@ -703,8 +785,7 @@ mod tests {
         let mut input = StringIo::new("hi");
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         assert_eq!(stats.bytes_read, 2);
         assert_eq!(stats.bytes_written, 2);
@@ -725,8 +806,7 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         assert_eq!(stats.loop_iterations, 3, "loop body ran once per decrement");
         assert_eq!(stats.bytes_written, 3);
@@ -744,8 +824,7 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         assert_eq!(stats.cells_modified, 0, "the cell was cleared before exit");
         assert_eq!(stats.loop_iterations, 0, "the loop was fused into Zero");
@@ -761,8 +840,7 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let _stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let _stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         // Result should be: cell[0] = 0, cell[1] = 15
         // We'd need to expose final state to verify, but at least it should not error
@@ -779,8 +857,7 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
         // Should be 3 steps: Add(5), Right(1), Add(3), Right(1), Add(2)
         // Wait, that's 5 steps. Let me recalculate:
@@ -790,7 +867,8 @@ mod tests {
 
     #[test]
     fn test_optimized_seek_pattern() {
-        // Seek pattern: [>] should execute as single operation
+        // Seek pattern: [>] executes as a single operation, but is charged for
+        // the cells it walks -- see `seek_is_charged_one_step_per_cell`.
         let source = "+++++[>]";
         let instructions = parse(source).unwrap();
         let optimized = optimize(&instructions);
@@ -799,11 +877,97 @@ mod tests {
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
 
-        let stats =
-            interpret_optimized(&optimized.instructions, config, &mut input, &mut output).unwrap();
+        let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
-        // Should be 2 steps: Add(5) + SeekRight
-        assert_eq!(stats.total_steps.get(), 2);
+        // Add(5) is 1 step; the seek is 1 for the instruction plus 1 for the
+        // single cell it moved over (cell 0 is non-zero, cell 1 is not).
+        assert_eq!(stats.total_steps.get(), 3);
+    }
+
+    /// A seek costs a step per cell examined, not a flat one per instruction.
+    /// Charging a flat step is what let a runaway seek outrun --max-steps: the
+    /// limit check compared a step_count that never moved while the seek span.
+    #[test]
+    fn seek_is_charged_one_step_per_cell() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let instructions = parse(">+>+>+[<]").unwrap();
+        let program = optimize_with_cell_model(&instructions, *config.cell_model());
+        let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+        let stats = interpret_optimized(&program, config, &mut i, &mut o).unwrap();
+
+        // Seven optimized instructions -- Right(1), Add(1) three times over,
+        // then SeekLeft -- and the seek walks cells 3, 2 and 1 to reach the
+        // zero at cell 0, so it is charged three more.
+        assert_eq!(program.optimized_count, 7);
+        assert_eq!(stats.total_steps.get(), 7 + 3);
+    }
+
+    /// A program carries the cell model it was optimized for, and running it
+    /// under a different one is refused rather than silently executing folds
+    /// that do not hold there.
+    #[test]
+    fn running_a_program_under_the_wrong_cell_model_is_refused() {
+        let instructions = parse("[->+++<]").unwrap();
+        let program = optimize(&instructions); // wrapping
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+        let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+        let err = interpret_optimized(&program, config, &mut i, &mut o).unwrap_err();
+        assert!(
+            matches!(err, BfError::ConfigurationError { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// Seeks take one path with limits armed and another without. Both must
+    /// land on the same cell and charge the same steps, or --max-steps would
+    /// change a program's result rather than just bounding it.
+    #[test]
+    fn both_seek_paths_agree() {
+        let build = |limited: bool| {
+            let b = ExecutionConfigBuilder::new().with_memory_size(100);
+            if limited {
+                b.with_max_steps(1_000_000).build()
+            } else {
+                b.build()
+            }
+        };
+        for src in [">+>+>+[<]", "+>+>+><<<[>]", "[>]", "[<]", "+>+>[<]"] {
+            let mut seen = Vec::new();
+            for limited in [false, true] {
+                let config = build(limited);
+                let instructions = parse(src).unwrap();
+                let program = optimize_with_cell_model(&instructions, *config.cell_model());
+                let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+                let stats = interpret_optimized(&program, config, &mut i, &mut o).unwrap();
+                seen.push((stats.total_steps.get(), stats.peak_memory_used.get()));
+            }
+            assert_eq!(
+                seen[0], seen[1],
+                "{src}: unlimited={:?} limited={:?}",
+                seen[0], seen[1]
+            );
+        }
+    }
+
+    /// The step limit must be able to stop a seek that never terminates.
+    /// `[<]` at cell 0 with a negative pointer allowed leaves the pointer where
+    /// it is, so this loop makes no progress at all; before seeks were charged
+    /// per cell it hung forever instead of hitting the limit.
+    #[test]
+    fn a_non_terminating_seek_still_hits_the_step_limit() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_negative_pointer(true)
+            .with_max_steps(1000)
+            .build();
+        let err = run_opt("+[<]", config).unwrap_err();
+        assert!(
+            matches!(err, BfError::StepLimitExceeded { .. }),
+            "got {err:?}"
+        );
     }
 
     fn run_optimized(
@@ -811,10 +975,10 @@ mod tests {
         config: ExecutionConfig,
     ) -> crate::error::Result<ExecutionStats> {
         let instructions = parse(source).unwrap();
-        let optimized = optimize(&instructions);
+        let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
         let mut input = StringIo::empty();
         let mut output = StringIo::empty();
-        interpret_optimized(&optimized.instructions, config, &mut input, &mut output)
+        interpret_optimized(&optimized, config, &mut input, &mut output)
     }
 
     /// A MultiplyAdd target more than one cell past the end of a fixed tape used to

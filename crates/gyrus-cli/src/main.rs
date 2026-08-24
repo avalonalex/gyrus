@@ -254,7 +254,7 @@ fn run() -> Result<(), BfError> {
     let mut output = StdOutput;
     let stats = if use_optimized {
         // OPTIMIZED MODE (default): Fast execution, no tracking
-        let optimized = optimize_with_cell_model(&instructions, config.cell_model().to_owned());
+        let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
 
         if cli.verbose && !cli.quiet {
             eprintln!("=== Optimization Results ===");
@@ -264,8 +264,7 @@ fn run() -> Result<(), BfError> {
             eprintln!();
         }
 
-        match interpret_optimized_with_io(&optimized.instructions, config, &mut input, &mut output)
-        {
+        match interpret_optimized_with_io(&optimized, config, &mut input, &mut output) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error: {}", e.format_detailed());
