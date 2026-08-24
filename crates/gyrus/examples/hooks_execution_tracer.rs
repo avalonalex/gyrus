@@ -30,17 +30,30 @@ impl ExecutionTracer {
         }
     }
 
+    /// The cell under the cursor, or "off tape" when the cursor is not on it --
+    /// a legal position under the tape contract, so `current_cell` returns None.
+    fn cell_str(context: &HookContext) -> String {
+        context
+            .current_cell()
+            .map_or_else(|| "off tape".to_string(), |v| v.to_string())
+    }
+
     fn format_memory_context(context: &HookContext) -> String {
+        // The cursor is signed and may sit off either end of the tape, so the
+        // window has to be clipped to what the tape actually holds -- an
+        // unclamped `ptr - 2` at cell 0 is negative, and casting that to an
+        // index is a very large number.
         let ptr = context.pointer().get();
-        let start = ptr.saturating_sub(2);
-        let end = (ptr + 3).min(context.memory().len());
+        let len = context.memory().len() as isize;
+        let start = ptr.saturating_sub(2).clamp(0, len);
+        let end = ptr.saturating_add(3).clamp(start, len);
 
         let mut cells = Vec::new();
         for i in start..end {
             if i == ptr {
-                cells.push(format!("[{}]", context.memory()[i]));
+                cells.push(format!("[{}]", context.memory()[i as usize]));
             } else {
-                cells.push(format!("{}", context.memory()[i]));
+                cells.push(format!("{}", context.memory()[i as usize]));
             }
         }
         cells.join(" ")
@@ -61,7 +74,7 @@ impl ExecutionHook for ExecutionTracer {
                 context.step_count().get(),
                 Self::format_instruction(instruction),
                 context.pointer().get(),
-                context.current_cell()
+                Self::cell_str(context)
             );
 
             if context.loop_depth() > 0 {
@@ -96,7 +109,7 @@ impl ExecutionHook for ExecutionTracer {
             log.push(format!(
                 "         | >>> LOOP ENTER (depth {}) | cell = {}",
                 context.loop_depth(),
-                context.current_cell()
+                Self::cell_str(context)
             ));
         }
 
@@ -110,7 +123,7 @@ impl ExecutionHook for ExecutionTracer {
             log.push(format!(
                 "         | <<< LOOP EXIT (depth {}) | cell = {}",
                 context.loop_depth(),
-                context.current_cell()
+                Self::cell_str(context)
             ));
         }
 

@@ -6,40 +6,58 @@ use crate::types::{MemoryAddress, MemorySize, StepCount};
 use std::fmt;
 
 pub trait MemoryBehavior {
-    /// Try to increment the pointer by 1
+    /// Reach a cell the tape does not currently cover: grow to it, or say why
+    /// it cannot be reached.
     ///
-    /// Returns an error if the operation would violate the memory model's constraints.
-    /// May grow memory for unbounded models.
+    /// **Precondition: `cursor.index(memory.len())` is `None`.** Whether a
+    /// cursor is already on the tape is not a question models disagree about --
+    /// [`MemoryAddress::index`] answers it once, and `VmState::cell_at` asks it
+    /// before calling here. What models differ on is only what to do when the
+    /// answer is no, which is why that is all this method decides.
     ///
-    /// Runtime warnings (e.g., memory expansion) are tracked by hooks.
-    ///
-    /// Uses instruction_index for accurate source location lookup even in loops.
-    fn try_increment_pointer(
-        &self,
-        pointer: &mut MemoryAddress,
-        memory: &mut Vec<u8>,
-        step_count: StepCount,
-        debug_info: Option<&DebugInfo>,
-        instruction_index: usize, // Current instruction in flat index
-    ) -> Result<()>;
-
-    /// Try to decrement the pointer by 1
-    ///
-    /// Returns an error if the operation would violate the memory model's constraints.
+    /// Under the tape contract, moving the cursor is never the model's business:
+    /// a cursor may sit anywhere, including left of cell 0, and only *using* it
+    /// can fail. Growth therefore follows access rather than mere travel.
     ///
     /// Uses instruction_index for accurate source location lookup even in loops.
-    fn try_decrement_pointer(
+    fn cell_off_tape<'a>(
         &self,
-        pointer: &mut MemoryAddress,
-        memory: &[u8],
-        allow_negative: bool,
+        cursor: MemoryAddress,
+        memory: &'a mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
-        instruction_index: usize, // Current instruction in flat index
-    ) -> Result<()>;
+        instruction_index: usize,
+    ) -> Result<&'a mut u8>;
 
     /// Get the initial memory size for this model
     fn initial_size(&self) -> MemorySize;
+}
+
+/// The error a cursor outside the tape produces when something tries to use it.
+///
+/// Cold and out of line: every access site calls it on failure only, and
+/// inlining a `MemoryDump` construction into the hot path is what stopped
+/// `check_limits` inlining once already.
+#[cold]
+#[inline(never)]
+fn out_of_bounds(
+    cursor: MemoryAddress,
+    memory: &[u8],
+    max: MemorySize,
+    step_count: StepCount,
+    debug_info: Option<&DebugInfo>,
+    instruction_index: usize,
+    hint: String,
+) -> BfError {
+    BfError::MemoryOutOfBounds {
+        instruction_index: step_count.into(),
+        attempted: cursor.get(),
+        max,
+        memory_dump: Some(Box::new(MemoryDump::from_memory(memory, cursor))),
+        source_location: debug_info.and_then(|d| d.lookup(instruction_index)),
+        loop_call_stack: None,
+        hint,
+    }
 }
 
 /// Fixed-size memory model
@@ -58,69 +76,44 @@ impl FixedMemory {
 }
 
 impl MemoryBehavior for FixedMemory {
-    fn try_increment_pointer(
+    #[inline]
+    fn cell_off_tape<'a>(
         &self,
-        pointer: &mut MemoryAddress,
-        memory: &mut Vec<u8>,
+        cursor: MemoryAddress,
+        memory: &'a mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,
-    ) -> Result<()> {
-        pointer.increment();
-
-        if pointer.get() >= self.size.get() {
-            let dump = MemoryDump::from_memory(memory, *pointer);
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
-
-            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
-            return Err(BfError::MemoryOutOfBounds {
-                instruction_index: step_count.into(),
-                attempted: pointer.get() as isize,
-                max: MemorySize::new(self.size.get().saturating_sub(1)),
-                memory_dump: Some(Box::new(dump)),
-                source_location,
-                loop_call_stack: None,
-                hint: format!(
-                    "Attempted to access cell {}, but memory size is fixed at {} cells. \
-                     Try increasing memory size with --memory-size {} or use --memory-model unbounded",
-                    pointer.get(),
-                    self.size.get(),
-                    pointer.get() + 1000
-                ),
-            });
-        }
-
-        Ok(())
-    }
-
-    fn try_decrement_pointer(
-        &self,
-        pointer: &mut MemoryAddress,
-        memory: &[u8],
-        allow_negative: bool,
-        step_count: StepCount,
-        debug_info: Option<&DebugInfo>,
-        instruction_index: usize,
-    ) -> Result<()> {
-        if pointer.get() == 0 && !allow_negative {
-            let dump = MemoryDump::from_memory(memory, *pointer);
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
-
-            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
-            return Err(BfError::MemoryOutOfBounds {
-                instruction_index: step_count.into(),
-                attempted: -1,
-                max: MemorySize::new(self.size.get().saturating_sub(1)),
-                memory_dump: Some(Box::new(dump)),
-                source_location,
-                loop_call_stack: None,
-                hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
-            });
-        }
-        if pointer.get() > 0 {
-            pointer.decrement();
-        }
-        Ok(())
+    ) -> Result<&'a mut u8> {
+        // A fixed tape never grows, so being off it is the end of the story.
+        let last = MemorySize::new(self.size.get().saturating_sub(1));
+        let hint = if cursor.get() < 0 {
+            format!(
+                "Attempted to use cell {}, left of cell 0. Cells are indexed from 0 \
+                 upwards, so no tape size makes this cell exist. Moving the cursor \
+                 there is allowed; reading or writing it is not.",
+                cursor.get()
+            )
+        } else {
+            format!(
+                "Attempted to use cell {}, but the tape is fixed at {} cells (0..{}). \
+                 Moving the cursor outside the tape is allowed; reading or writing \
+                 out there is not. Try --memory-size {} or --memory-model unbounded",
+                cursor.get(),
+                self.size.get(),
+                last.get(),
+                (cursor.get().max(0) as usize + 1).max(self.size.get() * 2),
+            )
+        };
+        Err(out_of_bounds(
+            cursor,
+            memory,
+            last,
+            step_count,
+            debug_info,
+            instruction_index,
+            hint,
+        ))
     }
 
     fn initial_size(&self) -> MemorySize {
@@ -184,73 +177,46 @@ impl UnboundedMemory {
 }
 
 impl MemoryBehavior for UnboundedMemory {
-    fn try_increment_pointer(
+    #[inline]
+    fn cell_off_tape<'a>(
         &self,
-        pointer: &mut MemoryAddress,
-        memory: &mut Vec<u8>,
+        cursor: MemoryAddress,
+        memory: &'a mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,
-    ) -> Result<()> {
-        pointer.increment();
-
-        if pointer.get() >= self.max_size.get() {
-            let dump = MemoryDump::from_memory(memory, *pointer);
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
-
-            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
-            return Err(BfError::MemoryOutOfBounds {
-                instruction_index: step_count.into(),
-                attempted: pointer.get() as isize,
-                max: MemorySize::new(self.max_size.get().saturating_sub(1)),
-                memory_dump: Some(Box::new(dump)),
-                source_location,
-                loop_call_stack: None,
-                hint: format!(
-                    "Attempted to access cell {}, exceeding maximum size of {}. \
-                     This may indicate an infinite loop moving the pointer",
-                    pointer.get(),
-                    self.max_size.get()
-                ),
-            });
+    ) -> Result<&'a mut u8> {
+        // Growth follows use, not travel: a cursor that visits cell 100_000 and
+        // comes back without touching anything does not allocate a tape for it.
+        // `index` against max_size answers "could this tape ever hold it?" the
+        // same way it answered "does this tape hold it?" for the caller.
+        if let Some(idx) = cursor.index(self.max_size.get()) {
+            memory.resize(idx + 1, 0);
+            // tape-access-ok: just resized the tape to cover idx.
+            return Ok(&mut memory[idx]);
         }
-        // Grow memory if needed
-        if pointer.get() >= memory.len() {
-            let new_size = pointer.get() + 1;
-            memory.resize(new_size, 0);
-        }
-
-        Ok(())
-    }
-
-    fn try_decrement_pointer(
-        &self,
-        pointer: &mut MemoryAddress,
-        memory: &[u8],
-        allow_negative: bool,
-        step_count: StepCount,
-        debug_info: Option<&DebugInfo>,
-        instruction_index: usize,
-    ) -> Result<()> {
-        if pointer.get() == 0 && !allow_negative {
-            let dump = MemoryDump::from_memory(memory, *pointer);
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_index));
-
-            // Note: loop_call_stack is None here, will be enriched by interpret_with_io if needed
-            return Err(BfError::MemoryOutOfBounds {
-                instruction_index: step_count.into(),
-                attempted: -1,
-                max: MemorySize::new(self.max_size.get().saturating_sub(1)),
-                memory_dump: Some(Box::new(dump)),
-                source_location,
-                loop_call_stack: None,
-                hint: "Attempted to move pointer below cell 0. Memory cells are indexed from 0 onwards.".to_string(),
-            });
-        }
-        if pointer.get() > 0 {
-            pointer.decrement();
-        }
-        Ok(())
+        let last = MemorySize::new(self.max_size.get().saturating_sub(1));
+        let hint = if cursor.get() < 0 {
+            "Attempted to use a cell left of cell 0. The tape grows rightwards only; \
+             moving the cursor there is allowed, using it is not."
+                .to_string()
+        } else {
+            format!(
+                "Attempted to use cell {}, beyond the maximum tape size of {}. \
+                 This may indicate an infinite loop moving the cursor",
+                cursor.get(),
+                self.max_size.get()
+            )
+        };
+        Err(out_of_bounds(
+            cursor,
+            memory,
+            last,
+            step_count,
+            debug_info,
+            instruction_index,
+            hint,
+        ))
     }
 
     fn initial_size(&self) -> MemorySize {
@@ -312,62 +278,26 @@ impl MemoryModel {
         }
     }
 
-    /// Handle pointer increment based on memory model
-    ///
-    /// Delegates to the specific memory model implementation.
+    /// Reach a cell off the tape, dispatching on the model.
+    /// See [`MemoryBehavior::cell_off_tape`] for the precondition.
     ///
     /// Accepts instruction_index for accurate error location even in loops.
     #[inline]
-    pub fn try_increment_pointer(
+    pub fn cell_off_tape<'a>(
         &self,
-        pointer: &mut MemoryAddress,
-        memory: &mut Vec<u8>,
+        cursor: MemoryAddress,
+        memory: &'a mut Vec<u8>,
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,
-    ) -> Result<()> {
+    ) -> Result<&'a mut u8> {
         match self {
             MemoryModel::Fixed(m) => {
-                m.try_increment_pointer(pointer, memory, step_count, debug_info, instruction_index)
+                m.cell_off_tape(cursor, memory, step_count, debug_info, instruction_index)
             }
             MemoryModel::Unbounded(m) => {
-                m.try_increment_pointer(pointer, memory, step_count, debug_info, instruction_index)
+                m.cell_off_tape(cursor, memory, step_count, debug_info, instruction_index)
             }
-        }
-    }
-
-    /// Handle pointer decrement based on memory model
-    ///
-    /// Delegates to the specific memory model implementation.
-    ///
-    /// Accepts instruction_index for accurate error location even in loops.
-    #[inline]
-    pub fn try_decrement_pointer(
-        &self,
-        pointer: &mut MemoryAddress,
-        memory: &[u8],
-        allow_negative: bool,
-        step_count: StepCount,
-        debug_info: Option<&DebugInfo>,
-        instruction_index: usize,
-    ) -> Result<()> {
-        match self {
-            MemoryModel::Fixed(m) => m.try_decrement_pointer(
-                pointer,
-                memory,
-                allow_negative,
-                step_count,
-                debug_info,
-                instruction_index,
-            ),
-            MemoryModel::Unbounded(m) => m.try_decrement_pointer(
-                pointer,
-                memory,
-                allow_negative,
-                step_count,
-                debug_info,
-                instruction_index,
-            ),
         }
     }
 }

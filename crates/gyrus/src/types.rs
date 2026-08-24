@@ -26,38 +26,67 @@
 use std::fmt;
 use std::ops::AddAssign;
 
-/// Memory address/pointer position in the BrainFuck memory array
+/// Cursor position on the BrainFuck tape.
+///
+/// Signed, because the tape contract is about *access*, not position: a program
+/// may move the cursor off either end of the tape, and only reading or writing
+/// out there is an error. A cursor left of cell 0 is representable, and stays
+/// wrong only until something tries to use it.
+///
+/// Use [`Self::index`] to turn a cursor into a tape index; that is the point at
+/// which being outside the tape becomes a problem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct MemoryAddress(pub usize);
+pub struct MemoryAddress(pub isize);
 
 impl MemoryAddress {
-    /// Create a new memory address
+    /// Create a new cursor position
     #[inline]
-    pub const fn new(value: usize) -> Self {
+    pub const fn new(value: isize) -> Self {
         Self(value)
     }
 
     /// Get the inner value
     #[inline]
-    pub const fn get(self) -> usize {
+    pub const fn get(self) -> isize {
         self.0
     }
 
-    /// Increment the address
+    /// The tape index this cursor refers to, if it is on the tape.
+    ///
+    /// One comparison covers both ends: a negative cursor cast to `usize` is
+    /// enormous, so it fails the same `< len` test that catches running off the
+    /// right. This is the single definition of "is this cursor on the tape";
+    /// `VmState::cell_at` and `FixedMemory::cell` both go through it rather
+    /// than open-coding the cast.
     #[inline]
-    pub fn increment(&mut self) {
-        self.0 += 1;
+    pub const fn index(self, len: usize) -> Option<usize> {
+        let idx = self.0 as usize;
+        if idx < len { Some(idx) } else { None }
     }
 
-    /// Decrement the address (returns None if would underflow)
+    /// Move the cursor `n` cells. Never fails: leaving the tape is legal.
+    ///
+    /// Wrapping, not saturating. Saturating costs three extra instructions per
+    /// move (`adds; asr; eor; csel` rather than `add`), and pointer movement is
+    /// 67% of the instructions mandelbrot executes -- 6% of its runtime for a
+    /// clamp that needs 2^63 moves to reach. [`Self::index`] is what keeps a
+    /// wild cursor safe, and it does so for any `isize` whatsoever.
     #[inline]
-    pub fn decrement(&mut self) -> Option<()> {
-        if self.0 > 0 {
-            self.0 -= 1;
-            Some(())
-        } else {
-            None
-        }
+    pub fn advance(&mut self, n: isize) {
+        self.0 = self.0.wrapping_add(n);
+    }
+
+    /// Move the cursor one cell right. See [`Self::advance`].
+    #[inline]
+    pub fn increment(&mut self) {
+        self.advance(1);
+    }
+
+    /// Move the cursor one cell left. Never fails; cell -1 is a position, not
+    /// an error. See [`Self::advance`].
+    #[inline]
+    pub fn decrement(&mut self) {
+        self.advance(-1);
     }
 }
 
@@ -67,15 +96,9 @@ impl fmt::Display for MemoryAddress {
     }
 }
 
-impl From<usize> for MemoryAddress {
-    fn from(value: usize) -> Self {
+impl From<isize> for MemoryAddress {
+    fn from(value: isize) -> Self {
         Self(value)
-    }
-}
-
-impl AddAssign<usize> for MemoryAddress {
-    fn add_assign(&mut self, rhs: usize) {
-        self.0 += rhs;
     }
 }
 
@@ -199,12 +222,19 @@ mod tests {
         addr.increment();
         assert_eq!(addr.get(), 1);
 
-        assert!(addr.decrement().is_some());
+        addr.decrement();
         assert_eq!(addr.get(), 0);
 
-        // Can't decrement below 0
-        assert!(addr.decrement().is_none());
-        assert_eq!(addr.get(), 0);
+        // A cursor may go left of cell 0. It is a position, not an error --
+        // only using it is. See the tape contract on `MemoryAddress`.
+        addr.decrement();
+        assert_eq!(addr.get(), -1);
+        assert_eq!(addr.index(30), None, "off-tape cursor has no index");
+
+        addr.advance(4);
+        assert_eq!(addr.get(), 3);
+        assert_eq!(addr.index(30), Some(3));
+        assert_eq!(addr.index(3), None, "past the end has no index either");
     }
 
     #[test]
@@ -233,7 +263,7 @@ mod tests {
         let size = MemorySize::new(100);
 
         // They're equal in value but different types
-        assert_eq!(addr.get(), size.get());
+        assert_eq!(addr.get(), size.get() as isize);
         // This won't compile: assert_eq!(addr, size);
     }
 

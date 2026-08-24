@@ -185,22 +185,30 @@ Runtime warnings automatically show source context when using debug symbols and 
 ```bash
 # This will show memory expansion warnings with source locations (unbounded mode)
 cargo run -- programs/warnings/memory_expansion.bf \
+  --debug \
   --memory-model unbounded \
   --unbounded-initial 5 \
   --unbounded-max 20 \
   --verbose
 ```
 
+`--debug` is required: runtime warnings come from execution hooks, and the
+optimized interpreter does not run hooks.
+
 **Example output**:
 ```
-Runtime warning: Memory expanded from 5 to 6 bytes
+Runtime warning: Memory expanded from 5 to 7 bytes
 
-At line 4, column 5:
-   2 | * Demonstrates memory expansion in unbounded mode
-   3 | * Start with small memory, trigger growth
-   4 | >>>>>>>>>>
-             ^
+At line 16, column 1:
+  15 | * Write a marker at cell 6
+  16 | +
+       ^
 ```
+
+The warning points at the `+`, not at the `>`s before it, and the tape jumps by
+more than one cell. Both follow from the tape contract: growth covers the cell
+that is *used*, so travelling past the end expands nothing and the eventual
+access grows straight to where it landed.
 
 **Note**: Cell wrapping (255+1=0, 0-1=255) does not generate warnings as it's standard BrainFuck behavior.
 

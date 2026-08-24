@@ -63,9 +63,13 @@ re-exports and crate docs.
    walker), `optimized.rs` (the optimized executor)
    - AST → Execution with safety limits and statistics
    - Tree-walking interpreter with configurable memory
+   - **The tape contract**: reading or writing a cell outside the tape is an
+     error; moving the cursor outside it is not. Enforced at the access, in
+     both interpreters — `VmState::cell_at` is the only place a position can be
+     wrong, and pointer movement never fails.
    - **Multiple memory models**:
      - Fixed: Traditional fixed-size array (default 30,000 bytes)
-     - Unbounded: Dynamic growth from initial size up to max limit
+     - Unbounded: Grows to cover cells that are *used* beyond its size
    - **Execution limits**: Step counting and timeout support
    - **Statistics tracking** via `ExecutionStats`:
      - Total steps, loop iterations, peak memory usage
@@ -142,7 +146,9 @@ re-exports and crate docs.
 - **Memory models**: Two configurable models via `MemoryModel` enum
   - Fixed: Traditional bounds-checked array
   - Unbounded: Vec that grows on-demand up to max limit
-  - Pointer movement handled by `increment_pointer()` and `decrement_pointer()` helpers
+  - Models govern *access*, not movement: `MemoryModel::cell` resolves a cursor
+    to a cell, growing or reporting as the model decides. Movement is plain
+    arithmetic on a signed cursor and cannot fail.
 - **Loop representation**: Nested `Vec<Instruction>` rather than jump tables
 - **Parsing approach**: Single-pass recursive descent with full location tracking
 - **Safety**: Multiple layers of protection (step limits, timeouts, bounds checks)
@@ -402,6 +408,8 @@ are now scripts rather than good intentions:
 scripts/check-msrv.sh                 # workspace really builds on its declared MSRV
 scripts/check-readme-commands.py      # every flag README.md and docs/ use exists
 scripts/check-doc-links.py            # every relative Markdown link resolves
+scripts/check-examples.sh             # every example still runs, not just compiles
+scripts/check-tape-access.py          # the tape is only indexed where the contract is enforced
 ```
 
 ### Benchmarking and profiling
@@ -428,6 +436,18 @@ wrong once (1.85 by inference; 1.88 in fact, because of let-chains).
 `check-readme-commands.py` needs `cargo build --release --workspace` first. It
 exists because the README documented `gyrus --validate` and `gyrus --minify`
 long after both became `gyrus-tool` subcommands.
+
+`check-tape-access.py` enforces the tape contract's one structural requirement:
+every read and write goes through `VmState::cell`/`cell_at`, because that is
+where the bound lives. `docs/architecture.md` states it as an imperative --
+"Never index `state.memory` by the cursor" -- and a claim in prose is one that
+erodes. A site that genuinely needs a direct index says why with a
+`// tape-access-ok:` note.
+
+`check-examples.sh` runs each example rather than only building it. Building is
+already covered by clippy, and it is not enough: when `MemoryAddress` became
+signed, `hooks_execution_tracer` still compiled and panicked on its first
+instruction, and nothing noticed because nothing ran it.
 
 **When adding a claim to the docs, ask whether a script could check it.** If it
 could, write the script — an unexecuted claim is one that will eventually be

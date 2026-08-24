@@ -325,9 +325,15 @@ impl<'a> HookContext<'a> {
         self.step_count
     }
 
-    /// Get the value at the current memory cell
-    pub fn current_cell(&self) -> u8 {
-        self.memory[self.pointer.get()]
+    /// Get the value at the current memory cell.
+    ///
+    /// Returns `None` when the cursor is off the tape. Under the tape contract
+    /// that is a legal position -- it is only using it that would be an error --
+    /// so a hook observing one gets no value rather than a panic.
+    pub fn current_cell(&self) -> Option<u8> {
+        self.pointer
+            .index(self.memory.len())
+            .map(|idx| self.memory[idx])
     }
 
     /// Get the source location of the current instruction, if available
@@ -726,7 +732,7 @@ mod tests {
         assert_eq!(context.memory(), &[1, 2, 3, 4, 5]);
         assert_eq!(context.pointer().get(), 2);
         assert_eq!(context.step_count().get(), 100);
-        assert_eq!(context.current_cell(), 3);
+        assert_eq!(context.current_cell(), Some(3));
         assert_eq!(context.loop_depth(), 1);
         assert!(context.source_location().is_some());
     }
@@ -1020,7 +1026,7 @@ mod tests {
 
         // Hook that tracks memory changes
         struct MemoryWatcher {
-            changes: Arc<Mutex<Vec<(usize, u8, u8)>>>, // (address, old_value, new_value)
+            changes: Arc<Mutex<Vec<(isize, u8, u8)>>>, // (cursor, old_value, new_value)
         }
 
         impl ExecutionHook for MemoryWatcher {
@@ -1035,17 +1041,20 @@ mod tests {
                     Instruction::IncrementValue | Instruction::DecrementValue
                 ) {
                     let addr = context.pointer().get();
-                    let new_value = context.current_cell();
-                    // Calculate old value based on instruction
-                    let old_value = match instruction {
-                        Instruction::IncrementValue => new_value.wrapping_sub(1),
-                        Instruction::DecrementValue => new_value.wrapping_add(1),
-                        _ => new_value,
-                    };
-                    self.changes
-                        .lock()
-                        .unwrap()
-                        .push((addr, old_value, new_value));
+                    // None when the cursor is off the tape, which a watcher has
+                    // nothing to say about.
+                    if let Some(new_value) = context.current_cell() {
+                        // Calculate old value based on instruction
+                        let old_value = match instruction {
+                            Instruction::IncrementValue => new_value.wrapping_sub(1),
+                            Instruction::DecrementValue => new_value.wrapping_add(1),
+                            _ => new_value,
+                        };
+                        self.changes
+                            .lock()
+                            .unwrap()
+                            .push((addr, old_value, new_value));
+                    }
                 }
                 HookDecision::Continue
             }

@@ -104,7 +104,7 @@ use super::{ExecutionHook, HookContext, HookDecision};
 use crate::error::RuntimeWarning;
 use crate::instruction::Instruction;
 use crate::stats::ExecutionStats;
-use crate::types::{InstructionIndex, MemoryAddress, MemorySize};
+use crate::types::{InstructionIndex, MemorySize};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use termcolor::{Ansi, Color, ColorSpec, WriteColor};
@@ -247,14 +247,13 @@ impl ExecutionHook for StatsTrackerHook {
     fn after_instruction(
         &mut self,
         instruction: &Instruction,
-        context: &HookContext,
+        _context: &HookContext,
     ) -> HookDecision {
-        // Track peak memory usage
-        // Peak is the highest pointer position + 1 (since pointer is 0-indexed)
-        let current_peak = context.pointer().get() + 1;
-        if current_peak > self.stats.peak_memory_used.get() {
-            self.stats.peak_memory_used = MemoryAddress::new(current_peak);
-        }
+        // Peak memory is not tracked here. Under the tape contract it means the
+        // highest cell *used*, and a hook watching the cursor cannot tell a use
+        // from a fly-past: it sees `>` land on a cell and would count it. The
+        // VM records it at the access instead, and `interpret_with_io` copies it
+        // in, so both interpreters share one definition.
 
         // Track I/O operations
         match instruction {
@@ -864,7 +863,9 @@ mod tests {
     /// baseline and never reports it. Every growth here should be reported.
     #[test]
     fn test_warning_collector_reports_the_first_memory_expansion() {
-        let (instructions, debug_info) = crate::parser::parse_with_debug(">>>").unwrap();
+        // `+` after each move: the tape grows to cover cells that are *used*,
+        // so travelling alone no longer expands it.
+        let (instructions, debug_info) = crate::parser::parse_with_debug(">+>+>+").unwrap();
         let config = ExecutionConfigBuilder::new()
             .with_unbounded_memory(1, 100)
             .unwrap()
@@ -884,7 +885,7 @@ mod tests {
         assert_eq!(
             stats.warnings.len(),
             3,
-            "each '>' grew the tape by one cell: {:?}",
+            "each cell used beyond the tape grew it by one: {:?}",
             stats.warnings
         );
     }
