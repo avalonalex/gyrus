@@ -182,7 +182,9 @@ pub use interpreter::{
 };
 pub use location::SourceLocation;
 pub use minify::minify;
-pub use optimizer::{OptimizedInstruction, OptimizedProgram, SourceRange, optimize};
+pub use optimizer::{
+    OptimizedInstruction, OptimizedProgram, SourceRange, optimize, optimize_with_cell_model,
+};
 pub use parser::{parse, parse_with_debug};
 pub use stats::ExecutionStats;
 pub use types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};

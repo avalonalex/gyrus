@@ -251,7 +251,6 @@ impl fmt::Display for UnboundedMemory {
 /// # Pointer Overflow Behaviors
 ///
 /// - **Fixed**: Out-of-bounds pointer access → Error
-/// - **Wrapping**: Pointer wraps at boundaries (circular buffer)
 /// - **Unbounded**: Memory grows dynamically up to max limit
 ///
 /// # Cell Arithmetic (NOT controlled by this enum)

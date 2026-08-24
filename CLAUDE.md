@@ -65,7 +65,6 @@ re-exports and crate docs.
    - Tree-walking interpreter with configurable memory
    - **Multiple memory models**:
      - Fixed: Traditional fixed-size array (default 30,000 bytes)
-     - Wrapping: Circular buffer that wraps at boundaries
      - Unbounded: Dynamic growth from initial size up to max limit
    - **Execution limits**: Step counting and timeout support
    - **Statistics tracking** via `ExecutionStats`:
@@ -140,9 +139,8 @@ re-exports and crate docs.
 - **Error handling**: Uses `thiserror` for custom error types (`BfError`)
   - All errors include context (location, source snippet, details)
   - Structured error types (not strings) for better error handling
-- **Memory models**: Three configurable models via `MemoryModel` enum
+- **Memory models**: Two configurable models via `MemoryModel` enum
   - Fixed: Traditional bounds-checked array
-  - Wrapping: Circular buffer (modulo arithmetic on pointer)
   - Unbounded: Vec that grows on-demand up to max limit
   - Pointer movement handled by `increment_pointer()` and `decrement_pointer()` helpers
 - **Loop representation**: Nested `Vec<Instruction>` rather than jump tables
@@ -203,13 +201,7 @@ let config = ExecutionConfig::builder()
    - Overflow behavior: **ERROR** - moving beyond bounds raises `BfError::MemoryOutOfBounds`
    - Use case: Strict BF compliance, catching bugs
 
-2. **Wrapping**:
-   - Memory size: Configurable
-   - Overflow behavior: **WRAP** - pointer wraps to opposite end (modulo arithmetic)
-   - Example: With 1000 cells, pointer 999 + 1 = 0, pointer 0 - 1 = 999
-   - Use case: Circular buffer programs
-
-3. **Unbounded**:
+2. **Unbounded**:
    - Initial size: Configurable (default 30,000)
    - Maximum size: Configurable (default 1,000,000)
    - Overflow behavior: **GROW** - memory expands dynamically up to max limit
