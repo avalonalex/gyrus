@@ -37,6 +37,11 @@ use std::cell::Cell;
 /// - Step counting is approximate: one step per optimized instruction, except
 ///   seeks, which cost one step per cell examined so that `--max-steps` bounds
 ///   a runaway seek the same way it bounds the unfused loop
+/// - The timeout is sampled, not checked per instruction. The wall clock is
+///   read at most once every 1024 steps -- microseconds apart in arithmetic
+///   code -- so a program may run a little past its deadline before stopping.
+///   Instructions that can block (`,` and `.`) force a read, so blocking I/O
+///   does not extend that. It is a deadline, not a hard real-time guarantee
 /// - Hooks are not yet supported (future enhancement)
 ///
 /// # Arguments
@@ -87,7 +92,7 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     // whole run, so testing it per instruction puts a branch the compiler
     // cannot hoist inside every loop body. WRAPPING selects the whole-run
     // arithmetic and deletes the &dyn CellBehavior path from the build.
-    let limited = config.max_steps().is_some() || limits.timeout_ms.is_some();
+    let limited = limits.max_steps.is_some() || limits.timeout_ms.is_some();
     let wrapping = matches!(program.cell_model, crate::config::CellModel::U8Wrapping(_));
     match (limited, wrapping) {
         (true, true) => execute_block::<true, true, _, _>(
@@ -155,9 +160,11 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
 #[inline]
 fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
     let steps = state.step_count.get();
-    if steps >= limits.max_steps {
+    if let Some(max_steps) = limits.max_steps
+        && steps >= max_steps
+    {
         return Err(BfError::StepLimitExceeded {
-            limit: limits.max_steps,
+            limit: max_steps,
             actual_steps: state.step_count,
             hint: "Optimized interpreter counts 1 step per optimized instruction, \
                    plus 1 for each cell a seek walks over"
@@ -191,8 +198,27 @@ fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
     Ok(())
 }
 
-/// Step and time limits, resolved once so the hot loop does not re-read config.
+/// Force the next `check_limits` to read the wall clock.
+///
+/// Sampling by step count assumes steps cost roughly the same. I/O breaks that:
+/// stdout is line-buffered, so a `.` can block in `write_all` until a slow
+/// consumer drains the pipe, and a thousand such steps is a thousand blocking
+/// writes between two clock reads. Any instruction that can block therefore
+/// arms the next check, which costs a store on `,` and `.` and nothing at all
+/// in the arithmetic loops the sampling exists to keep fast.
+#[inline]
+fn arm_time_check(limits: &Limits) {
+    limits.next_time_check.set(0);
+}
+
 /// Steps that may pass between wall-clock reads when a timeout is set.
+///
+/// Only this interpreter samples. The tree-walking path's `LimitEnforcerHook`
+/// still reads the clock per instruction, deliberately: measured on 99beer,
+/// `--timeout` costs it 1.3x (109ms -> 144ms) against 13x here, because its
+/// per-instruction work is an order of magnitude larger and the clock read is
+/// a smaller share of it. Sampling there would buy little and would import the
+/// blocking-I/O problem `arm_time_check` exists to solve.
 ///
 /// `Instant::elapsed` costs an order of magnitude more than executing an
 /// optimized instruction, so reading it before every one made --timeout a 13x
@@ -201,9 +227,9 @@ fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
 /// millisecond the timeout is expressed in.
 const TIME_CHECK_INTERVAL: u64 = 1024;
 
+/// Step and time limits, resolved once so the hot loop does not re-read config.
 struct Limits {
-    /// `u64::MAX` when unset, so the hot path compares rather than unwrapping.
-    max_steps: u64,
+    max_steps: Option<u64>,
     timeout_ms: Option<u64>,
     start_time: std::time::Instant,
     /// Step count at which the wall clock is next worth reading.
@@ -211,16 +237,20 @@ struct Limits {
     /// A threshold rather than a `steps % INTERVAL == 0` test. Instructions
     /// advance the count by one, but a seek advances it by the number of cells
     /// it walked, so a test for an exact multiple is skipped whenever a seek
-    /// steps over one. That only delays a check rather than losing it -- the
-    /// following instructions resume counting by one -- but a threshold bounds
-    /// the gap at INTERVAL steps unconditionally, for the same single compare.
+    /// steps over one, and the check waits for the next multiple instead.
+    ///
+    /// A threshold cannot be stepped over: the very next `check_limits` reads
+    /// the clock. That does not make the gap INTERVAL steps -- one seek can
+    /// still carry the count far past the threshold in a single instruction --
+    /// it makes the gap at most INTERVAL steps *plus one instruction*, which is
+    /// the best any step-keyed scheme can do.
     next_time_check: Cell<u64>,
 }
 
 impl Limits {
     fn from_config(config: &ExecutionConfig) -> Self {
         Self {
-            max_steps: config.max_steps().unwrap_or(u64::MAX),
+            max_steps: config.max_steps(),
             timeout_ms: config.timeout_ms(),
             start_time: std::time::Instant::now(),
             next_time_check: Cell::new(0),
@@ -271,11 +301,16 @@ fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usiz
     if !check_limits {
         return len;
     }
-    let budget = limits.max_steps.saturating_sub(state.step_count.get());
-    let reach = (state.pointer.get() as u64).saturating_add(budget);
-    // +1 so the cell the limit lands on is still examined, matching the
-    // per-cell loop, which checks the limit before moving.
-    (reach.saturating_add(1)).min(len as u64) as usize
+    match limits.max_steps {
+        Some(max) => {
+            let budget = max.saturating_sub(state.step_count.get());
+            let reach = (state.pointer.get() as u64).saturating_add(budget);
+            // +1 so the cell the limit lands on is still examined, matching the
+            // per-cell loop, which checks the limit before moving.
+            (reach.saturating_add(1)).min(len as u64) as usize
+        }
+        None => len,
+    }
 }
 
 /// How far left a seek may scan. See [`seek_window_end`].
@@ -284,8 +319,18 @@ fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> us
     if !check_limits {
         return 0;
     }
-    let budget = limits.max_steps.saturating_sub(state.step_count.get());
-    state.pointer.get().saturating_sub(budget as usize)
+    match limits.max_steps {
+        Some(max) => {
+            let budget = max.saturating_sub(state.step_count.get());
+            // usize is 64-bit on every target this builds for, but say so rather
+            // than letting an `as` silently wrap a budget past u32 on a 32-bit one.
+            state
+                .pointer
+                .get()
+                .saturating_sub(usize::try_from(budget).unwrap_or(usize::MAX))
+        }
+        None => 0,
+    }
 }
 
 /// Execute a single optimized instruction
@@ -411,11 +456,17 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 source,
             })?;
             state.bytes_written += 1;
+            if CHECK_LIMITS {
+                arm_time_check(limits);
+            }
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Input(_range) => {
             let ptr = state.pointer.get();
+            if CHECK_LIMITS {
+                arm_time_check(limits);
+            }
             match input.read_byte() {
                 Ok(Some(byte)) => {
                     state.memory[ptr] = byte;
@@ -1028,9 +1079,61 @@ mod tests {
         }
     }
 
+    /// Input that blocks, like a terminal or a slow pipe.
+    struct SlowInput;
+    impl crate::io::BfInput for SlowInput {
+        fn read_byte(&mut self) -> std::io::Result<Option<u8>> {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            Ok(Some(b'x'))
+        }
+    }
+
+    /// Sampling the clock by step count assumes steps cost about the same.
+    /// Blocking I/O breaks that: an echo loop waiting on input spends almost no
+    /// steps and almost all of its time, so a timeout keyed purely to steps can
+    /// be reached hundreds of times over before the clock is next read. Measured
+    /// against a pipe fed one byte per 300ms, a build without the I/O arming did
+    /// not stop within 15s of a 500ms deadline.
+    ///
+    /// The elapsed-time assertion is the point of this test, not the error type:
+    /// without the arming the timeout still fires eventually, just far too late.
+    #[test]
+    fn timeout_fires_while_blocked_on_input() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_timeout_ms(20)
+            .with_max_steps(2_000_000_000)
+            .build();
+        let instructions = parse(",[.,]").unwrap();
+        let program = optimize_with_cell_model(&instructions, *config.cell_model());
+        let (mut input, mut output) = (SlowInput, StringIo::empty());
+
+        let started = std::time::Instant::now();
+        let err = interpret_optimized(&program, config, &mut input, &mut output).unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(err, BfError::ExecutionTimeout { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(1000),
+            "a 20ms timeout took {elapsed:?} while blocked on input"
+        );
+    }
+
     /// The wall clock is now sampled rather than read every instruction, so
     /// this pins that a timeout still stops a program whose step count moves in
     /// jumps: it spins forever with two ~400-cell seeks per iteration.
+    ///
+    /// A step limit is armed alongside the timeout, far above what 20ms of this
+    /// program needs, purely so a regression fails instead of hanging. Stop
+    /// updating `next_time_check` and the clock is read once, at step 0, and
+    /// never again -- with only a timeout armed this spins forever, and
+    /// `cargo test` has no per-test timeout, so CI wedges rather than reporting.
+    /// Asserting elapsed wall time does not help: the assert is after the call,
+    /// and the call is what fails to return. The backstop terminates it, and
+    /// then the error type is the assertion that catches it.
     ///
     /// It does not discriminate between sampling schemes -- a `% INTERVAL == 0`
     /// test passes it too, because instructions still walk the count through
@@ -1041,6 +1144,7 @@ mod tests {
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(1000)
             .with_timeout_ms(20)
+            .with_max_steps(2_000_000_000)
             .build();
         // cells 1..=400 non-zero, sentinels at 0 and 401; the body seeks right
         // to 401, then left to 0, then steps back onto cell 1 and repeats.
@@ -1048,7 +1152,7 @@ mod tests {
         let err = run_opt(&src, config).unwrap_err();
         assert!(
             matches!(err, BfError::ExecutionTimeout { .. }),
-            "got {err:?}"
+            "expected the timeout to stop this, got {err:?}"
         );
     }
 
