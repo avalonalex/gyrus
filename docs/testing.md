@@ -55,14 +55,29 @@ Testing infrastructure has been significantly improved with **136 total tests** 
 
 **Status**: COMPLETE
 
-**Location**: `crates/gyrus/src/test_utils.rs` (12 tests)
+**Location**: `crates/gyrus/src/test_utils.rs`
+
+The module is `#[cfg(test)]` and private. It is not public API and is not
+compiled into what library consumers link, so helpers can be added, renamed, or
+deleted here without it being a breaking change.
 
 **Features**:
 - `run_bf(source, input)` - Simple test helper
 - `run_bf_with_config(source, input, config)` - Custom config helper
 - `run_bf_expect_ok/err()` - Assertion helpers
 - `assert_bf_equivalent()` - Program equivalence testing
-- `configs::*` - Pre-configured test configs (tiny_memory, with_step_limit, etc.)
+- `configs::*` - Pre-configured test configs (`tiny_memory`, `small_memory`,
+  `with_step_limit`, `with_eof_behavior`)
+- `proptest_strategies::arb_bf_program()` - Balanced-bracket program strategy
+
+Random program generation is *not* here. It is a real feature rather than a
+test helper, so it lives in `gyrus::random` behind the off-by-default `random`
+feature:
+
+```bash
+cargo test -p gyrus --features random     # exercise the generator
+cargo run -p gyrus-tool -- generate       # the same generator, from the CLI
+```
 
 **Impact**: 54% reduction in test boilerplate
 
@@ -604,4 +619,5 @@ The testing infrastructure is **production-ready** with:
 - **D.B. Cristofani's BF Programs**: http://www.hevanet.com/cristofd/brainfuck/
 - **Fibonacci Algorithm**: `programs/third-party/advanced/fibonacci_README.md`
 - **Test Manifest**: `programs/test_manifest.toml`
-- **Test Utilities**: `crates/gyrus/src/test_utils.rs`
+- **Test Utilities**: `crates/gyrus/src/test_utils.rs` (private, `#[cfg(test)]`)
+- **Random Programs**: `crates/gyrus/src/random.rs` (`random` feature)

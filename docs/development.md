@@ -100,7 +100,7 @@ open target/criterion/report/index.html
 ```
 crates/gyrus/
 ├── src/
-│   ├── test_utils.rs        # Test helper functions
+│   ├── test_utils.rs        # Test helpers (private, cfg(test))
 │   ├── parser.rs            # Unit tests + property tests
 │   ├── interpreter.rs       # Unit tests
 │   └── ...

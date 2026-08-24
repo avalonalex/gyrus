@@ -1,7 +1,9 @@
-//! Test utilities for BrainFuck interpreter testing.
+//! Test helpers shared across this crate's unit tests.
 //!
-//! This module provides helper functions and utilities for writing tests.
-//! Only available in test builds.
+//! Compiled under `#[cfg(test)]` only, so none of this is part of the public
+//! API and none of it ships to library consumers. Random program generation
+//! used to live here; it is a real feature rather than a test helper, and now
+//! lives in `crate::random`, behind the `random` feature.
 
 use crate::config::{EofBehavior, ExecutionConfig, ExecutionConfigBuilder};
 use crate::error::BfError;
@@ -10,20 +12,9 @@ use crate::io::StringIo;
 use crate::parser::parse;
 use crate::stats::ExecutionStats;
 
-// Only used in tests
-#[cfg(test)]
-use crate::config::MemoryModel;
-
 /// Run a BrainFuck program with string input and capture output.
 ///
-/// # Examples
-///
-/// ```
-/// use gyrus::test_utils::run_bf;
-///
-/// let (output, stats) = run_bf("++++++++[>++++<-]>.", "").unwrap();
-/// assert_eq!(output, " "); // ASCII 32
-/// ```
+/// Uses [`ExecutionConfig::default`]; see [`run_bf_with_config`] to vary it.
 pub fn run_bf(source: &str, input: &str) -> Result<(String, ExecutionStats), BfError> {
     let instructions = parse(source)?;
     let config = ExecutionConfig::default();
@@ -36,18 +27,7 @@ pub fn run_bf(source: &str, input: &str) -> Result<(String, ExecutionStats), BfE
 
 /// Run a BrainFuck program with custom config.
 ///
-/// # Examples
-///
-/// ```
-/// use gyrus::test_utils::{run_bf_with_config, configs};
-///
-/// let result = run_bf_with_config(
-///     "+[>+]",
-///     "",
-///     configs::with_step_limit(100)
-/// );
-/// assert!(result.is_err()); // Should hit step limit
-/// ```
+/// See [`configs`] for the ready-made configurations these tests use.
 pub fn run_bf_with_config(
     source: &str,
     input: &str,
@@ -94,88 +74,7 @@ pub fn assert_bf_equivalent(source1: &str, source2: &str, input: &str) {
     );
 }
 
-/// Random BrainFuck program generation.
-///
-/// This module provides utilities for generating random BrainFuck programs,
-/// useful for fuzzing, benchmarking, testing, and educational purposes.
-pub mod random {
-    use rand::Rng;
-
-    /// Configuration for random program generation.
-    #[derive(Debug, Clone)]
-    pub struct RandomProgramConfig {
-        /// Maximum nesting depth for loops
-        pub max_depth: usize,
-        /// Average number of commands per sequence
-        pub avg_commands: usize,
-        /// Probability of adding a loop (0.0 to 1.0)
-        pub loop_probability: f64,
-    }
-
-    impl Default for RandomProgramConfig {
-        fn default() -> Self {
-            Self {
-                max_depth: 3,
-                avg_commands: 10,
-                loop_probability: 0.3,
-            }
-        }
-    }
-
-    /// Generate a random valid BrainFuck program with balanced brackets.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use gyrus::test_utils::random::{generate_random_program, RandomProgramConfig};
-    /// use gyrus::parse;
-    ///
-    /// let program = generate_random_program(&mut rand::thread_rng(), &RandomProgramConfig::default());
-    /// // The generated program should always parse successfully
-    /// assert!(parse(&program).is_ok());
-    /// ```
-    pub fn generate_random_program<R: Rng>(rng: &mut R, config: &RandomProgramConfig) -> String {
-        generate_recursive(rng, config, 0)
-    }
-
-    fn generate_recursive<R: Rng>(
-        rng: &mut R,
-        config: &RandomProgramConfig,
-        depth: usize,
-    ) -> String {
-        let mut result = String::new();
-
-        // Generate random commands
-        let num_commands = rng.random_range(0..config.avg_commands);
-        for _ in 0..num_commands {
-            let cmd = match rng.random_range(0..8) {
-                0 => '+',
-                1 => '-',
-                2 => '>',
-                3 => '<',
-                4 => '.',
-                5 => ',',
-                6 => ' ',
-                _ => '\n',
-            };
-            result.push(cmd);
-        }
-
-        // Maybe add a loop if we haven't reached max depth
-        if depth < config.max_depth && rng.random_bool(config.loop_probability) {
-            result.push('[');
-            result.push_str(&generate_recursive(rng, config, depth + 1));
-            result.push(']');
-        }
-
-        result
-    }
-}
-
 /// Proptest strategies for property-based testing.
-///
-/// These are only available in test builds since proptest is a dev-dependency.
-#[cfg(test)]
 pub mod proptest_strategies {
     use proptest::prelude::*;
 
@@ -235,26 +134,6 @@ pub mod configs {
             .build()
     }
 
-    /// Configuration with timeout.
-    pub fn with_timeout(ms: u64) -> ExecutionConfig {
-        ExecutionConfigBuilder::new()
-            .with_memory_size(30000)
-            .with_timeout_ms(ms)
-            .build()
-    }
-
-    /// Configuration with unbounded memory.
-    ///
-    /// # Panics
-    ///
-    /// Panics if initial > max.
-    pub fn unbounded_memory(initial: usize, max: usize) -> ExecutionConfig {
-        ExecutionConfigBuilder::new()
-            .with_unbounded_memory(initial, max)
-            .expect("Invalid unbounded memory configuration")
-            .build()
-    }
-
     /// Configuration with specific EOF behavior.
     pub fn with_eof_behavior(behavior: EofBehavior) -> ExecutionConfig {
         ExecutionConfigBuilder::new()
@@ -267,6 +146,7 @@ pub mod configs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MemoryModel;
 
     #[test]
     fn test_run_bf_simple() {

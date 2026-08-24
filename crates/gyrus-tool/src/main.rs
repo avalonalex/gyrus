@@ -6,8 +6,8 @@ use gyrus::{
     BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
     codegen::compile_string,
     minify, optimize, parse, parse_with_debug,
+    random::{RandomProgramConfig, generate_random_program},
     syntax::{ColorTheme, SyntaxHighlighter},
-    test_utils::random::{RandomProgramConfig, generate_random_program},
     validate,
 };
 

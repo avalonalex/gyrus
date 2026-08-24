@@ -14,11 +14,23 @@ categories = ["development-tools", "parser-implementations"]
 [dependencies]
 thiserror.workspace = true
 termcolor.workspace = true
-rand.workspace = true
+
+# Only needed by the `random` module. Optional so that consumers who just want
+# to parse and run BrainFuck do not link a random number generator.
+rand = { workspace = true, optional = true }
+
+[features]
+default = []
+# Random program generation (`gyrus::random`), used by `gyrus-tool generate`
+# and for fuzzing the parser and optimizer.
+random = ["dep:rand"]
 
 [dev-dependencies]
 proptest.workspace = true
 criterion.workspace = true
+# The `random` module's own unit tests need it enabled when testing this crate
+# on its own (`cargo test -p gyrus`), not only via gyrus-tool's feature union.
+gyrus = { path = ".", features = ["random"] }
 
 [[bench]]
 name = "interpreter"

@@ -523,7 +523,8 @@ gyrus/
 │   │   │   ├── codegen.rs       # String → BrainFuck compiler
 │   │   │   ├── syntax.rs        # Syntax highlighting
 │   │   │   ├── debug.rs         # Debug symbol tables
-│   │   │   ├── test_utils.rs    # Test helpers, random programs
+│   │   │   ├── random.rs        # Random programs (`random` feature)
+│   │   │   ├── test_utils.rs    # Unit-test helpers (private)
 │   │   │   ├── io.rs            # I/O abstraction traits
 │   │   │   ├── error.rs         # Error types and formatting
 │   │   │   ├── config/          # Configuration types
@@ -584,7 +585,10 @@ The core library follows idiomatic Rust structure with clear separation of conce
 - **validator.rs**: Analyzes AST for warnings and best practices
 - **minify.rs**: Converts AST back to minimal source code
 - **codegen.rs**: Compiles a string into a BrainFuck program that prints it
-- **test_utils.rs**: Test helper functions and utilities
+- **random.rs**: Generates syntactically valid random programs for fuzzing and
+  benchmark inputs, behind the off-by-default `random` feature
+- **test_utils.rs**: Unit-test helpers. Private and `#[cfg(test)]`, so it is
+  neither public API nor compiled into what consumers link
 - **io.rs**: I/O abstraction traits (BfInput, BfOutput, StringIo)
 - **Supporting modules**: error, syntax, debug, config, instruction, location,
   stats, types

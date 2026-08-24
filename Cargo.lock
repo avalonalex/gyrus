@@ -329,6 +329,7 @@ name = "gyrus"
 version = "0.3.0"
 dependencies = [
  "criterion",
+ "gyrus",
  "proptest",
  "rand",
  "termcolor",

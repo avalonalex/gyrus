@@ -1558,7 +1558,7 @@ impl SharedProfilingHook {
         )
     }
 
-    /// Create a shared profiling hook from an existing Arc<Mutex<ProfilingHook>>.
+    /// Create a shared profiling hook from an existing `Arc<Mutex<ProfilingHook>>`.
     pub fn new_with_shared(shared: Arc<Mutex<ProfilingHook>>) -> Self {
         Self { shared }
     }
