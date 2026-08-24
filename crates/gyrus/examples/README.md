@@ -75,7 +75,6 @@ cargo run --example memory_models
 
 **Demonstrates:**
 - **Fixed memory**: Traditional bounds-checked array
-- **Wrapping memory**: Circular buffer (wraps at boundaries)
 - **Unbounded memory**: Dynamic growth with limits
 
 **Use this when:** You need to customize memory behavior
@@ -84,9 +83,6 @@ cargo run --example memory_models
 ```rust
 // Fixed (default)
 .with_memory_size(30000)
-
-// Wrapping
-.with_wrapping_memory(30000)
 
 // Unbounded
 .with_unbounded_memory(initial, max)?
