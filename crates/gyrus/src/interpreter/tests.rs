@@ -1042,7 +1042,7 @@ fn test_cell_overflow_formatting() {
 #[test]
 fn test_cell_model_independence_from_memory_model() {
     // Test that CellModel and MemoryModel are orthogonal
-    // Use Wrapping memory + Checked cells
+    // Use Fixed memory + Checked cells
     use crate::config::ExecutionConfigBuilder;
     use crate::test_utils::run_bf_with_config;
 

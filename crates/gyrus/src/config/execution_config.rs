@@ -3,7 +3,7 @@
 use super::cell_model::{U8CheckedCells, U8WrappingCells};
 use super::memory_model::{FixedMemory, UnboundedMemory};
 use super::{CellModel, EofBehavior, MemoryModel};
-use crate::error::{BfError, Result};
+use crate::error::Result;
 use crate::hooks::{BoxedHook, HookManager};
 use crate::types::MemorySize;
 use std::marker::PhantomData;
@@ -259,13 +259,6 @@ impl ExecutionConfigBuilder<Unbuilt> {
     ) -> Result<ExecutionConfigBuilder<ReadyToBuild>> {
         // Validation lives in UnboundedMemory::new so that every route into the
         // type is checked, not only this one.
-
-        if max_size == 0 {
-            return Err(BfError::ConfigurationError {
-                message: "max_size must be greater than 0".to_string(),
-            });
-        }
-
         self.memory_model = Some(MemoryModel::Unbounded(UnboundedMemory::new(
             MemorySize::new(initial_size),
             MemorySize::new(max_size),

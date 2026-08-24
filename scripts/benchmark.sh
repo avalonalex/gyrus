@@ -132,14 +132,6 @@ done
 # not the diagnostic wording.
 echo
 echo "Cell-model differential (optimized vs --debug under --cell-model checked)"
-# Guard against the comparison silently testing nothing. If --cell-model were
-# renamed, both invocations would fail identically with empty output, cmp would
-# find two empty files equal, and every program would report "agree".
-if ! "$GYRUS" --cell-model checked programs/basic/hello_world.bf < /dev/null > /dev/null 2>&1; then
-    echo "  FAIL: --cell-model checked does not run a known-good program;" >&2
-    echo "        this differential would pass vacuously." >&2
-    failures=$((failures + 1))
-fi
 checked_bytes=0
 for entry in "${PROGRAMS[@]}"; do
     prog="${entry%%:*}"
@@ -161,8 +153,12 @@ for entry in "${PROGRAMS[@]}"; do
     fi
 done
 
+# Guard against the comparison silently testing nothing. If --cell-model were
+# renamed, every run would fail identically with empty output, cmp would find
+# two empty files equal, and every program would report "agree".
 if [ "$checked_bytes" -eq 0 ]; then
-    echo "  FAIL: no program produced output under checked cells; nothing was compared." >&2
+    echo "  FAIL: no program produced output under checked cells, so nothing was" >&2
+    echo "        actually compared. Does '--cell-model checked' still exist?" >&2
     failures=$((failures + 1))
 fi
 
