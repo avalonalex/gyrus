@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 /// A hook that watches a specific memory address and pauses when it changes
 struct MemoryWatchpoint {
-    watch_address: usize,
+    watch_address: isize,
     last_value: Arc<Mutex<Option<u8>>>,
     changes: Arc<Mutex<Vec<(u64, u8, u8)>>>, // (step, old_value, new_value)
 }
@@ -27,7 +27,11 @@ impl ExecutionHook for MemoryWatchpoint {
             return HookDecision::Continue;
         }
 
-        let current_value = context.current_cell();
+        // None when the cursor is off the tape -- a legal position under the
+        // tape contract, and one a watchpoint has nothing to report about.
+        let Some(current_value) = context.current_cell() else {
+            return HookDecision::Continue;
+        };
         let mut last_value_guard = self.last_value.lock().unwrap();
 
         if let Some(last) = *last_value_guard
@@ -78,7 +82,7 @@ impl ExecutionHook for MemoryWatchpoint {
 use std::collections::HashMap;
 
 /// Type alias for memory change tracking: address -> [(step, value), ...]
-type MemoryChanges = Arc<Mutex<HashMap<usize, Vec<(u64, u8)>>>>;
+type MemoryChanges = Arc<Mutex<HashMap<isize, Vec<(u64, u8)>>>>;
 
 /// A hook that tracks all memory modifications
 struct MemoryChangeTracker {
@@ -97,7 +101,10 @@ impl ExecutionHook for MemoryChangeTracker {
             Instruction::IncrementValue | Instruction::DecrementValue
         ) {
             let addr = context.pointer().get();
-            let value = context.current_cell();
+            // Off-tape cursors have no value to record.
+            let Some(value) = context.current_cell() else {
+                return HookDecision::Continue;
+            };
             let step = context.step_count().get();
 
             self.changes

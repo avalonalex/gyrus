@@ -92,7 +92,7 @@ proptest! {
     /// Now that StepLimitExceeded has source location, hitting the limit is a GOOD outcome!
     #[test]
     fn prop_terminations_have_debug_info(source in arb_bf_program()) {
-        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+        let (instructions, debug_info) = parse_with_debug(source.as_str()).unwrap();
 
         // Aggressive limits to force quick termination
         let config = ExecutionConfigBuilder::new()
@@ -271,8 +271,9 @@ mod unit_tests {
     /// Test that runtime errors have source locations when debug info is provided
     #[test]
     fn test_runtime_error_has_source_location() {
-        // Program that will cause memory overflow
-        let source = ">".repeat(200);
+        // Walking past the end is legal under the tape contract; the trailing
+        // '+' is what uses a cell out there, and that is the error.
+        let source = format!("{}+", ">".repeat(200));
         let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
         let config = ExecutionConfigBuilder::new()

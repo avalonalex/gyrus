@@ -23,7 +23,7 @@
 //! ```
 
 use crate::error::RuntimeWarning;
-use crate::types::{MemoryAddress, MemorySize, StepCount};
+use crate::types::{MemorySize, StepCount};
 
 /// Statistics collected during program execution
 #[derive(Debug, Clone, Default)]
@@ -34,8 +34,12 @@ pub struct ExecutionStats {
     /// Number of loop iterations (times a loop body was entered)
     pub loop_iterations: u64,
 
-    /// Peak memory cell index accessed (highest pointer position + 1)
-    pub peak_memory_used: MemoryAddress,
+    /// Highest cell *used*, plus one.
+    ///
+    /// Counts cells the program read or wrote, not how far the cursor
+    /// travelled: under the tape contract a program may move to cell 100_000
+    /// and back without touching anything, and it has not used 100_000 cells.
+    pub peak_memory_used: MemorySize,
 
     /// Number of memory cells with non-zero values at end of execution
     pub cells_modified: usize,

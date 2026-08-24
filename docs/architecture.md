@@ -88,14 +88,20 @@ This keeps concerns separated while enabling rich error messages.
 
 **VmState** (private to interpreter):
 - `memory: Vec<u8>` - The tape
-- `pointer: MemoryAddress` - Current cell
+- `pointer: MemoryAddress` - Cursor position. Signed: it may sit off either end
+  of the tape, which is legal until something uses it
 - `step_count: StepCount` - Instructions executed
 - `loop_depth: usize` - Nesting level
 - `memory_model: MemoryModel` - Behavior strategy
+- `peak_used: usize` - Highest cell actually used, maintained at the access
 
 **Memory Models** (via trait `MemoryBehavior`):
-- **Fixed**: Bounds-checked array (default)
-- **Unbounded**: Grows dynamically up to max limit
+- **Fixed**: errors when a cell outside the tape is used (default)
+- **Unbounded**: grows to cover cells that are used, up to a max limit
+
+Models govern *access*, not movement. `VmState::cell`/`cell_at` is the only
+place a cursor position can be wrong; pointer movement is plain arithmetic and
+cannot fail.
 
 **Cell Models** (via trait `CellBehavior`):
 - **U8Wrapping**: Standard BF (255+1=0, production/JIT target)
@@ -349,11 +355,14 @@ fn execute_ir(ir: &[IrInstruction], state: &mut VmState, ...) -> Result<()> {
     for instruction in ir {
         match instruction {
             IrInstruction::IncrementValue(n) => {
-                let cell = &mut state.memory[state.pointer.get()];
+                // Every access goes through `cell`/`cell_at`: the cursor is
+                // signed and may sit off the tape, so this is the one place
+                // that can fail. Never index `state.memory` by the cursor.
+                let cell = state.cell(None, 0)?;
                 *cell = cell.wrapping_add(*n);
             }
             IrInstruction::ClearCell => {
-                state.memory[state.pointer.get()] = 0;
+                *state.cell(None, 0)? = 0;
             }
             // ... other optimized ops
         }

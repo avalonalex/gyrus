@@ -96,7 +96,9 @@ By default, errors show detailed messages but without source locations. This is 
 
 ```
 Error: Memory pointer out of bounds
-Attempted to access cell 100, but memory size is 100 cells.
+Attempted to use cell 100, but the tape is fixed at 100 cells (0..99).
+Moving the cursor outside the tape is allowed; reading or writing out
+there is not. Try --memory-size 200 or --memory-model unbounded
 ```
 
 **When to use `--debug`:**
@@ -111,14 +113,16 @@ Attempted to access cell 100, but memory size is 100 cells.
 
 ### Runtime Warnings
 
-When using unbounded memory mode, the interpreter generates **warnings** when memory is expanded:
+When using unbounded memory mode, the interpreter generates **warnings** when the
+tape grows. Growth follows *use*, not travel: a run of `>` expands nothing, and
+the warning points at the instruction that actually reached the new cell.
 
 ```
-Runtime warning: Memory expanded from 30000 to 30001 bytes
+Runtime warning: Memory expanded from 5 to 7 bytes
 
-At line 1, column 50001:
-   1 │ >>>>>>>>>>>>>>>>...
-                        ^
+At line 16, column 1:
+  16 │ +
+      ^
 ```
 
 **Warning types:**

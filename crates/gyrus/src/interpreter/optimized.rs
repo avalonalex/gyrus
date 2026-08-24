@@ -146,7 +146,7 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     // modified, bytes in and out) describe the program's actual behavior and do
     // match.
     stats.total_steps = state.step_count;
-    stats.peak_memory_used = MemoryAddress::new(state.peak_pointer + 1);
+    stats.peak_memory_used = state.peak_cells_used();
     // `len()`, not `capacity()`: the debug interpreter reports the tape length and
     // a Vec's spare capacity is not addressable memory.
     stats.memory_allocated = crate::types::MemorySize::new(state.memory.len());
@@ -392,110 +392,58 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
     match instruction {
         // Fused arithmetic operations
         OptimizedInstruction::Add(n, _range) => {
-            let ptr = state.pointer.get();
             // See Right for the fused-run argument. It bites harder here:
             // behavior() hands out a &dyn CellBehavior, so each unit step is an
             // indirect call the compiler cannot inline into the single
             // wrapping_add it wraps. Checked cells keep the per-step loop, which
             // is what reports the overflow at the right value.
+            let steps = state.step_count;
+            let cell = state.cell(None, 0)?;
             if WRAPPING {
-                // Bind the cell once: `m[p] = m[p].wrapping_add(n)` is two Index
-                // calls and LLVM does not merge them here (measured 5.6% of hanoi,
-                // a third of whose instructions are cell arithmetic).
-                let cell = &mut state.memory[ptr];
                 *cell = cell.wrapping_add(*n);
-                return Ok(ExecutionFlow::Continue);
-            }
-            // Resolve the trait object once rather than per unit increment
-            let cells = config.cell_model().behavior();
-            for _ in 0..*n {
-                cells.try_increment(
-                    &mut state.memory[ptr],
-                    state.step_count,
-                    None, // No debug info in optimized path
-                )?;
+            } else {
+                let cells = config.cell_model().behavior();
+                for _ in 0..*n {
+                    cells.try_increment(cell, steps, None)?;
+                }
             }
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Sub(n, _range) => {
-            let ptr = state.pointer.get();
+            let steps = state.step_count;
+            let cell = state.cell(None, 0)?;
             if WRAPPING {
-                let cell = &mut state.memory[ptr];
                 *cell = cell.wrapping_sub(*n);
-                return Ok(ExecutionFlow::Continue);
-            }
-            let cells = config.cell_model().behavior();
-            for _ in 0..*n {
-                cells.try_decrement(
-                    &mut state.memory[ptr],
-                    state.step_count,
-                    None, // No debug info
-                )?;
+            } else {
+                let cells = config.cell_model().behavior();
+                for _ in 0..*n {
+                    cells.try_decrement(cell, steps, None)?;
+                }
             }
             Ok(ExecutionFlow::Continue)
         }
 
-        // Fused pointer movements
+        // Fused pointer movements.
+        //
+        // Under the tape contract these cannot fail: the cursor may sit anywhere,
+        // and only using it is checked. A fused `>>>>` is therefore one add, with
+        // no bounds test, no fallback loop and no memory model involved -- the
+        // check that used to live here now happens once, at whatever access comes
+        // next, instead of once per move.
         OptimizedInstruction::Right(n, _range) => {
-            // The optimizer fused `>>>>` into Right(4); stepping the pointer one
-            // cell at a time here would hand that back. When the whole run lands
-            // in bounds it is one add, and nothing in the per-step path could
-            // have fired. Anything that could error or grow memory falls through
-            // to the original loop, so error semantics are unchanged.
-            // memory.len() is the right limit for both models: Fixed never
-            // resizes, so len is its size; Unbounded may grow, and staying under
-            // len is what says this move needs no growth (len <= max_size).
-            let start = state.pointer.get();
-            if let Some(end) = start.checked_add(*n)
-                && end < state.memory.len()
-            {
-                state.pointer = MemoryAddress::new(end);
-                state.peak_pointer = state.peak_pointer.max(end);
-                return Ok(ExecutionFlow::Continue);
-            }
-            // One max() per fused move rather than per unit step
-            for _ in 0..*n {
-                // Use memory model's increment logic
-                state.memory_model.try_increment_pointer(
-                    &mut state.pointer,
-                    &mut state.memory,
-                    state.step_count,
-                    None, // No debug info in optimized path
-                    0,    // Instruction index not used without debug info
-                )?;
-            }
-            state.peak_pointer = state.peak_pointer.max(state.pointer.get());
+            state.pointer.advance(*n as isize);
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Left(n, _range) => {
-            // `start >= n` means every intermediate step had a non-zero pointer
-            // on entry, which is exactly the condition under which the per-step
-            // path cannot error. Underflow falls through to it unchanged.
-            let start = state.pointer.get();
-            if start >= *n {
-                state.pointer = MemoryAddress::new(start - *n);
-                return Ok(ExecutionFlow::Continue);
-            }
-            for _ in 0..*n {
-                // Use memory model's decrement logic
-                state.memory_model.try_decrement_pointer(
-                    &mut state.pointer,
-                    &state.memory,
-                    config.allow_negative_pointer(),
-                    state.step_count,
-                    None, // No debug info
-                    0,
-                )?;
-            }
+            state.pointer.advance(-(*n as isize));
             Ok(ExecutionFlow::Continue)
         }
 
         // I/O operations
         OptimizedInstruction::Output(_range) => {
-            let ptr = state.pointer.get();
-            let byte = state.memory[ptr];
+            let byte = *state.cell(None, 0)?;
             output.write_byte(byte).map_err(|source| BfError::IoError {
                 operation: "writing output".to_string(),
                 instruction_index: Some(state.step_count.into()),
@@ -508,14 +456,13 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
         }
 
         OptimizedInstruction::Input(_range) => {
-            let ptr = state.pointer.get();
             let byte = input.read_byte();
             // After the out-call: `,` can have blocked on a terminal for any
             // length of time, so the next check reads the clock unconditionally.
             arm_time_check::<CHECK_LIMITS>(limits, state.step_count.get(), 0);
             match byte {
                 Ok(Some(byte)) => {
-                    state.memory[ptr] = byte;
+                    *state.cell(None, 0)? = byte;
                     state.bytes_read += 1;
                     Ok(ExecutionFlow::Continue)
                 }
@@ -523,11 +470,11 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                     // EOF - handle according to config
                     match config.eof_behavior() {
                         crate::config::EofBehavior::SetZero => {
-                            state.memory[ptr] = 0;
+                            *state.cell(None, 0)? = 0;
                             Ok(ExecutionFlow::Continue)
                         }
                         crate::config::EofBehavior::SetNegOne => {
-                            state.memory[ptr] = 255;
+                            *state.cell(None, 0)? = 255;
                             Ok(ExecutionFlow::Continue)
                         }
                         crate::config::EofBehavior::NoChange => Ok(ExecutionFlow::Continue),
@@ -552,69 +499,61 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
         // Optimized loop patterns
         OptimizedInstruction::Zero(_range) => {
             // [-] → set cell to 0
-            let ptr = state.pointer.get();
-            state.memory[ptr] = 0;
+            *state.cell(None, 0)? = 0;
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::SeekRight(_range) => {
             // [>] → seek to next zero cell.
             //
-            // Same family as Right/Add: the loop below advances one cell per
-            // iteration through the memory model. A seek is a search, so it
-            // cannot collapse to a single add -- but it is a search for a zero
-            // byte in a slice, which the standard library scans far faster than
-            // a call per cell.
+            // A seek reads every cell it tests, so unlike a plain move it is
+            // bounded by the tape: the starting cell must be on it, and running
+            // off the right is an access, which errors or grows as the model
+            // decides. The scan itself is a search for a zero byte in a slice,
+            // which the standard library does far faster than a call per cell.
             //
             // The seek is charged one step per cell it examines. The unfused
             // `[>]` costs a step per cell, so charging one per fused instruction
-            // would let a runaway seek outrun --max-steps forever: check_limits
-            // would compare a step_count that never moved.
-            //
-            // The scan is clamped to what the step limit still allows rather
-            // than switched off when a limit is set. Both give the same answer,
-            // but branching away from the scan made --max-steps a 10x slowdown
-            // on seek-heavy programs -- a limit should bound a run, not change
-            // how it executes.
-            let start = state.pointer.get();
+            // would let a runaway seek outrun --max-steps forever. The scan is
+            // clamped to what the step budget allows rather than switched off
+            // when a limit is set: both give the same answer, but branching away
+            // from the scan made --max-steps a 10x slowdown on seek-heavy
+            // programs, and a limit should bound a run, not change how it runs.
+            if *state.cell(None, 0)? == 0 {
+                return Ok(ExecutionFlow::Continue);
+            }
+            let start = state.pointer.get() as usize;
             let hi = seek_window_end(CHECK_LIMITS, state, limits);
-            if let Some(offset) = state.memory[start..hi].iter().position(|&b| b == 0) {
+            if hi > start
+                && let Some(offset) = state.memory[start..hi].iter().position(|&b| b == 0)
+            {
                 let end = start + offset;
-                state.pointer = MemoryAddress::new(end);
-                state.peak_pointer = state.peak_pointer.max(end);
+                state.pointer = MemoryAddress::new(end as isize);
                 state.step_count += offset as u64;
                 return Ok(ExecutionFlow::Continue);
             }
             // No zero within the window. Every cell from `start` to `hi` is
-            // non-zero, so walking them could only have succeeded; skip to the
-            // last rather than scanning them again, and let the loop decide what
-            // happens next -- fire the step limit, grow an unbounded tape, or
-            // report a fixed one's overrun.
+            // non-zero, so testing them again would only repeat work; skip to the
+            // last and let the loop decide what happens next -- fire the step
+            // limit, grow an unbounded tape, or report a fixed one's overrun.
             if hi > start {
                 state.step_count += (hi - 1 - start) as u64;
-                state.pointer = MemoryAddress::new(hi - 1);
+                state.pointer = MemoryAddress::new((hi - 1) as isize);
             }
             loop {
-                let ptr = state.pointer.get();
-                if state.memory[ptr] == 0 {
+                // Terminate before charging: a seek that arrives on the zero
+                // cell with its budget exactly spent has finished, and should
+                // not be failed for the step it did not need.
+                if *state.cell(None, 0)? == 0 {
                     break;
                 }
                 // A seek is a loop: honour step/time limits so it cannot spin forever
                 if CHECK_LIMITS {
                     check_limits(state, limits)?;
                 }
-
-                // Move right
-                state.memory_model.try_increment_pointer(
-                    &mut state.pointer,
-                    &mut state.memory,
-                    state.step_count,
-                    None,
-                    0,
-                )?;
+                state.pointer.increment();
                 state.step_count += 1;
             }
-            state.peak_pointer = state.peak_pointer.max(state.pointer.get());
             Ok(ExecutionFlow::Continue)
         }
 
@@ -622,37 +561,31 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // [<] → seek to previous zero cell. See SeekRight for why this is a
             // scan rather than a per-cell call, why it is charged per cell, and
             // why the window is clamped rather than abandoned under limits.
-            let start = state.pointer.get();
+            if *state.cell(None, 0)? == 0 {
+                return Ok(ExecutionFlow::Continue);
+            }
+            let start = state.pointer.get() as usize;
             let lo = seek_window_start(CHECK_LIMITS, state, limits);
             if let Some(found) = state.memory[lo..=start].iter().rposition(|&b| b == 0) {
                 // rposition indexes the window, so shift it back to the tape.
                 let end = lo + found;
-                state.pointer = MemoryAddress::new(end);
+                state.pointer = MemoryAddress::new(end as isize);
                 state.step_count += (start - end) as u64;
                 return Ok(ExecutionFlow::Continue);
             }
             if start > lo {
                 state.step_count += (start - lo) as u64;
-                state.pointer = MemoryAddress::new(lo);
+                state.pointer = MemoryAddress::new(lo as isize);
             }
             loop {
-                let ptr = state.pointer.get();
-                if state.memory[ptr] == 0 {
+                // Terminate before charging; see SeekRight.
+                if *state.cell(None, 0)? == 0 {
                     break;
                 }
                 if CHECK_LIMITS {
                     check_limits(state, limits)?;
                 }
-
-                // Move left
-                state.memory_model.try_decrement_pointer(
-                    &mut state.pointer,
-                    &state.memory,
-                    config.allow_negative_pointer(),
-                    state.step_count,
-                    None,
-                    0,
-                )?;
+                state.pointer.decrement();
                 state.step_count += 1;
             }
             Ok(ExecutionFlow::Continue)
@@ -662,9 +595,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // Generalized multiplication loop
             // For each (offset, multiplier): cell[ptr + offset] += cell[ptr] * multiplier
             // Then: cell[ptr] = 0
-
-            let ptr = state.pointer.get();
-            let source_value = state.memory[ptr];
+            let source_value = *state.cell(None, 0)?;
 
             // Early exit if source is already zero (optimization)
             if source_value == 0 {
@@ -672,53 +603,18 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             }
 
             for (offset, multiplier) in operations {
-                // Calculate target pointer
-                let target_ptr = if *offset >= 0 {
-                    ptr + (*offset as usize)
-                } else {
-                    ptr.checked_sub((-offset) as usize).ok_or_else(|| {
-                        BfError::MemoryOutOfBounds {
-                            instruction_index: state.step_count.into(),
-                            attempted: ptr as isize + offset,
-                            max: crate::types::MemorySize::new(state.memory.len()),
-                            memory_dump: None,
-                            source_location: None,
-                            loop_call_stack: None,
-                            hint: "Pointer underflow in MultiplyAdd operation".to_string(),
-                        }
-                    })?
-                };
-
-                // Walk the pointer out to the target so the memory model decides
-                // what happens at the boundary: a fixed tape raises
-                // MemoryOutOfBounds, an unbounded tape grows to cover the target.
-                // Stepping one cell at a time (rather than once, as before) is what
-                // makes offsets larger than 1 safe - a single step left the tape
-                // short of the target and the write below indexed past its end.
-                if target_ptr >= state.memory.len() {
-                    while state.pointer.get() < target_ptr {
-                        state.memory_model.try_increment_pointer(
-                            &mut state.pointer,
-                            &mut state.memory,
-                            state.step_count,
-                            None,
-                            0,
-                        )?;
-                    }
-                    state.peak_pointer = state.peak_pointer.max(state.pointer.get());
-                    // Restore original pointer
-                    state.pointer = MemoryAddress::new(ptr);
-                }
-
-                // Perform the multiplication and addition
-                let target_value = state.memory[target_ptr];
-                let delta = (source_value as i32) * multiplier;
-                let new_value = (target_value as i32 + delta) as u8; // Wrapping
-                state.memory[target_ptr] = new_value;
+                // `cell_at` resolves the target and enforces the tape bound
+                // there, which is the whole of what the old pointer-walk was
+                // doing: a fixed tape reports the overrun, an unbounded one
+                // grows to cover the target. No walking, and no restoring the
+                // cursor afterwards, because it never moved.
+                let target = state.cell_at(*offset, None, 0)?;
+                let delta = (*target as i32) + (source_value as i32) * multiplier;
+                *target = delta as u8; // Wrapping
             }
 
             // Zero the source cell
-            state.memory[ptr] = 0;
+            *state.cell(None, 0)? = 0;
             Ok(ExecutionFlow::Continue)
         }
 
@@ -726,8 +622,9 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
         OptimizedInstruction::Loop(body, _range) => {
             state.loop_depth += 1;
 
-            // Loop while current cell is non-zero
-            while state.memory[state.pointer.get()] != 0 {
+            // Loop while current cell is non-zero. The condition reads the
+            // cell, so it is an access and the cursor must be on the tape.
+            while *state.cell(None, 0)? != 0 {
                 // Check limits per iteration, not only per instruction: a loop with
                 // an empty body (`[]`) executes no instructions, so without this the
                 // step limit and timeout would never be consulted and it would hang.
@@ -805,7 +702,8 @@ mod tests {
     #[test]
     fn fused_right_past_the_end_still_reports_out_of_bounds() {
         let config = ExecutionConfigBuilder::new().with_memory_size(10).build();
-        let err = run_opt(">>>>>>>>>>", config).unwrap_err();
+        // Moving past the end is legal; using the cell out there is not.
+        let err = run_opt(">>>>>>>>>>+", config).unwrap_err();
         assert!(
             matches!(err, BfError::MemoryOutOfBounds { .. }),
             "got {err:?}"
@@ -815,8 +713,9 @@ mod tests {
     #[test]
     fn fused_left_below_zero_still_reports_out_of_bounds() {
         let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
-        // Right(2) then Left(4): the third unit step is the one that underflows.
-        let err = run_opt(">><<<<", config).unwrap_err();
+        // Right(2) then Left(4) puts the cursor at -2, which is legal; the
+        // `+` that then uses it is not.
+        let err = run_opt(">><<<<+", config).unwrap_err();
         assert!(
             matches!(err, BfError::MemoryOutOfBounds { .. }),
             "got {err:?}"
@@ -943,7 +842,7 @@ mod tests {
         );
         assert_eq!(
             stats.peak_memory_used,
-            MemoryAddress::new(3),
+            crate::types::MemorySize::new(3),
             "pointer reached cell 2, so the peak is 3 cells - not the 100-cell allocation"
         );
     }
@@ -1246,20 +1145,52 @@ mod tests {
         );
     }
 
-    /// The step limit must be able to stop a seek that never terminates.
-    /// `[<]` at cell 0 with a negative pointer allowed leaves the pointer where
-    /// it is, so this loop makes no progress at all; before seeks were charged
-    /// per cell it hung forever instead of hitting the limit.
+    /// A seek that lands on its zero cell with the step budget exactly spent has
+    /// finished, and must not be failed for a step it did not take.
+    ///
+    /// This exercises the scanning path, which is the one that runs when the
+    /// zero is inside the window. It does *not* discriminate the fall-through
+    /// loop's ordering -- that loop tests for termination before consulting the
+    /// limit, deliberately, but reaching it with a budget that expires exactly
+    /// on the zero cell needs an unbounded tape that grows into the zero, and I
+    /// could not construct one that reliably distinguishes the two orders.
     #[test]
-    fn a_non_terminating_seek_still_hits_the_step_limit() {
+    fn a_seek_that_just_fits_its_budget_completes() {
+        // cells 1..=3 non-zero with a zero at 4; `[>]` from cell 1 walks three
+        // cells. Six instructions precede it, and the seek is charged one step
+        // for itself plus one per cell walked.
+        let src = ">+>+>+<<[>]";
+        let exact = run_optimized(
+            src,
+            ExecutionConfigBuilder::new().with_memory_size(100).build(),
+        )
+        .unwrap()
+        .0
+        .total_steps
+        .get();
+
+        let cfg = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_max_steps(exact)
+            .build();
+        assert!(
+            run_opt(src, cfg).is_ok(),
+            "a seek needing exactly {exact} steps must not fail at {exact}"
+        );
+    }
+
+    /// A seek walking off the left of the tape stops at the access, not at the
+    /// move: `[<]` from cell 0 puts the cursor at -1, which is a legal position,
+    /// and the seek's own read of that cell is what fails.
+    #[test]
+    fn a_seek_off_the_tape_fails_at_the_read() {
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(100)
-            .with_negative_pointer(true)
             .with_max_steps(1000)
             .build();
         let err = run_opt("+[<]", config).unwrap_err();
         assert!(
-            matches!(err, BfError::StepLimitExceeded { .. }),
+            matches!(err, BfError::MemoryOutOfBounds { .. }),
             "got {err:?}"
         );
     }
@@ -1319,15 +1250,30 @@ mod tests {
         assert!(matches!(result, Err(BfError::ExecutionTimeout { .. })));
     }
 
-    /// `allow_negative_pointer` was hardcoded to `false` on the optimized path, so
-    /// `<` at cell 0 errored where the debug interpreter allowed it.
+    /// The tape contract: moving the cursor off the tape is legal on its own,
+    /// and only becomes an error when something uses it. `allow_negative_pointer`
+    /// used to govern this, by making `<` at cell 0 *stay* at cell 0 -- which
+    /// silently aliased cell -1 onto cell 0 and let a write land on live data.
     #[test]
-    fn test_left_honours_allow_negative_pointer() {
-        let config = ExecutionConfigBuilder::new()
-            .with_memory_size(100)
-            .with_negative_pointer(true)
-            .build();
-        assert!(run_optimized("<", config).is_ok());
+    fn cursor_may_leave_the_tape_but_not_be_used_there() {
+        let cfg = || ExecutionConfigBuilder::new().with_memory_size(100).build();
+
+        // Off the left and back, touching nothing: fine.
+        assert!(run_optimized("<>", cfg()).is_ok());
+        // Off the right and back, further than the tape is long: also fine.
+        assert!(run_optimized(&format!("{}{}", ">".repeat(150), "<".repeat(150)), cfg()).is_ok());
+        // Resting off the tape without using it: still fine.
+        assert!(run_optimized("<", cfg()).is_ok());
+
+        // Using it is not. This is the case that used to corrupt cell 0.
+        assert!(matches!(
+            run_optimized("<+", cfg()),
+            Err(BfError::MemoryOutOfBounds { .. })
+        ));
+        assert!(matches!(
+            run_optimized(&format!("{}+", ">".repeat(150)), cfg()),
+            Err(BfError::MemoryOutOfBounds { .. })
+        ));
     }
 
     /// `[+]` reaches zero only by wrapping past 255, which checked cells reject.

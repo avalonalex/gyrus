@@ -66,11 +66,22 @@ pub struct MemoryDump {
 }
 
 impl MemoryDump {
-    /// Create a memory dump showing cells around the pointer
+    /// Create a memory dump showing cells around the cursor.
     pub fn from_memory(memory: &[u8], pointer: MemoryAddress) -> Self {
+        // Slide the window onto the tape rather than merely clipping it. Under
+        // the tape contract the cursor is routinely far outside -- that is
+        // exactly when this dump gets built -- and a window centred on cell 100
+        // of a five-cell tape clips to nothing, printing "Nearby cells:" with
+        // nothing beneath it. Showing the nearest cells is the point of it.
+        const WINDOW: usize = 7;
+        let len = memory.len();
         let ptr = pointer.get();
-        let range_start = ptr.saturating_sub(3);
-        let range_end = (ptr + 4).min(memory.len());
+        let (range_start, range_end) = if len <= WINDOW {
+            (0, len)
+        } else {
+            let start = ptr.saturating_sub(3).clamp(0, (len - WINDOW) as isize) as usize;
+            (start, start + WINDOW)
+        };
 
         let nearby_cells: Vec<(usize, u8)> = (range_start..range_end)
             .map(|addr| (addr, memory[addr]))
@@ -93,7 +104,7 @@ impl fmt::Display for MemoryDump {
         writeln!(f, "  Non-zero cells: {}", self.non_zero_count)?;
         writeln!(f, "  Nearby cells:")?;
         for (addr, value) in &self.nearby_cells {
-            let marker = if *addr == self.pointer.get() {
+            let marker = if *addr as isize == self.pointer.get() {
                 "→"
             } else {
                 " "

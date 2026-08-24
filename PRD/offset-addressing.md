@@ -1,6 +1,6 @@
 # PRD: Offset Addressing (Lazy Pointer Motion)
 
-**Status**: Not Started
+**Status**: Step 0 (the tape contract) implemented; the optimizer work is not started
 **Last Updated**: 2026-08-24
 **Priority**: High — the largest interpreter win left before a compiler backend
 
@@ -217,11 +217,10 @@ into one step. Consistent with the documented model; the `# Limitations` list on
 
 ## Implementation plan
 
-0. **The tape contract, on its own.** Signed `MemoryAddress`; checks moved to
-   the access sites in both interpreters; `allow_negative_pointer` removed;
-   `peak_memory_used` derived from accesses; error text updated; docs updated.
-   Re-baseline the differential. This is a prerequisite, not a phase of the
-   optimizer work.
+0. **The tape contract.** Shipped. Signed `MemoryAddress`;
+   checks at the access sites in both interpreters; `allow_negative_pointer`
+   removed; `peak_memory_used` derived from accesses. See "Lessons from step 0"
+   below; the contract itself is documented in `docs/execution-models.md`.
 1. **Spike.** Implement the pass and the interpreter side crudely and measure
    mandelbrot and hanoi. The estimate is 17–30% fewer
    instructions; confirm that converts to wall clock before building it
@@ -233,6 +232,35 @@ into one step. Consistent with the documented model; the `# Limitations` list on
    configurations, plus the boundary programs named here.
 5. `benchmark.sh` golden outputs must not move, and both cell-model
    differentials must still pass.
+
+## Lessons from step 0, for the work that remains
+
+Kept because the optimizer work has to be built on this and would otherwise
+repeat the mistakes. What now *exists* is described in `docs/`, not here.
+
+**A hot-path helper returning a large `Result` will not inline.** Routing every
+access through `MemoryBehavior` cost 59%: the accessor returns
+`Result<&mut u8>`, whose error variant is an 88-byte `BfError`, so it returns
+through memory and LLVM declines the `#[inline]`. The fix was to notice that
+the fast path's question -- is this index on the tape? -- is model-independent,
+and to leave only the "no" answer behind a `#[cold]` call. This is the second
+time this shape has bitten here; the first was `check_limits`. The offset work
+adds another per-access helper, so assume it applies.
+
+**Counters on the hot path want conditional moves, not branches.**
+`if idx > peak { peak = idx }` cost 11% on hanoi -- almost never taken once the
+tape is warm, and mispredicted anyway. As an expression it is free.
+
+**Errors move outward by one instruction, which moves loop call stacks.** The
+failing instruction is now a loop's *condition* rather than a `>` in its body,
+and a condition runs before its frame is pushed, so `loop_call_stack` is one
+frame shallower at an out-of-bounds error. Anything the offset work does to
+instruction-to-source mapping compounds this.
+
+**The contract paid for itself.** This document assumed step 0 was a cost the
+optimizer work would repay. It was a 8-11% win on its own, because removing a
+check from every move beats adding one to every access. The 17-30% estimate
+below is therefore on top of a faster baseline, not a slower one.
 
 ## Success criteria
 
