@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use gyrus::{
-    BfError, CellModel, DebugInfo, SourceLocation, U8CheckedCells, U8WrappingCells,
+    BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
     codegen::compile_string,
     minify, optimize_with_cell_model, parse, parse_with_debug,
     random::{RandomProgramConfig, generate_random_program},
@@ -280,9 +280,8 @@ fn run_validate(
     let (instructions, _debug_info) = parse_with_debug(&source)?;
 
     // Parse cell model (for future use when validation becomes model-aware)
-    let _cell_model_parsed = match cell_model.to_lowercase().as_str() {
-        "wrapping" | "wrap" | "u8-wrapping" => CellModel::U8Wrapping(U8WrappingCells),
-        "checked" | "check" | "u8-checked" => {
+    let _cell_model_parsed = match cell_model.parse::<CellModel>() {
+        Ok(CellModel::U8Checked(_)) => {
             eprintln!(
                 "Note: Cell model '{}' specified, but validation currently assumes u8 wrapping.",
                 cell_model
@@ -290,10 +289,11 @@ fn run_validate(
             eprintln!("      Model-aware validation is planned for a future release.");
             CellModel::U8Wrapping(U8WrappingCells)
         }
-        other => {
+        Ok(model) => model,
+        Err(()) => {
             eprintln!(
                 "Error: Invalid cell model '{}'. Valid options: wrapping, checked",
-                other
+                cell_model
             );
             std::process::exit(1);
         }
@@ -589,14 +589,10 @@ fn run_optimize(
     // The mapping shown has to be the one the interpreter will actually run,
     // and that depends on the cell model: checked cells decline the
     // multiply-loop fold, which changes both the instructions and the ratio.
-    let cell_model = match cell_model.to_lowercase().as_str() {
-        "wrapping" | "wrap" | "u8-wrapping" => CellModel::U8Wrapping(U8WrappingCells),
-        "checked" | "check" | "u8-checked" => CellModel::U8Checked(U8CheckedCells),
-        other => {
-            eprintln!("Error: unknown cell model '{other}'. Valid options: wrapping, checked");
-            std::process::exit(1);
-        }
-    };
+    let cell_model = cell_model.parse::<CellModel>().unwrap_or_else(|()| {
+        eprintln!("Error: Invalid cell model '{cell_model}'. Valid options: wrapping, checked");
+        std::process::exit(1);
+    });
 
     // Read source file
     let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {

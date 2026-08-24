@@ -22,18 +22,17 @@ use std::fmt;
 /// Different cell models define different overflow/underflow behaviors:
 /// - **U8 Wrapping**: 255+1=0, 0-1=255 (most compatible, default)
 /// - **U8 Checked**: Overflow/underflow returns error
-/// - **U8 Saturating**: 255+1=255, 0-1=0 (clamps at boundaries)
 ///
 /// # Orthogonality with MemoryModel
 ///
 /// CellModel and MemoryModel are completely independent:
-/// - **MemoryModel**: Controls pointer position (Fixed/Wrapping/Unbounded)
-/// - **CellModel**: Controls cell values (U8Wrapping/U8Checked/U8Saturating)
+/// - **MemoryModel**: Controls pointer position (Fixed/Unbounded)
+/// - **CellModel**: Controls cell values (U8Wrapping/U8Checked)
 ///
 /// Any combination is valid:
 /// - Fixed memory + U8 Wrapping cells (default)
-/// - Wrapping memory + U8 Checked cells
-/// - Unbounded memory + U8 Saturating cells
+/// - Fixed memory + U8 Checked cells
+/// - Unbounded memory + U8 Wrapping cells
 pub trait CellBehavior {
     /// Try to increment the cell value by 1
     ///
@@ -229,6 +228,24 @@ impl CellModel {
         match self {
             CellModel::U8Wrapping(cells) => cells,
             CellModel::U8Checked(cells) => cells,
+        }
+    }
+}
+
+/// Parse a cell model from the name the CLIs accept.
+///
+/// Both binaries take `--cell-model`, and `gyrus-tool` takes it on two
+/// subcommands, so the alias table lives here rather than being spelled out at
+/// each call site -- where it had already drifted into three copies with two
+/// different error messages.
+impl std::str::FromStr for CellModel {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "wrapping" | "wrap" | "u8-wrapping" => Ok(CellModel::U8Wrapping(U8WrappingCells)),
+            "checked" | "check" | "u8-checked" => Ok(CellModel::U8Checked(U8CheckedCells)),
+            _ => Err(()),
         }
     }
 }

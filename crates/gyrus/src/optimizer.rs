@@ -234,9 +234,8 @@ pub fn optimize_with_cell_model(
     instructions: &[Instruction],
     cell_model: CellModel,
 ) -> OptimizedProgram {
-    let fold_multiply = matches!(cell_model, CellModel::U8Wrapping(_));
     let original_count = count_original_instructions(instructions);
-    let optimized = optimize_block(instructions, 0, fold_multiply).0;
+    let optimized = optimize_block(instructions, 0, cell_model).0;
     OptimizedProgram::new(optimized, original_count, cell_model)
 }
 
@@ -266,7 +265,7 @@ fn count_original_instruction(instruction: &Instruction) -> usize {
 fn optimize_block(
     instructions: &[Instruction],
     start_index: usize,
-    fold_multiply: bool,
+    cell_model: CellModel,
 ) -> (Vec<OptimizedInstruction>, usize) {
     let mut result = Vec::new();
     let mut i = 0;
@@ -289,7 +288,7 @@ fn optimize_block(
                 let loop_start = current_index;
 
                 // Try to recognize common patterns
-                if let Some(optimized) = recognize_loop_pattern(body, loop_start, fold_multiply) {
+                if let Some(optimized) = recognize_loop_pattern(body, loop_start, cell_model) {
                     result.push(optimized);
                     current_index += 1 + count_original_instructions(body);
                     i += 1;
@@ -298,8 +297,7 @@ fn optimize_block(
                     // body_start already includes the +1 for the '[' itself, so the
                     // index the body ends on is the index the loop ends on.
                     let body_start = current_index + 1; // +1 for the loop instruction itself
-                    let (optimized_body, next_index) =
-                        optimize_block(body, body_start, fold_multiply);
+                    let (optimized_body, next_index) = optimize_block(body, body_start, cell_model);
                     current_index = next_index;
                     result.push(OptimizedInstruction::Loop(
                         optimized_body,
@@ -405,7 +403,7 @@ fn optimize_block(
 fn recognize_loop_pattern(
     body: &[Instruction],
     loop_start: usize,
-    fold_multiply: bool,
+    cell_model: CellModel,
 ) -> Option<OptimizedInstruction> {
     // Filter out LoopCheck for pattern matching
     let body: Vec<_> = body
@@ -448,7 +446,7 @@ fn recognize_loop_pattern(
     // - [->++<] → MultiplyAdd(vec![(1, 2)])
     // - [->+++>+<<] → MultiplyAdd(vec![(1, 3), (2, 1)])
     // Not valid under checked cells; see `optimize_with_cell_model`.
-    if !fold_multiply {
+    if !matches!(cell_model, CellModel::U8Wrapping(_)) {
         return None;
     }
     recognize_multiply_loop(&body, loop_start, loop_end)
@@ -567,10 +565,8 @@ mod tests {
         );
     }
 
-    /// ...but not under checked cells, where the fold would compute the whole
-    /// product in one step and skip past the overflow the loop would hit.
-    /// The fold is not reversible either -- the source's `-`/`+` direction is
-    /// folded into the multiplier's sign -- so the interpreter cannot replay it.
+    /// ...but not under checked cells; see [`optimize_with_cell_model`] for why
+    /// the fold is both invalid there and unreplayable afterwards.
     #[test]
     fn multiply_loop_is_not_folded_under_checked_cells() {
         let instructions = crate::parser::parse("[->+++<]").unwrap();

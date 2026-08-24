@@ -166,6 +166,11 @@ impl UnboundedMemory {
                 message: "initial_size must be greater than 0".to_string(),
             });
         }
+        if max_size.get() == 0 {
+            return Err(BfError::ConfigurationError {
+                message: "max_size must be greater than 0".to_string(),
+            });
+        }
         Ok(Self {
             initial_size,
             max_size,

@@ -44,7 +44,7 @@ let pointer_value = builder.ins().select(cmp, zero, pointer_plus);
 
 **Lesson:** Use `select` instruction for conditional wraparound. This avoids branching overhead.
 
-**Our Advantage:** We have multiple memory models (Fixed, Wrapping, Unbounded). We'll need variants:
+**Our Advantage:** We have multiple memory models (Fixed, Unbounded). We'll need variants:
 - **Fixed:** Check bounds, error on overflow
 - **Wrapping:** Use `select` as shown above
 - **Unbounded:** Call runtime function to grow memory if needed
@@ -433,7 +433,7 @@ fn translate_instruction(
 **Result:** Our Cranelift translation will be cleaner and faster!
 
 ### 2. Flexible Memory Models
-- ✅ We support Fixed, Wrapping, Unbounded
+- ✅ We support Fixed and Unbounded
 - ✅ We support U8Wrapping (fast) and U8Checked (debug)
 
 **Strategy:**
