@@ -157,6 +157,22 @@ gyrus program.bf --memory-model unbounded --cell-model wrapping
 - Verifying your program doesn't unexpectedly hit cell boundaries
 - Learning BrainFuck and want strict error checking
 
+**Checked cells run slower, and not only because of the extra check.** The
+optimizer folds a multiply loop like `[->+++<]` into a single operation that
+computes `target += source * 3` in one step. Under checked cells that would
+sail past an overflow the loop reports partway through, so the fold is not
+applied: the loop stays a loop and executes an instruction at a time. Programs
+built around multiply loops can be markedly slower under `--cell-model checked`
+than under the default. That is the intended trade — checked cells exist to
+report the overflow, and reporting it correctly means not folding it away.
+
+You can see the difference for a given program:
+
+```bash
+gyrus-tool optimize --cell-model wrapping program.bf   # folds multiply loops
+gyrus-tool optimize --cell-model checked  program.bf   # does not
+```
+
 ### Cell-Model-Aware Validation
 
 The validator provides different warnings based on your cell model:

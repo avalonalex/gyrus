@@ -56,7 +56,6 @@ Demonstrates memory access violations and how different memory models handle the
 cargo run -- examples/errors/memory_overflow.bf --memory-size 100
 
 # Try with different memory models
-cargo run -- examples/errors/memory_overflow.bf --memory-size 100 --memory-model wrapping
 cargo run -- examples/errors/memory_overflow.bf --memory-model unbounded
 ```
 
@@ -74,7 +73,6 @@ Attempted to access cell 100, valid range: 0-99
 
 **Memory model comparison:**
 - `--memory-model fixed` (default): Errors on out-of-bounds access
-- `--memory-model wrapping`: Wraps around (no error)
 - `--memory-model unbounded`: Grows dynamically (no error, up to max)
 
 ---
@@ -277,7 +275,6 @@ Error: [Error Type] at [Location]
 - **Problem**: Trying to access invalid memory cells
 - **Solution**:
   - Check your `<` and `>` movements
-  - Use `--memory-model wrapping` if your code expects wrapping
   - Use `--memory-model unbounded` for dynamic growth
   - Increase `--memory-size` if needed
 

@@ -132,6 +132,15 @@ done
 # not the diagnostic wording.
 echo
 echo "Cell-model differential (optimized vs --debug under --cell-model checked)"
+# Guard against the comparison silently testing nothing. If --cell-model were
+# renamed, both invocations would fail identically with empty output, cmp would
+# find two empty files equal, and every program would report "agree".
+if ! "$GYRUS" --cell-model checked programs/basic/hello_world.bf < /dev/null > /dev/null 2>&1; then
+    echo "  FAIL: --cell-model checked does not run a known-good program;" >&2
+    echo "        this differential would pass vacuously." >&2
+    failures=$((failures + 1))
+fi
+checked_bytes=0
 for entry in "${PROGRAMS[@]}"; do
     prog="${entry%%:*}"
     want_debug="${entry##*:}"
@@ -148,8 +157,14 @@ for entry in "${PROGRAMS[@]}"; do
         failures=$((failures + 1))
     else
         printf '  %-44s agree (exit %s)\n' "$name" "$opt_rc"
+        checked_bytes=$((checked_bytes + $(wc -c < /tmp/gyrus-chk.opt)))
     fi
 done
+
+if [ "$checked_bytes" -eq 0 ]; then
+    echo "  FAIL: no program produced output under checked cells; nothing was compared." >&2
+    failures=$((failures + 1))
+fi
 
 echo
 if [ "$failures" -gt 0 ]; then
