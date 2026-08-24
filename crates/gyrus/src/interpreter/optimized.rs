@@ -15,7 +15,7 @@ use crate::error::{BfError, Result};
 use crate::io::{BfInput, BfOutput};
 use crate::optimizer::{OptimizedInstruction, OptimizedProgram};
 use crate::stats::ExecutionStats;
-use crate::types::MemoryAddress;
+use crate::types::{MemoryAddress, StepCount};
 use std::cell::Cell;
 
 /// Execute optimized instructions
@@ -40,9 +40,14 @@ use std::cell::Cell;
 /// - The timeout is sampled, not checked per instruction. The wall clock is
 ///   read at most once every 1024 steps -- microseconds apart in arithmetic
 ///   code -- so a program may run a little past its deadline before stopping.
-///   Instructions that can block (`,` and `.`) force a read, so blocking I/O
-///   does not extend that. It is a deadline, not a hard real-time guarantee
-/// - Hooks are not yet supported (future enhancement)
+///   Calls out of the interpreter (`,` and `.`) bring the next read forward, so
+///   blocking I/O does not compound it. What no in-process deadline can do is
+///   interrupt a call that never returns: a `,` waiting on an idle terminal
+///   blocks until it gets a byte. It is a deadline, not a real-time guarantee
+/// - Hooks are not yet supported (future enhancement). Whatever wires them in
+///   must call [`arm_time_check`] around them: a hook is arbitrary code called
+///   per instruction, so like `,` and `.` it can consume unbounded wall time in
+///   a single step, which is what the timeout's step-sampling assumes away
 ///
 /// # Arguments
 ///
@@ -157,21 +162,22 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
 ///
 /// Called before every optimized instruction and once per iteration of a
 /// general loop, so a loop with an empty body (`[]`) still terminates.
-#[inline]
+///
+/// `inline(always)`, and the two error values are built by `#[cold]` functions
+/// rather than here. A plain `#[inline]` hint was refused: the `to_string` and
+/// `format!` for errors that fire at most once made the body big enough that
+/// LLVM emitted a real call, so every instruction paid a 160-byte frame,
+/// callee-saved spills and an sret round-trip around six instructions of
+/// comparison -- and the `Limits` fields were reloaded each time instead of
+/// living in registers. Outlining the cold half buys back 40% of the
+/// `--max-steps` overhead and 25% of `--timeout`.
+#[inline(always)]
 fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
     let steps = state.step_count.get();
     if let Some(max_steps) = limits.max_steps
         && steps >= max_steps
     {
-        return Err(BfError::StepLimitExceeded {
-            limit: max_steps,
-            actual_steps: state.step_count,
-            hint: "Optimized interpreter counts 1 step per optimized instruction, \
-                   plus 1 for each cell a seek walks over"
-                .to_string(),
-            source_location: None,
-            instruction_index: state.step_count.get() as usize,
-        });
+        return Err(step_limit_error(max_steps, state.step_count));
     }
 
     if let Some(timeout_ms) = limits.timeout_ms
@@ -181,50 +187,93 @@ fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
             .next_time_check
             .set(steps.saturating_add(TIME_CHECK_INTERVAL));
         if limits.start_time.elapsed().as_millis() as u64 > timeout_ms {
-            return Err(BfError::ExecutionTimeout {
-                limit_ms: timeout_ms,
-                actual_steps: Some(state.step_count),
-                hint: format!(
-                    "Program exceeded {}ms timeout after executing {} optimized instructions. \
-                     Try increasing the timeout with --timeout {}.",
-                    timeout_ms,
-                    state.step_count.get(),
-                    timeout_ms * 2
-                ),
-            });
+            return Err(timeout_error(timeout_ms, state.step_count));
         }
     }
 
     Ok(())
 }
 
-/// Force the next `check_limits` to read the wall clock.
-///
-/// Sampling by step count assumes steps cost roughly the same. I/O breaks that:
-/// stdout is line-buffered, so a `.` can block in `write_all` until a slow
-/// consumer drains the pipe, and a thousand such steps is a thousand blocking
-/// writes between two clock reads. Any instruction that can block therefore
-/// arms the next check, which costs a store on `,` and `.` and nothing at all
-/// in the arithmetic loops the sampling exists to keep fast.
-#[inline]
-fn arm_time_check(limits: &Limits) {
-    limits.next_time_check.set(0);
+/// Build the step-limit error. Out of line and `#[cold]`: it runs at most once
+/// per execution, and inlining it is what stopped `check_limits` from inlining.
+#[cold]
+#[inline(never)]
+fn step_limit_error(max_steps: u64, steps: StepCount) -> BfError {
+    BfError::StepLimitExceeded {
+        limit: max_steps,
+        actual_steps: steps,
+        hint: "Optimized interpreter counts 1 step per optimized instruction, \
+               plus 1 for each cell a seek walks over"
+            .to_string(),
+        source_location: None,
+        instruction_index: steps.get() as usize,
+    }
 }
+
+/// Build the timeout error. Out of line and `#[cold]`; see [`step_limit_error`].
+#[cold]
+#[inline(never)]
+fn timeout_error(timeout_ms: u64, steps: StepCount) -> BfError {
+    BfError::ExecutionTimeout {
+        limit_ms: timeout_ms,
+        actual_steps: Some(steps),
+        hint: format!(
+            "Program exceeded {}ms timeout after executing {} optimized instructions. \
+             Try increasing the timeout with --timeout {}.",
+            timeout_ms,
+            steps.get(),
+            timeout_ms * 2
+        ),
+    }
+}
+
+/// Bring the next wall-clock read forward to at most `within` steps from now.
+///
+/// Sampling by step count assumes steps cost roughly the same. That holds for
+/// everything the interpreter does itself, and fails for every call *out* of
+/// it, where an unknown amount of wall time can pass in one step. Today the
+/// only out-calls are `,` and `.`; a hook or a debugger breakpoint would be
+/// another, and would need the same treatment -- the rule is about leaving the
+/// interpreter, not about which opcode does it.
+///
+/// `within` is how late the deadline may be as a result. `,` passes 0: it can
+/// block indefinitely on a terminal, and it is never hot. `.` passes
+/// [`OUTPUT_CHECK_WITHIN`]: a blocked write is bounded by the reader draining
+/// the pipe, and output can be extremely hot, so forcing a read after every one
+/// costs about 2x on an output-heavy program and defeats the sampling exactly
+/// where it was meant to help.
+#[inline]
+fn arm_time_check<const CHECK_LIMITS: bool>(limits: &Limits, steps: u64, within: u64) {
+    if !CHECK_LIMITS {
+        return;
+    }
+    let cap = steps.saturating_add(within);
+    if limits.next_time_check.get() > cap {
+        limits.next_time_check.set(cap);
+    }
+}
+
+/// How many steps a blocked write may delay the timeout by.
+///
+/// `.` can be millions of instructions in a row, so it brings the check forward
+/// rather than demanding one outright: 64 bounds the lateness at 64 blocking
+/// writes while reading the clock 64x less often than arming would.
+const OUTPUT_CHECK_WITHIN: u64 = 64;
 
 /// Steps that may pass between wall-clock reads when a timeout is set.
 ///
-/// Only this interpreter samples. The tree-walking path's `LimitEnforcerHook`
-/// still reads the clock per instruction, deliberately: measured on 99beer,
-/// `--timeout` costs it 1.3x (109ms -> 144ms) against 13x here, because its
-/// per-instruction work is an order of magnitude larger and the clock read is
-/// a smaller share of it. Sampling there would buy little and would import the
-/// blocking-I/O problem `arm_time_check` exists to solve.
-///
 /// `Instant::elapsed` costs an order of magnitude more than executing an
-/// optimized instruction, so reading it before every one made --timeout a 13x
-/// slowdown rather than a safety net. At roughly 2ns per instruction this
-/// samples every ~2us, which is three orders of magnitude finer than the
-/// millisecond the timeout is expressed in.
+/// optimized instruction, so reading it before every one made `--timeout` a 13x
+/// slowdown rather than a safety net.
+///
+/// What makes a step count a usable proxy for elapsed time is that per-step
+/// work is bounded: every instruction the interpreter executes itself does a
+/// bounded amount of work, seeks are charged per cell, and unbounded memory
+/// growth is amortized. The exception is calls out of the interpreter, which
+/// [`arm_time_check`] handles. That property, not any particular nanoseconds
+/// figure, is what keeps 1024 a defensible number as hardware changes.
+///
+/// The tree-walking interpreter does not sample; see `LimitEnforcerHook`.
 const TIME_CHECK_INTERVAL: u64 = 1024;
 
 /// Step and time limits, resolved once so the hot loop does not re-read config.
@@ -322,12 +371,9 @@ fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> us
     match limits.max_steps {
         Some(max) => {
             let budget = max.saturating_sub(state.step_count.get());
-            // usize is 64-bit on every target this builds for, but say so rather
-            // than letting an `as` silently wrap a budget past u32 on a 32-bit one.
-            state
-                .pointer
-                .get()
-                .saturating_sub(usize::try_from(budget).unwrap_or(usize::MAX))
+            // Widen and subtract, as seek_window_end does: the result is never
+            // above `pointer`, so narrowing back is lossless on any target.
+            ((state.pointer.get() as u64).saturating_sub(budget)) as usize
         }
         None => 0,
     }
@@ -456,18 +502,18 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 source,
             })?;
             state.bytes_written += 1;
-            if CHECK_LIMITS {
-                arm_time_check(limits);
-            }
+            // After the out-call: an unknown amount of wall time just passed.
+            arm_time_check::<CHECK_LIMITS>(limits, state.step_count.get(), OUTPUT_CHECK_WITHIN);
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Input(_range) => {
             let ptr = state.pointer.get();
-            if CHECK_LIMITS {
-                arm_time_check(limits);
-            }
-            match input.read_byte() {
+            let byte = input.read_byte();
+            // After the out-call: `,` can have blocked on a terminal for any
+            // length of time, so the next check reads the clock unconditionally.
+            arm_time_check::<CHECK_LIMITS>(limits, state.step_count.get(), 0);
+            match byte {
                 Ok(Some(byte)) => {
                     state.memory[ptr] = byte;
                     state.bytes_read += 1;
@@ -1088,23 +1134,64 @@ mod tests {
         }
     }
 
-    /// Sampling the clock by step count assumes steps cost about the same.
-    /// Blocking I/O breaks that: an echo loop waiting on input spends almost no
-    /// steps and almost all of its time, so a timeout keyed purely to steps can
-    /// be reached hundreds of times over before the clock is next read. Measured
-    /// against a pipe fed one byte per 300ms, a build without the I/O arming did
-    /// not stop within 15s of a 500ms deadline.
+    /// Output that blocks, like a pipe whose reader is slow.
+    struct SlowOutput;
+    impl crate::io::BfOutput for SlowOutput {
+        fn write_byte(&mut self, _byte: u8) -> std::io::Result<()> {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            Ok(())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `.` brings the check forward by at most [`OUTPUT_CHECK_WITHIN`] rather
+    /// than demanding one outright, so a blocked write delays the deadline by a
+    /// bounded number of writes instead of defeating the sampling. Without any
+    /// arming on `.` the check waits a full TIME_CHECK_INTERVAL -- ~512 writes
+    /// for this loop, seconds at 5ms each.
+    #[test]
+    fn timeout_fires_while_blocked_on_output() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_timeout_ms(20)
+            .build();
+        let instructions = parse("+[.]").unwrap();
+        let program = optimize_with_cell_model(&instructions, *config.cell_model());
+        let (mut input, mut output) = (StringIo::empty(), SlowOutput);
+
+        let started = std::time::Instant::now();
+        let err = interpret_optimized(&program, config, &mut input, &mut output).unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(err, BfError::ExecutionTimeout { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(1500),
+            "a 20ms timeout took {elapsed:?} while blocked on output"
+        );
+    }
+
+    /// An echo loop blocked on input spends almost no steps and almost all of
+    /// its wall time -- the case [`arm_time_check`] exists for. Measured against
+    /// a pipe fed one byte per 300ms, a build without it did not stop within 15s
+    /// of a 500ms deadline.
     ///
-    /// The elapsed-time assertion is the point of this test, not the error type:
-    /// without the arming the timeout still fires eventually, just far too late.
+    /// The elapsed-time assertion is the point here, not the error type: without
+    /// the arming the timeout still fires, just far too late.
     #[test]
     fn timeout_fires_while_blocked_on_input() {
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(100)
             .with_timeout_ms(20)
-            .with_max_steps(2_000_000_000)
             .build();
-        let instructions = parse(",[.,]").unwrap();
+        // `,[,]`, not `,[.,]`: with a `.` in the loop the *output* arming
+        // would bring the check forward and the test would pass whether or not
+        // `,` armed at all. Reads only, so it isolates the input path.
+        let instructions = parse(",[,]").unwrap();
         let program = optimize_with_cell_model(&instructions, *config.cell_model());
         let (mut input, mut output) = (SlowInput, StringIo::empty());
 
@@ -1144,6 +1231,9 @@ mod tests {
         let config = ExecutionConfigBuilder::new()
             .with_memory_size(1000)
             .with_timeout_ms(20)
+            // Sized to this program: ~800 steps an iteration, so it gives up
+            // after about a second. It is the hang guard, not a limit under
+            // test -- if the program below changes, this wants resizing.
             .with_max_steps(2_000_000_000)
             .build();
         // cells 1..=400 non-zero, sentinels at 0 and 401; the body seeks right

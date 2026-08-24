@@ -521,7 +521,15 @@ impl ExecutionHook for LimitEnforcerHook {
             return HookDecision::Break;
         }
 
-        // Check timeout
+        // Check timeout.
+        //
+        // Read per instruction, unlike the optimized interpreter, which samples
+        // every TIME_CHECK_INTERVAL steps. That is deliberate rather than an
+        // oversight: measured on 99beer, --timeout costs this path 1.3x against
+        // 13x there, because a tree-walking step does an order of magnitude more
+        // work and the clock read is a smaller share of it. Sampling here would
+        // buy little and would import the blocking-I/O problem that the other
+        // path needs `arm_time_check` to solve.
         if let Some(timeout_ms) = self.timeout_ms {
             let elapsed = self.start_time.elapsed().as_millis() as u64;
             if elapsed > timeout_ms {
