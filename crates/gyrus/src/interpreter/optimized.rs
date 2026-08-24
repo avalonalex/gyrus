@@ -189,6 +189,16 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
         // Fused arithmetic operations
         OptimizedInstruction::Add(n, _range) => {
             let ptr = state.pointer.get();
+            // Same argument as Right/Left: `+++` was fused into Add(3), and
+            // stepping one at a time hands that back. behavior() hands out a
+            // &dyn CellBehavior, so each unit step is an indirect call that
+            // cannot inline the single wrapping_add it wraps. Wrapping cells
+            // add the whole run at once; checked cells keep the per-step loop,
+            // which is what produces the overflow error at the right value.
+            if let crate::config::CellModel::U8Wrapping(_) = config.cell_model() {
+                state.memory[ptr] = state.memory[ptr].wrapping_add(*n);
+                return Ok(ExecutionFlow::Continue);
+            }
             // Resolve the trait object once rather than per unit increment
             let cells = config.cell_model().behavior();
             for _ in 0..*n {
@@ -203,6 +213,10 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
 
         OptimizedInstruction::Sub(n, _range) => {
             let ptr = state.pointer.get();
+            if let crate::config::CellModel::U8Wrapping(_) = config.cell_model() {
+                state.memory[ptr] = state.memory[ptr].wrapping_sub(*n);
+                return Ok(ExecutionFlow::Continue);
+            }
             let cells = config.cell_model().behavior();
             for _ in 0..*n {
                 cells.try_decrement(
@@ -216,6 +230,22 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
 
         // Fused pointer movements
         OptimizedInstruction::Right(n, _range) => {
+            // The optimizer fused `>>>>` into Right(4); stepping the pointer one
+            // cell at a time here would hand that back. When the whole run lands
+            // in bounds it is one add, and nothing in the per-step path could
+            // have fired. Anything that could error or grow memory falls through
+            // to the original loop, so error semantics are unchanged.
+            // memory.len() is the right limit for both models: Fixed never
+            // resizes, so len is its size; Unbounded may grow, and staying under
+            // len is what says this move needs no growth (len <= max_size).
+            let start = state.pointer.get();
+            if let Some(end) = start.checked_add(*n)
+                && end < state.memory.len()
+            {
+                state.pointer = crate::types::MemoryAddress::new(end);
+                state.peak_pointer = state.peak_pointer.max(end);
+                return Ok(ExecutionFlow::Continue);
+            }
             // One max() per fused move rather than per unit step
             for _ in 0..*n {
                 // Use memory model's increment logic
@@ -232,6 +262,14 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
         }
 
         OptimizedInstruction::Left(n, _range) => {
+            // `start >= n` means every intermediate step had a non-zero pointer
+            // on entry, which is exactly the condition under which the per-step
+            // path cannot error. Underflow falls through to it unchanged.
+            let start = state.pointer.get();
+            if start >= *n {
+                state.pointer = crate::types::MemoryAddress::new(start - *n);
+                return Ok(ExecutionFlow::Continue);
+            }
             for _ in 0..*n {
                 // Use memory model's decrement logic
                 state.memory_model.try_decrement_pointer(
@@ -306,7 +344,24 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
         }
 
         OptimizedInstruction::SeekRight(_range) => {
-            // [>] → seek to next zero cell
+            // [>] → seek to next zero cell.
+            //
+            // Same family as Right/Add: the loop below advances one cell per
+            // iteration through the memory model. A seek is a search, so it
+            // cannot collapse to a single add -- but it is a search for a zero
+            // byte in a slice, which the standard library scans far faster than
+            // a call per cell. Only taken when the zero is actually there and
+            // no limits are armed; otherwise the original loop runs, which is
+            // what grows an unbounded tape and reports a fixed one's overrun,
+            // and what consults the step limit per cell.
+            let ptr = state.pointer.get();
+            if !CHECK_LIMITS && let Some(offset) = state.memory[ptr..].iter().position(|&b| b == 0)
+            {
+                let end = ptr + offset;
+                state.pointer = crate::types::MemoryAddress::new(end);
+                state.peak_pointer = state.peak_pointer.max(end);
+                return Ok(ExecutionFlow::Continue);
+            }
             loop {
                 let ptr = state.pointer.get();
                 if state.memory[ptr] == 0 {
@@ -331,7 +386,15 @@ fn execute_instruction<const CHECK_LIMITS: bool, I: BfInput, O: BfOutput>(
         }
 
         OptimizedInstruction::SeekLeft(_range) => {
-            // [<] → seek to previous zero cell
+            // [<] → seek to previous zero cell. See SeekRight for why this is a
+            // scan rather than a per-cell call, and when it defers to the loop.
+            // rposition indexes the `..=ptr` prefix, so it is already absolute.
+            let ptr = state.pointer.get();
+            if !CHECK_LIMITS && let Some(found) = state.memory[..=ptr].iter().rposition(|&b| b == 0)
+            {
+                state.pointer = crate::types::MemoryAddress::new(found);
+                return Ok(ExecutionFlow::Continue);
+            }
             loop {
                 let ptr = state.pointer.get();
                 if state.memory[ptr] == 0 {
@@ -448,8 +511,127 @@ mod tests {
     use super::*;
     use crate::ExecutionConfigBuilder;
     use crate::io::StringIo;
-    use crate::optimizer::{OptimizedInstruction, SourceRange, optimize};
+    use crate::optimizer::{OptimizedInstruction, SourceRange, optimize, optimize_with_cell_model};
     use crate::parse;
+
+    // --- fused-run fast paths -------------------------------------------
+    //
+    // Right/Left/Add/Sub each execute a whole fused run in one step when it is
+    // safe, and defer to the per-unit loop when it is not. These pin the seam:
+    // the fast path must agree with the loop, and the loop must still produce
+    // the errors it always did.
+
+    fn run_opt(src: &str, config: crate::config::ExecutionConfig) -> Result<String> {
+        let instructions = parse(src).unwrap();
+        let program = optimize(&instructions);
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        interpret_optimized(&program.instructions, config, &mut input, &mut output)?;
+        Ok(output.output_string())
+    }
+
+    #[test]
+    fn fused_pointer_move_lands_where_the_unit_steps_would() {
+        // 9 rights then 4 lefts leaves the pointer on cell 5.
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let out = run_opt(">>>>>>>>><<<<+.", config).unwrap();
+        assert_eq!(out.as_bytes(), &[1]);
+    }
+
+    #[test]
+    fn fused_right_that_exactly_fits_is_not_an_error() {
+        // memory_size 10 => cells 0..=9; Right(9) lands on the last valid cell.
+        let config = ExecutionConfigBuilder::new().with_memory_size(10).build();
+        assert!(run_opt(">>>>>>>>>+.", config).is_ok());
+    }
+
+    #[test]
+    fn fused_right_past_the_end_still_reports_out_of_bounds() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(10).build();
+        let err = run_opt(">>>>>>>>>>", config).unwrap_err();
+        assert!(
+            matches!(err, BfError::MemoryOutOfBounds { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn fused_left_below_zero_still_reports_out_of_bounds() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        // Right(2) then Left(4): the third unit step is the one that underflows.
+        let err = run_opt(">><<<<", config).unwrap_err();
+        assert!(
+            matches!(err, BfError::MemoryOutOfBounds { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn fused_left_to_exactly_zero_is_not_an_error() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        assert!(run_opt(">>>>><<<<<+.", config).is_ok());
+    }
+
+    #[test]
+    fn fused_cell_arithmetic_wraps_like_the_unit_steps() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_wrapping_cells()
+            .build();
+        // 255 increments then 3 more: wraps to 2.
+        let src = format!("{}.", "+".repeat(258));
+        assert_eq!(run_opt(&src, config).unwrap().as_bytes(), &[2]);
+    }
+
+    #[test]
+    fn fused_cell_arithmetic_still_errors_under_checked_cells() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+        let src = "+".repeat(256);
+        let err = run_opt(&src, config).unwrap_err();
+        assert!(matches!(err, BfError::CellOverflow { .. }), "got {err:?}");
+    }
+
+    /// A multiply loop must report the overflow the unfused program reports,
+    /// rather than folding it into one wrapping multiply. This is the bug the
+    /// cell-model gate in `optimize_with_cell_model` exists to prevent.
+    #[test]
+    fn multiply_loop_reports_overflow_under_checked_cells() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build();
+        let instructions = parse(format!("{}[->+++<]>.", "+".repeat(100)).as_str()).unwrap();
+        let program = optimize_with_cell_model(&instructions, *config.cell_model());
+        let mut input = StringIo::empty();
+        let mut output = StringIo::empty();
+        let err = interpret_optimized(&program.instructions, config, &mut input, &mut output)
+            .unwrap_err();
+        assert!(matches!(err, BfError::CellOverflow { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn seek_finds_the_same_cell_as_stepping_would() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        // cells 0..2 non-zero, cell 3 zero: [>] from 0 must stop on cell 3.
+        assert_eq!(run_opt("+>+>+><<<[>]+.", config).unwrap().as_bytes(), &[1]);
+    }
+
+    #[test]
+    fn seek_on_a_zero_cell_does_not_move() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        // Cell 0 is already zero, so [>] is a no-op and the + lands on cell 0.
+        assert_eq!(run_opt("[>]+.", config).unwrap().as_bytes(), &[1]);
+    }
+
+    #[test]
+    fn seek_left_finds_the_nearest_zero_to_the_left() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        // cell 0 zero, cells 1..3 non-zero; [<] from cell 3 stops on cell 0.
+        assert_eq!(run_opt(">+>+>+[<]+.", config).unwrap().as_bytes(), &[1]);
+    }
 
     #[test]
     fn test_optimized_add() {
