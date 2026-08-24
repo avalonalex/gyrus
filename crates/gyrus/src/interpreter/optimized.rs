@@ -16,6 +16,7 @@ use crate::io::{BfInput, BfOutput};
 use crate::optimizer::{OptimizedInstruction, OptimizedProgram};
 use crate::stats::ExecutionStats;
 use crate::types::MemoryAddress;
+use std::cell::Cell;
 
 /// Execute optimized instructions
 ///
@@ -86,7 +87,7 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     // whole run, so testing it per instruction puts a branch the compiler
     // cannot hoist inside every loop body. WRAPPING selects the whole-run
     // arithmetic and deletes the &dyn CellBehavior path from the build.
-    let limited = limits.max_steps.is_some() || limits.timeout_ms.is_some();
+    let limited = config.max_steps().is_some() || limits.timeout_ms.is_some();
     let wrapping = matches!(program.cell_model, crate::config::CellModel::U8Wrapping(_));
     match (limited, wrapping) {
         (true, true) => execute_block::<true, true, _, _>(
@@ -153,11 +154,10 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
 /// general loop, so a loop with an empty body (`[]`) still terminates.
 #[inline]
 fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
-    if let Some(max_steps) = limits.max_steps
-        && state.step_count.get() >= max_steps
-    {
+    let steps = state.step_count.get();
+    if steps >= limits.max_steps {
         return Err(BfError::StepLimitExceeded {
-            limit: max_steps,
+            limit: limits.max_steps,
             actual_steps: state.step_count,
             hint: "Optimized interpreter counts 1 step per optimized instruction, \
                    plus 1 for each cell a seek walks over"
@@ -168,37 +168,62 @@ fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
     }
 
     if let Some(timeout_ms) = limits.timeout_ms
-        && limits.start_time.elapsed().as_millis() as u64 > timeout_ms
+        && steps >= limits.next_time_check.get()
     {
-        return Err(BfError::ExecutionTimeout {
-            limit_ms: timeout_ms,
-            actual_steps: Some(state.step_count),
-            hint: format!(
-                "Program exceeded {}ms timeout after executing {} optimized instructions. \
-                 Try increasing the timeout with --timeout {}.",
-                timeout_ms,
-                state.step_count.get(),
-                timeout_ms * 2
-            ),
-        });
+        limits
+            .next_time_check
+            .set(steps.saturating_add(TIME_CHECK_INTERVAL));
+        if limits.start_time.elapsed().as_millis() as u64 > timeout_ms {
+            return Err(BfError::ExecutionTimeout {
+                limit_ms: timeout_ms,
+                actual_steps: Some(state.step_count),
+                hint: format!(
+                    "Program exceeded {}ms timeout after executing {} optimized instructions. \
+                     Try increasing the timeout with --timeout {}.",
+                    timeout_ms,
+                    state.step_count.get(),
+                    timeout_ms * 2
+                ),
+            });
+        }
     }
 
     Ok(())
 }
 
 /// Step and time limits, resolved once so the hot loop does not re-read config.
+/// Steps that may pass between wall-clock reads when a timeout is set.
+///
+/// `Instant::elapsed` costs an order of magnitude more than executing an
+/// optimized instruction, so reading it before every one made --timeout a 13x
+/// slowdown rather than a safety net. At roughly 2ns per instruction this
+/// samples every ~2us, which is three orders of magnitude finer than the
+/// millisecond the timeout is expressed in.
+const TIME_CHECK_INTERVAL: u64 = 1024;
+
 struct Limits {
-    max_steps: Option<u64>,
+    /// `u64::MAX` when unset, so the hot path compares rather than unwrapping.
+    max_steps: u64,
     timeout_ms: Option<u64>,
     start_time: std::time::Instant,
+    /// Step count at which the wall clock is next worth reading.
+    ///
+    /// A threshold rather than a `steps % INTERVAL == 0` test. Instructions
+    /// advance the count by one, but a seek advances it by the number of cells
+    /// it walked, so a test for an exact multiple is skipped whenever a seek
+    /// steps over one. That only delays a check rather than losing it -- the
+    /// following instructions resume counting by one -- but a threshold bounds
+    /// the gap at INTERVAL steps unconditionally, for the same single compare.
+    next_time_check: Cell<u64>,
 }
 
 impl Limits {
     fn from_config(config: &ExecutionConfig) -> Self {
         Self {
-            max_steps: config.max_steps(),
+            max_steps: config.max_steps().unwrap_or(u64::MAX),
             timeout_ms: config.timeout_ms(),
             start_time: std::time::Instant::now(),
+            next_time_check: Cell::new(0),
         }
     }
 }
@@ -246,16 +271,11 @@ fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usiz
     if !check_limits {
         return len;
     }
-    match limits.max_steps {
-        Some(max) => {
-            let budget = max.saturating_sub(state.step_count.get());
-            let reach = (state.pointer.get() as u64).saturating_add(budget);
-            // +1 so the cell the limit lands on is still examined, matching the
-            // per-cell loop, which checks the limit before moving.
-            (reach.saturating_add(1)).min(len as u64) as usize
-        }
-        None => len,
-    }
+    let budget = limits.max_steps.saturating_sub(state.step_count.get());
+    let reach = (state.pointer.get() as u64).saturating_add(budget);
+    // +1 so the cell the limit lands on is still examined, matching the
+    // per-cell loop, which checks the limit before moving.
+    (reach.saturating_add(1)).min(len as u64) as usize
 }
 
 /// How far left a seek may scan. See [`seek_window_end`].
@@ -264,13 +284,8 @@ fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> us
     if !check_limits {
         return 0;
     }
-    match limits.max_steps {
-        Some(max) => {
-            let budget = max.saturating_sub(state.step_count.get());
-            state.pointer.get().saturating_sub(budget as usize)
-        }
-        None => 0,
-    }
+    let budget = limits.max_steps.saturating_sub(state.step_count.get());
+    state.pointer.get().saturating_sub(budget as usize)
 }
 
 /// Execute a single optimized instruction
@@ -1011,6 +1026,30 @@ mod tests {
                 seen[0], seen[1]
             );
         }
+    }
+
+    /// The wall clock is now sampled rather than read every instruction, so
+    /// this pins that a timeout still stops a program whose step count moves in
+    /// jumps: it spins forever with two ~400-cell seeks per iteration.
+    ///
+    /// It does not discriminate between sampling schemes -- a `% INTERVAL == 0`
+    /// test passes it too, because instructions still walk the count through
+    /// every value between seeks. See `Limits::next_time_check` for why the
+    /// threshold is preferred anyway.
+    #[test]
+    fn timeout_fires_when_the_step_count_moves_in_jumps() {
+        let config = ExecutionConfigBuilder::new()
+            .with_memory_size(1000)
+            .with_timeout_ms(20)
+            .build();
+        // cells 1..=400 non-zero, sentinels at 0 and 401; the body seeks right
+        // to 401, then left to 0, then steps back onto cell 1 and repeats.
+        let src = format!(">{}{}[[>]<[<]>]", "+>".repeat(400), "<".repeat(400));
+        let err = run_opt(&src, config).unwrap_err();
+        assert!(
+            matches!(err, BfError::ExecutionTimeout { .. }),
+            "got {err:?}"
+        );
     }
 
     /// The step limit must be able to stop a seek that never terminates.
