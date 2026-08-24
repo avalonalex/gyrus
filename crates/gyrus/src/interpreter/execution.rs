@@ -9,45 +9,27 @@ use super::dispatch::HookDispatcher;
 use super::state::{ExecutionFlow, ExecutionResult, VmState};
 use crate::config::{EofBehavior, ExecutionConfig};
 use crate::debug::DebugInfo;
-use crate::error::{BfError, Result};
+use crate::error::BfError;
 use crate::hooks::HookDecision;
 use crate::instruction::Instruction;
 use crate::io::{BfInput, BfOutput};
 use crate::types::StepCount;
 use std::io;
 
-/// Handle pointer increment based on memory model
+/// Move the cursor one cell right.
+///
+/// Infallible under the tape contract: a cursor may sit anywhere, on the tape
+/// or off it, and only using it can fail. The bound is enforced in
+/// `VmState::cell`, at the access.
 #[inline]
-fn increment_pointer(
-    state: &mut VmState,
-    instruction_index: usize,
-    debug_info: Option<&DebugInfo>,
-) -> Result<()> {
-    state.memory_model.try_increment_pointer(
-        &mut state.pointer,
-        &mut state.memory,
-        state.step_count,
-        debug_info,
-        instruction_index,
-    )
+fn increment_pointer(state: &mut VmState) {
+    state.pointer.increment();
 }
 
-/// Handle pointer decrement based on memory model
+/// Move the cursor one cell left. Infallible; see [`increment_pointer`].
 #[inline]
-fn decrement_pointer(
-    state: &mut VmState,
-    allow_negative_pointer: bool,
-    instruction_index: usize,
-    debug_info: Option<&DebugInfo>,
-) -> Result<()> {
-    state.memory_model.try_decrement_pointer(
-        &mut state.pointer,
-        &state.memory,
-        allow_negative_pointer,
-        state.step_count,
-        debug_info,
-        instruction_index,
-    )
+fn decrement_pointer(state: &mut VmState) {
+    state.pointer.decrement();
 }
 
 /// Execute a single non-loop instruction
@@ -81,17 +63,11 @@ pub(super) fn execute_single_instruction<I: BfInput, O: BfOutput>(
 ) -> ExecutionResult {
     match instruction {
         Instruction::IncrementPointer => {
-            increment_pointer(state, instruction_index, debug_info)?;
-            // Peak memory usage tracking moved to StatsTrackerHook
+            increment_pointer(state);
         }
 
         Instruction::DecrementPointer => {
-            decrement_pointer(
-                state,
-                config.allow_negative_pointer(),
-                instruction_index,
-                debug_info,
-            )?;
+            decrement_pointer(state);
         }
 
         // Cell arithmetic: Delegated to CellModel (configurable!)
@@ -105,29 +81,30 @@ pub(super) fn execute_single_instruction<I: BfInput, O: BfOutput>(
         // See config.rs module docs for CellModel and MemoryModel orthogonality.
         // See validator.rs module docs for cell-model-aware validation.
         Instruction::IncrementValue => {
-            config.cell_model().behavior().try_increment(
-                &mut state.memory[state.pointer.get()],
-                state.step_count,
-                debug_info,
-            )?;
+            let steps = state.step_count;
+            let cell = state.cell(debug_info, instruction_index)?;
+            config
+                .cell_model()
+                .behavior()
+                .try_increment(cell, steps, debug_info)?;
         }
 
         Instruction::DecrementValue => {
-            config.cell_model().behavior().try_decrement(
-                &mut state.memory[state.pointer.get()],
-                state.step_count,
-                debug_info,
-            )?;
+            let steps = state.step_count;
+            let cell = state.cell(debug_info, instruction_index)?;
+            config
+                .cell_model()
+                .behavior()
+                .try_decrement(cell, steps, debug_info)?;
         }
 
         Instruction::Output => {
-            output
-                .write_byte(state.memory[state.pointer.get()])
-                .map_err(|source| BfError::IoError {
-                    operation: "writing output".to_string(),
-                    instruction_index: Some(state.step_count.into()),
-                    source,
-                })?;
+            let byte = *state.cell(debug_info, instruction_index)?;
+            output.write_byte(byte).map_err(|source| BfError::IoError {
+                operation: "writing output".to_string(),
+                instruction_index: Some(state.step_count.into()),
+                source,
+            })?;
             output.flush().map_err(|source| BfError::IoError {
                 operation: "flushing output".to_string(),
                 instruction_index: Some(state.step_count.into()),
@@ -139,17 +116,17 @@ pub(super) fn execute_single_instruction<I: BfInput, O: BfOutput>(
         Instruction::Input => {
             match input.read_byte() {
                 Ok(Some(byte)) => {
-                    state.memory[state.pointer.get()] = byte;
+                    *state.cell(debug_info, instruction_index)? = byte;
                     // Bytes read tracking moved to StatsTrackerHook
                 }
                 Ok(None) => {
                     // Handle EOF based on configuration
                     match config.eof_behavior() {
                         EofBehavior::SetZero => {
-                            state.memory[state.pointer.get()] = 0;
+                            *state.cell(debug_info, instruction_index)? = 0;
                         }
                         EofBehavior::SetNegOne => {
-                            state.memory[state.pointer.get()] = 255; // -1 as u8
+                            *state.cell(debug_info, instruction_index)? = 255; // -1 as u8
                         }
                         EofBehavior::NoChange => {
                             // Do nothing, leave cell as-is
@@ -177,7 +154,9 @@ pub(super) fn execute_single_instruction<I: BfInput, O: BfOutput>(
             // LoopCheck checks the loop condition and exits if cell is zero
             // This is the BrainFuck '[' instruction logic
             // The step counter is already incremented in execute_block before this is called
-            if state.memory[state.pointer.get()] == 0 {
+            // The loop condition reads the cell, so it is an access and the
+            // cursor has to be on the tape for it.
+            if *state.cell(debug_info, instruction_index)? == 0 {
                 return Ok(ExecutionFlow::LoopExit);
             }
             // If cell is non-zero, continue with the rest of the loop body

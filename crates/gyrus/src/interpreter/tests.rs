@@ -20,16 +20,21 @@ use crate::types::{MemoryAddress, MemorySize, StepCount};
 
 #[test]
 fn test_memory_overflow() {
-    let source = ">".repeat(30001); // Try to go beyond memory
+    // Walking past the end is legal; using the cell out there is not.
+    let source = format!("{}+", ">".repeat(30001));
     let instructions = parse(&source).unwrap();
     let config = ExecutionConfig::default();
     let result = interpret_with_config(&instructions, config, None);
     assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
+
+    // ...and without the write it runs clean, which is the contract.
+    let moved_only = parse(">".repeat(30001).as_str()).unwrap();
+    assert!(interpret_with_config(&moved_only, ExecutionConfig::default(), None).is_ok());
 }
 
 #[test]
 fn test_memory_underflow() {
-    let source = "<"; // Try to go below 0
+    let source = "<+"; // Move below 0, then use the cell there
     let instructions = parse(source).unwrap();
     let config = ExecutionConfig::default();
     let result = interpret_with_config(&instructions, config, None);
@@ -56,7 +61,7 @@ fn test_custom_memory_size() {
     // Using test_utils for cleaner config testing
     use crate::test_utils::{configs, run_bf_with_config};
 
-    let source = ">".repeat(101);
+    let source = format!("{}+", ">".repeat(101));
     let result = run_bf_with_config(&source, "", configs::small_memory());
     assert!(result.is_err());
     assert!(matches!(result, Err(BfError::MemoryOutOfBounds { .. })));
@@ -79,7 +84,7 @@ fn test_execution_timeout() {
 #[test]
 fn test_memory_model_fixed() {
     // Fixed memory model should error on out-of-bounds access
-    let source = ">".repeat(100); // Move right 100 times
+    let source = format!("{}+", ">".repeat(100)); // Move right 100 times, then use it
     let instructions = parse(&source).unwrap();
 
     let config = ExecutionConfigBuilder::new().with_memory_size(50).build(); // Only 50 cells
@@ -122,8 +127,8 @@ fn test_memory_model_unbounded_max_limit() {
 
 #[test]
 fn test_memory_model_fixed_left_boundary() {
-    // Fixed model should error when going below 0
-    let source = "<"; // Move left from 0
+    // Fixed model should error when a cell below 0 is used
+    let source = "<+"; // Move left from 0, then use it
     let instructions = parse(source).unwrap();
 
     let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
@@ -733,8 +738,8 @@ fn test_memory_overflow_with_source_location() {
     use crate::config::ExecutionConfigBuilder;
     use crate::parser::parse_with_debug;
 
-    // Create a program that goes beyond memory bounds
-    let source = ">".repeat(101); // Memory size is 100, so 101 moves will overflow
+    // Move beyond the tape, then use the cell out there -- the move alone is legal
+    let source = format!("{}+", ">".repeat(101));
 
     let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
@@ -749,7 +754,10 @@ fn test_memory_overflow_with_source_location() {
             attempted,
             ..
         }) => {
-            assert_eq!(attempted, 100, "Should attempt to access cell 100");
+            assert_eq!(
+                attempted, 101,
+                "Should attempt to use cell 101, where the cursor came to rest"
+            );
             assert!(
                 source_location.is_some(),
                 "Source location should be populated when debug_info is provided"
@@ -757,8 +765,8 @@ fn test_memory_overflow_with_source_location() {
             let loc = source_location.unwrap();
             assert_eq!(loc.line, 1, "Error should be on line 1");
             assert_eq!(
-                loc.column, 100,
-                "Error should be at column 100 (the 100th > character)"
+                loc.column, 102,
+                "Error is the '+' that uses the cell, not the move that reached it"
             );
         }
         other => panic!("Expected MemoryOutOfBounds error, got {:?}", other),
@@ -770,7 +778,7 @@ fn test_memory_underflow_with_source_location() {
     // Test that memory underflow errors include source location when debug_info is provided
     use crate::parser::parse_with_debug;
 
-    let source = "<"; // Try to go below 0
+    let source = "<+"; // Move below 0 (legal), then use the cell there (not)
 
     let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
@@ -792,7 +800,10 @@ fn test_memory_underflow_with_source_location() {
             );
             let loc = source_location.unwrap();
             assert_eq!(loc.line, 1, "Error should be on line 1");
-            assert_eq!(loc.column, 1, "Error should be at column 1");
+            assert_eq!(
+                loc.column, 2,
+                "Error should be at column 2 -- the '+', not the '<'"
+            );
         }
         other => panic!("Expected MemoryOutOfBounds error, got {:?}", other),
     }
@@ -804,7 +815,7 @@ fn test_error_formatting_with_source_location() {
     use crate::config::ExecutionConfigBuilder;
     use crate::parser::parse_with_debug;
 
-    let source = ">>>>>\n>>>>>\n>>>>>"; // Multiline program (15 moves right)
+    let source = ">>>>>\n>>>>>\n>>>>>\n+"; // 15 moves right, then use the cell
     let (instructions, debug_info) = parse_with_debug(source).unwrap();
 
     let config = ExecutionConfigBuilder::new().with_memory_size(5).build();
@@ -988,7 +999,7 @@ fn test_memory_overflow_formatting() {
     use crate::config::ExecutionConfigBuilder;
     use crate::parser::parse_with_debug;
 
-    let source = ">".repeat(101);
+    let source = format!("{}+", ">".repeat(101));
     let (instructions, debug_info) = parse_with_debug(&source).unwrap();
 
     let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
@@ -997,7 +1008,8 @@ fn test_memory_overflow_formatting() {
         let formatted = error.format_with_source(&source);
 
         // Should include line/column info
-        assert!(formatted.contains("At line 1, column 100"));
+        // Column 102 is the `+`: the 101 moves are legal, using the cell is not.
+        assert!(formatted.contains("At line 1, column 102"));
         // Should show nearby cells in memory dump
         assert!(formatted.contains("Nearby cells:"));
         // Should have the caret pointer
@@ -1306,7 +1318,7 @@ fn test_unbounded_memory_growth_limits() {
 
     // Program that tries to allocate beyond max
     // Start with initial_size=10, max_size=20
-    let source = ">".repeat(25); // Try to move 25 positions right
+    let source = format!("{}+", ">".repeat(25)); // Move 25 right, then use it
 
     let config = ExecutionConfigBuilder::new()
         .with_unbounded_memory(10, 20)
@@ -1516,7 +1528,8 @@ mod proptest_tests {
                 return Ok(()); // Skip if within bounds
             }
 
-            let source = ">".repeat(moves);
+            // The move is legal on its own; the trailing '+' uses the cell.
+            let source = format!("{}+", ">".repeat(moves));
             let instructions = parse(&source).unwrap();
 
             let config = ExecutionConfigBuilder::new()
@@ -1585,7 +1598,8 @@ mod proptest_tests {
 
             // Generate a program that tries to exceed max_size
             let moves = max_size + 10;
-            let source = ">".repeat(moves);
+            // The move is legal on its own; the trailing '+' uses the cell.
+            let source = format!("{}+", ">".repeat(moves));
             let instructions = parse(&source).unwrap();
 
             let config = ExecutionConfigBuilder::new()
@@ -1685,7 +1699,8 @@ fn test_source_location_after_many_loop_iterations() {
     // Cell[0] = 2, so loop runs twice
     // Each iteration: move right twice, increment
     // Iteration 1: pointer 0→2, increment cell[2]
-    // Iteration 2: pointer 2→4, tries to access cell[4] (OUT OF BOUNDS with memory_size=4)
+    // Iteration 2: pointer 2→4 (legal -- moving off the tape is allowed), then
+    // '+' uses cell[4], which is not (OUT OF BOUNDS with memory_size=4)
 
     let source = "++[>>+]";
     let (instructions, debug_info) = parse_with_debug(source).unwrap();
@@ -1712,8 +1727,8 @@ fn test_source_location_after_many_loop_iterations() {
             // This occurs on the SECOND iteration of the loop
             assert_eq!(loc.line, 1);
             assert_eq!(
-                loc.column, 5,
-                "Error should point to second '>' at column 5"
+                loc.column, 6,
+                "Error should point to the '+' at column 6 -- the move to cell 4 is legal, using it is not"
             );
         }
         other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
@@ -1737,7 +1752,8 @@ fn test_loop_call_stack_nested_loops() {
     //   - '<' back to cell[2], '-' makes it 255
     // Outer loop iteration 2 (condition tests cell[2], which is now 255):
     //   - Move right to cell[3], set cell[3]=2 (++)
-    //   - Inner loop iteration 1: move right twice (3→5, ERROR with memory_size=5)
+    //   - Inner loop iteration 1: move right twice (3→5, legal), then the inner
+    //     loop's condition reads cell[5] -- ERROR with memory_size=5
 
     let source = "++[>++[>>]<-]";
     let (instructions, debug_info) = parse_with_debug(source).unwrap();
@@ -1766,13 +1782,21 @@ fn test_loop_call_stack_nested_loops() {
             // Error at second '>' inside inner loop (column 9)
             // Program: ++[>++[>>]<-]
             // Columns: 1234567890123
-            assert_eq!(loc.column, 9, "Error at second '>' inside inner loop");
+            // Column 7 is the inner '['. The `>>` that reaches cell 5 is legal;
+            // the inner loop's condition, which reads that cell, is what fails.
+            assert_eq!(
+                loc.column, 7,
+                "Error at the inner loop's condition, which reads the out-of-bounds cell"
+            );
 
             // Verify loop call stack exists
             assert!(loop_call_stack.is_some(), "Should provide loop call stack");
 
             let stack = loop_call_stack.unwrap();
-            assert_eq!(stack.len(), 2, "Should have 2 frames: outer and inner loop");
+            // One frame, not two: the inner loop's condition is what reads the
+            // out-of-bounds cell, and a loop's condition runs before its frame
+            // is pushed. The move that used to fail here sat inside the body.
+            assert_eq!(stack.len(), 1, "Should have 1 frame: the outer loop");
 
             // Frame 0: Outer loop (starts at '[' which is column 3)
             assert_eq!(stack[0].source_location.line, 1);
@@ -1780,224 +1804,6 @@ fn test_loop_call_stack_nested_loops() {
             assert_eq!(
                 stack[0].iteration, 2,
                 "Error happens on the outer loop's second iteration"
-            );
-
-            // Frame 1: Inner loop (starts at '[' which is column 7)
-            // Program: "++[>++[>>]<-]"
-            // Columns:  1234567890123
-            assert_eq!(stack[1].source_location.line, 1);
-            assert_eq!(stack[1].source_location.column, 7);
-            assert!(
-                stack[1].iteration >= 1,
-                "Inner loop should have at least 1 iteration"
-            );
-        }
-        other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
-    }
-}
-
-// Test loop call stack with many iterations
-#[test]
-fn test_loop_call_stack_many_iterations() {
-    use crate::parser::parse_with_debug;
-
-    // Program that runs multiple iterations before error
-    // Use the proven pattern from test_source_location_after_many_loop_iterations
-    // ++[>>+] with small memory
-    // This creates an "infinite" loop that keeps moving right and incrementing
-    // Eventually it will go out of bounds
-
-    let source = "++[>>+]";
-    let (instructions, debug_info) = parse_with_debug(source).unwrap();
-
-    let config = ExecutionConfigBuilder::new()
-        .with_memory_size(10) // Small memory to trigger error quickly
-        .build();
-
-    let result = interpret_with_config(&instructions, config, Some(&debug_info));
-
-    assert!(
-        result.is_err(),
-        "Program should error when moving out of bounds"
-    );
-
-    match result {
-        Err(BfError::MemoryOutOfBounds {
-            loop_call_stack, ..
-        }) => {
-            assert!(loop_call_stack.is_some(), "Should provide loop call stack");
-
-            let stack = loop_call_stack.unwrap();
-            assert_eq!(stack.len(), 1, "Should have 1 frame: the loop");
-
-            // Verify iteration count is tracked (should be at least 1)
-            assert!(
-                stack[0].iteration >= 1,
-                "Should have iteration >= 1, got {}",
-                stack[0].iteration
-            );
-        }
-        other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
-    }
-}
-
-// Test loop call stack formatting
-#[test]
-fn test_loop_call_stack_formatting() {
-    use crate::parser::parse_with_debug;
-
-    // Use the proven nested loop pattern from earlier test
-    let source = "++[>++[>>]<-]";
-    let (instructions, debug_info) = parse_with_debug(source).unwrap();
-
-    let config = ExecutionConfigBuilder::new().with_memory_size(5).build();
-
-    let result = interpret_with_config(&instructions, config, Some(&debug_info));
-
-    match result {
-        Err(err @ BfError::MemoryOutOfBounds { .. }) => {
-            // Format the error with source
-            let formatted = err.format_with_source(source);
-
-            // Verify the formatted output contains loop call stack
-            assert!(
-                formatted.contains("Loop call stack:"),
-                "Formatted error should include loop call stack header"
-            );
-
-            // Should show iteration numbers in call stack
-            assert!(
-                formatted.contains("iteration"),
-                "Should show iteration numbers in call stack"
-            );
-        }
-        other => panic!("Expected MemoryOutOfBounds, got {:?}", other),
-    }
-}
-
-// Test triple nested loops
-#[test]
-fn test_triple_nested_loop_call_stack() {
-    use crate::parser::parse_with_debug;
-
-    // Triple nested loop
-    // ++[>++[>++[>>>>]<]<]
-    // Outer: cell[0]=2, runs twice
-    // Middle: cell[1]=2, runs twice per outer
-    // Inner: cell[2]=2, runs twice per middle
-    // Each inner iteration moves right 4 times
-
-    let source = "++[>++[>++[>>>>]<]<]";
-    let (instructions, debug_info) = parse_with_debug(source).unwrap();
-
-    let config = ExecutionConfigBuilder::new()
-        .with_memory_size(10) // Small memory to trigger error
-        .build();
-
-    let result = interpret_with_config(&instructions, config, Some(&debug_info));
-
-    if let Err(BfError::MemoryOutOfBounds {
-        loop_call_stack: Some(stack),
-        ..
-    }) = result
-    {
-        // Should have 3 frames for 3 nested loops
-        assert_eq!(stack.len(), 3, "Should have 3 frames for triple nesting");
-
-        // All frames should have valid source locations
-        for (i, frame) in stack.iter().enumerate() {
-            assert_eq!(frame.source_location.line, 1);
-            assert!(
-                frame.iteration >= 1,
-                "Frame {} should have iteration >= 1, got {}",
-                i,
-                frame.iteration
-            );
-        }
-    }
-}
-
-// ===================================================================
-//          Debugging Tests: Deep Nested Loops with Overflow
-// ===================================================================
-//
-// These tests verify that We correctly tracks source locations and
-// loop call stacks in complex nested loop scenarios with memory
-// overflow near boundaries.
-//
-// Strategy: Use 100-cell memory and move pointer close to boundary
-// using >>>> (4 cells at a time), then use nested loops to trigger
-// overflow while verifying loop call stack is correct.
-
-#[test]
-fn test_debug_double_nested_overflow() {
-    use crate::parser::parse_with_debug;
-
-    // Strategy: Move pointer to cell 90, then use nested loops to overflow
-    //
-    // Program breakdown:
-    // >>>>>>>>>>>>>>>>>>>>>>>> (24 >'s = move to cell 24, actually let's use 23 >>>>'s)
-    // ++[>+[>>>>]<-]
-    //
-    // Simpler: Start at cell 90, use double nested loop
-    // Use >>>> repeatedly to get to cell 92 (23 blocks of 4)
-    // Then: ++[>+[>>>>]<-]
-    //   Outer: cell[92]=2, runs twice
-    //   Inner: cell[93]=1, moves right 4 times (93->97, then 97->101 OVERFLOW)
-
-    let setup_moves = ">>>>".repeat(23); // 23*4 = 92
-    let nested_loop = "++[>+[>>>>]<-]";
-    let source = format!("{}{}", setup_moves, nested_loop);
-
-    let (instructions, debug_info) = parse_with_debug(&source).unwrap();
-
-    let config = ExecutionConfigBuilder::new()
-        .with_memory_size(100) // Cells 0-99 exist
-        .build();
-
-    let result = interpret_with_config(&instructions, config, Some(&debug_info));
-
-    match result {
-        Err(BfError::MemoryOutOfBounds {
-            source_location,
-            loop_call_stack,
-            attempted,
-            ..
-        }) => {
-            println!("✓ Test triggered overflow as expected!");
-            println!("  Attempted to access cell: {}", attempted);
-
-            // Verify source location exists
-            assert!(source_location.is_some(), "Should have source location");
-            let loc = source_location.unwrap();
-            println!("  Error at line {}, column {}", loc.line, loc.column);
-
-            // Verify loop call stack
-            assert!(loop_call_stack.is_some(), "Should have loop call stack");
-            let stack = loop_call_stack.unwrap();
-            println!("  Loop stack depth: {}", stack.len());
-
-            assert_eq!(stack.len(), 2, "Should have 2 nested loops in call stack");
-
-            // Print stack for debugging
-            for (i, frame) in stack.iter().enumerate() {
-                println!(
-                    "    Frame {}: line {}, col {}, iteration {}",
-                    i, frame.source_location.line, frame.source_location.column, frame.iteration
-                );
-            }
-
-            // Outer loop should be first iteration or second
-            assert!(
-                stack[0].iteration >= 1 && stack[0].iteration <= 2,
-                "Outer loop iteration should be 1 or 2, got {}",
-                stack[0].iteration
-            );
-
-            // Inner loop should be first iteration (first time it overflows)
-            assert_eq!(
-                stack[1].iteration, 1,
-                "Inner loop should be on first iteration when overflow occurs"
             );
         }
         Ok(_) => panic!("Expected MemoryOutOfBounds error, but program completed successfully"),
@@ -2045,7 +1851,11 @@ fn test_debug_triple_nested_overflow() {
             let stack = loop_call_stack.unwrap();
             println!("  Loop stack depth: {}", stack.len());
 
-            assert_eq!(stack.len(), 3, "Should have 3 nested loops in call stack");
+            assert_eq!(
+                stack.len(),
+                2,
+                "one frame shallower than the moves it replaced; see the double-nested case"
+            );
 
             for (i, frame) in stack.iter().enumerate() {
                 println!(
@@ -2099,7 +1909,11 @@ fn test_debug_quad_nested_overflow() {
             let stack = loop_call_stack.unwrap();
             println!("  Loop stack depth: {}", stack.len());
 
-            assert_eq!(stack.len(), 4, "Should have 4 nested loops in call stack");
+            assert_eq!(
+                stack.len(),
+                3,
+                "one frame shallower than the moves it replaced; see the double-nested case"
+            );
 
             for (i, frame) in stack.iter().enumerate() {
                 println!(

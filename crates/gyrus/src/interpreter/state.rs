@@ -1,7 +1,8 @@
 //! VM state and execution flow types for the BrainFuck interpreter.
 
 use crate::config::MemoryModel;
-use crate::error::BfError;
+use crate::debug::DebugInfo;
+use crate::error::{BfError, Result};
 use crate::types::{MemoryAddress, StepCount};
 
 /// Control flow decision after instruction execution
@@ -33,11 +34,16 @@ pub(super) struct VmState {
     pub loop_depth: usize,
     /// Memory model that dictates how memory operations behave
     pub memory_model: MemoryModel,
-    /// Highest pointer position reached so far.
+    /// Highest cell index actually *used*, for `peak_memory_used`.
+    ///
+    /// Not the furthest the cursor travelled: under the tape contract a program
+    /// may walk to cell 100_000 and back without touching anything, and it has
+    /// not used 100_000 cells. Maintained in `cell_at`, which is the only place
+    /// a cell is reached.
     ///
     /// The optimized interpreter runs without hooks, so it accumulates the
     /// statistics the debug path gets from `StatsTracker` here instead.
-    pub peak_pointer: usize,
+    pub peak_used: usize,
     /// Number of loop-body entries
     pub loop_iterations: u64,
     /// Total bytes read from input
@@ -47,6 +53,79 @@ pub(super) struct VmState {
 }
 
 impl VmState {
+    /// Borrow the cell under the cursor, or fail because the cursor is not on
+    /// the tape.
+    ///
+    /// Every read and write goes through here, because under the tape contract
+    /// this is the only place a cursor's position can be wrong. Movement never
+    /// fails, so nothing else needs to check.
+    #[inline(always)]
+    pub fn cell(
+        &mut self,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> Result<&mut u8> {
+        self.cell_at(0, debug_info, instruction_index)
+    }
+
+    /// Borrow the cell `offset` cells from the cursor. See [`Self::cell`].
+    ///
+    /// The fast path asks one question -- is this already a cell we have? --
+    /// and that question is the same for every memory model, so it needs no
+    /// dispatch. Only the answer "no" differs between models, and only then is
+    /// [`Self::cell_off_tape`] consulted. Routing every access through the model
+    /// instead cost 59% on mandelbrot: the model call returns a `Result` whose
+    /// error variant is an 88-byte `BfError`, so it came back through memory
+    /// and would not inline.
+    #[inline(always)]
+    pub fn cell_at(
+        &mut self,
+        offset: isize,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> Result<&mut u8> {
+        // A negative cursor cast to usize is enormous, so one comparison rules
+        // out both ends of the tape.
+        let idx = self.pointer.get().saturating_add(offset) as usize;
+        if idx < self.memory.len() {
+            // Peak is recorded here, with the index already in hand, because
+            // this is the only place a cell is reached. Written as an
+            // expression rather than an `if` so it compiles to a conditional
+            // move: the branch form costs 11% on hanoi, since it is taken
+            // almost never after the tape is warm and mispredicts anyway.
+            self.peak_used = if idx > self.peak_used {
+                idx
+            } else {
+                self.peak_used
+            };
+            return Ok(&mut self.memory[idx]);
+        }
+        self.cell_off_tape(offset, debug_info, instruction_index)
+    }
+
+    /// The cursor is not on the tape: grow to reach it, or report it.
+    ///
+    /// Cold and out of line so that the decision -- which is the only part that
+    /// depends on the memory model -- stays out of the instruction loop.
+    #[cold]
+    #[inline(never)]
+    fn cell_off_tape(
+        &mut self,
+        offset: isize,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> Result<&mut u8> {
+        let cursor = MemoryAddress::new(self.pointer.get().saturating_add(offset));
+        let (model, steps) = (self.memory_model, self.step_count);
+        model.cell(
+            cursor,
+            &mut self.memory,
+            steps,
+            debug_info,
+            instruction_index,
+        )
+    }
+
     /// Create a new VM state with the given memory model
     pub fn new(memory_model: MemoryModel) -> Self {
         let memory_size = memory_model.initial_size().get();
@@ -56,7 +135,7 @@ impl VmState {
             step_count: StepCount::new(0),
             loop_depth: 0, // Start at top level (not inside any loops)
             memory_model,
-            peak_pointer: 0,
+            peak_used: 0,
             loop_iterations: 0,
             bytes_read: 0,
             bytes_written: 0,

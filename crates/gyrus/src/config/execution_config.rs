@@ -23,7 +23,6 @@ pub struct ExecutionConfig {
     cell_model: CellModel,
     max_steps: Option<u64>,
     timeout_ms: Option<u64>,
-    allow_negative_pointer: bool,
     eof_behavior: EofBehavior,
     pub(crate) hook_manager: Option<HookManager>,
 }
@@ -35,7 +34,6 @@ impl Default for ExecutionConfig {
             cell_model: CellModel::default(), // U8Wrapping by default
             max_steps: None,
             timeout_ms: None,
-            allow_negative_pointer: false,
             eof_behavior: EofBehavior::default(),
             hook_manager: None,
         }
@@ -65,12 +63,6 @@ impl ExecutionConfig {
     #[inline]
     pub fn timeout_ms(&self) -> Option<u64> {
         self.timeout_ms
-    }
-
-    /// Check if negative pointer is allowed
-    #[inline]
-    pub fn allow_negative_pointer(&self) -> bool {
-        self.allow_negative_pointer
     }
 
     /// Get the EOF behavior
@@ -130,7 +122,6 @@ pub struct ExecutionConfigBuilder<State = Unbuilt> {
     max_steps: Option<u64>,
     timeout_ms: Option<u64>,
     eof_behavior: EofBehavior,
-    allow_negative_pointer: bool,
     hook_manager: Option<HookManager>,
     _state: PhantomData<State>,
 }
@@ -159,12 +150,6 @@ macro_rules! common_builder_methods {
         /// Set EOF behavior
         pub fn with_eof_behavior(mut self, behavior: EofBehavior) -> Self {
             self.eof_behavior = behavior;
-            self
-        }
-
-        /// Allow negative pointer
-        pub fn with_negative_pointer(mut self, allow: bool) -> Self {
-            self.allow_negative_pointer = allow;
             self
         }
 
@@ -220,7 +205,6 @@ impl ExecutionConfigBuilder<Unbuilt> {
             max_steps: None,
             timeout_ms: None,
             eof_behavior: EofBehavior::default(),
-            allow_negative_pointer: false,
             hook_manager: None,
             _state: PhantomData,
         }
@@ -243,7 +227,6 @@ impl ExecutionConfigBuilder<Unbuilt> {
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
-            allow_negative_pointer: self.allow_negative_pointer,
             hook_manager: self.hook_manager,
             _state: PhantomData,
         }
@@ -270,7 +253,6 @@ impl ExecutionConfigBuilder<Unbuilt> {
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
-            allow_negative_pointer: self.allow_negative_pointer,
             hook_manager: self.hook_manager,
             _state: PhantomData,
         })
@@ -285,7 +267,6 @@ impl ExecutionConfigBuilder<Unbuilt> {
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
-            allow_negative_pointer: self.allow_negative_pointer,
             hook_manager: self.hook_manager,
             _state: PhantomData,
         }
@@ -309,7 +290,6 @@ impl ExecutionConfigBuilder<ReadyToBuild> {
             max_steps: self.max_steps,
             timeout_ms: self.timeout_ms,
             eof_behavior: self.eof_behavior,
-            allow_negative_pointer: self.allow_negative_pointer,
             hook_manager: self.hook_manager,
         }
     }

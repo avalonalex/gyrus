@@ -6,6 +6,24 @@ does. Any combination is valid.
 
 Back to the [README](../README.md).
 
+## The tape contract
+
+Both memory models share one rule about what the tape bound *means*:
+
+> **Reading or writing a cell outside the tape is an error. Moving the cursor
+> outside the tape is not** — a cursor that points nowhere valid, and is never
+> used, has no effect.
+
+So this runs cleanly, because nothing outside the five cells is ever touched:
+
+```bash
+$ gyrus --memory-size 5 program.bf     # program is: >>>>>>>>>><<<<<<<<<<+.
+```
+
+while `<+` errors, because the `+` writes a cell that does not exist. The rule
+is uniform: only access counts, and where the cursor rests is never itself an
+error.
+
 ## Memory Models
 
 gyrus supports two different memory models to handle different BrainFuck variants and use cases:
@@ -20,7 +38,8 @@ gyrus program.bf --memory-model fixed --memory-size 30000
 
 **Characteristics:**
 - Memory size is fixed at startup
-- Out-of-bounds access (< 0 or >= size) returns an error
+- Reading or writing a cell outside `0..size` returns an error; moving the
+  cursor there does not (see the tape contract above)
 - Most compatible with standard BrainFuck programs
 - Best for production use and debugging
 
@@ -36,7 +55,8 @@ gyrus program.bf --memory-model unbounded \
 
 **Characteristics:**
 - Starts with small initial allocation (default: 1000 bytes)
-- Automatically grows when accessing beyond current size
+- Grows to cover cells that are *used* beyond the current size — travelling
+  past the end without touching anything allocates nothing
 - Maximum size limit prevents runaway memory usage
 - Efficient for programs with unpredictable memory needs
 

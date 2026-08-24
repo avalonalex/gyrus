@@ -25,7 +25,12 @@ impl ExecutionHook for StepBreakpoint {
                 context.step_count().get()
             );
             println!("   Pointer: {}", context.pointer().get());
-            println!("   Current cell: {}", context.current_cell());
+            println!(
+                "   Current cell: {}",
+                context
+                    .current_cell()
+                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
+            );
             println!("   Loop depth: {}", context.loop_depth());
 
             if let Some(loc) = context.source_location() {

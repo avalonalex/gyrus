@@ -33,14 +33,14 @@ impl ExecutionTracer {
     fn format_memory_context(context: &HookContext) -> String {
         let ptr = context.pointer().get();
         let start = ptr.saturating_sub(2);
-        let end = (ptr + 3).min(context.memory().len());
+        let end = (ptr + 3).min(context.memory().len() as isize);
 
         let mut cells = Vec::new();
         for i in start..end {
             if i == ptr {
-                cells.push(format!("[{}]", context.memory()[i]));
+                cells.push(format!("[{}]", context.memory()[i as usize]));
             } else {
-                cells.push(format!("{}", context.memory()[i]));
+                cells.push(format!("{}", context.memory()[i as usize]));
             }
         }
         cells.join(" ")
@@ -61,7 +61,9 @@ impl ExecutionHook for ExecutionTracer {
                 context.step_count().get(),
                 Self::format_instruction(instruction),
                 context.pointer().get(),
-                context.current_cell()
+                context
+                    .current_cell()
+                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
             );
 
             if context.loop_depth() > 0 {
@@ -96,7 +98,9 @@ impl ExecutionHook for ExecutionTracer {
             log.push(format!(
                 "         | >>> LOOP ENTER (depth {}) | cell = {}",
                 context.loop_depth(),
-                context.current_cell()
+                context
+                    .current_cell()
+                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
             ));
         }
 
@@ -110,7 +114,9 @@ impl ExecutionHook for ExecutionTracer {
             log.push(format!(
                 "         | <<< LOOP EXIT (depth {}) | cell = {}",
                 context.loop_depth(),
-                context.current_cell()
+                context
+                    .current_cell()
+                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
             ));
         }
 

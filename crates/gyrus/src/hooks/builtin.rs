@@ -249,11 +249,17 @@ impl ExecutionHook for StatsTrackerHook {
         instruction: &Instruction,
         context: &HookContext,
     ) -> HookDecision {
-        // Track peak memory usage
-        // Peak is the highest pointer position + 1 (since pointer is 0-indexed)
-        let current_peak = context.pointer().get() + 1;
-        if current_peak > self.stats.peak_memory_used.get() {
-            self.stats.peak_memory_used = MemoryAddress::new(current_peak);
+        // Track peak memory usage: the highest cell *used*, plus one, not the
+        // furthest the cursor travelled. Under the tape contract a cursor may
+        // walk to cell 100_000 and back without touching anything, and a
+        // program that did that has not used 100_000 cells. `current_cell()`
+        // is None exactly when the cursor is off the tape, which is also
+        // exactly when this instruction cannot have used a cell.
+        if context.current_cell().is_some() {
+            let current_peak = context.pointer().get() + 1;
+            if current_peak > self.stats.peak_memory_used.get() {
+                self.stats.peak_memory_used = MemoryAddress::new(current_peak);
+            }
         }
 
         // Track I/O operations
@@ -864,7 +870,9 @@ mod tests {
     /// baseline and never reports it. Every growth here should be reported.
     #[test]
     fn test_warning_collector_reports_the_first_memory_expansion() {
-        let (instructions, debug_info) = crate::parser::parse_with_debug(">>>").unwrap();
+        // `+` after each move: the tape grows to cover cells that are *used*,
+        // so travelling alone no longer expands it.
+        let (instructions, debug_info) = crate::parser::parse_with_debug(">+>+>+").unwrap();
         let config = ExecutionConfigBuilder::new()
             .with_unbounded_memory(1, 100)
             .unwrap()
@@ -884,7 +892,7 @@ mod tests {
         assert_eq!(
             stats.warnings.len(),
             3,
-            "each '>' grew the tape by one cell: {:?}",
+            "each cell used beyond the tape grew it by one: {:?}",
             stats.warnings
         );
     }

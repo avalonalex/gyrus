@@ -63,9 +63,13 @@ re-exports and crate docs.
    walker), `optimized.rs` (the optimized executor)
    - AST → Execution with safety limits and statistics
    - Tree-walking interpreter with configurable memory
+   - **The tape contract**: reading or writing a cell outside the tape is an
+     error; moving the cursor outside it is not. Enforced at the access, in
+     both interpreters — `VmState::cell_at` is the only place a position can be
+     wrong, and pointer movement never fails.
    - **Multiple memory models**:
      - Fixed: Traditional fixed-size array (default 30,000 bytes)
-     - Unbounded: Dynamic growth from initial size up to max limit
+     - Unbounded: Grows to cover cells that are *used* beyond its size
    - **Execution limits**: Step counting and timeout support
    - **Statistics tracking** via `ExecutionStats`:
      - Total steps, loop iterations, peak memory usage
@@ -142,7 +146,9 @@ re-exports and crate docs.
 - **Memory models**: Two configurable models via `MemoryModel` enum
   - Fixed: Traditional bounds-checked array
   - Unbounded: Vec that grows on-demand up to max limit
-  - Pointer movement handled by `increment_pointer()` and `decrement_pointer()` helpers
+  - Models govern *access*, not movement: `MemoryModel::cell` resolves a cursor
+    to a cell, growing or reporting as the model decides. Movement is plain
+    arithmetic on a signed cursor and cannot fail.
 - **Loop representation**: Nested `Vec<Instruction>` rather than jump tables
 - **Parsing approach**: Single-pass recursive descent with full location tracking
 - **Safety**: Multiple layers of protection (step limits, timeouts, bounds checks)
