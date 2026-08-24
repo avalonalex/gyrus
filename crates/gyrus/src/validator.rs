@@ -32,7 +32,7 @@
 //!
 //! ## Memory Model Independence
 //!
-//! Validation warnings are independent of the memory model (Fixed/Wrapping/Unbounded):
+//! Validation warnings are independent of the memory model (Fixed/Unbounded):
 //!
 //! - **Extreme nesting** (depth > 10) warns regardless of memory model
 //! - **Empty loops** `[]` warn regardless of memory model

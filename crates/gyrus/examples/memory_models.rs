@@ -1,8 +1,7 @@
 //! Memory models example
 //!
-//! This example demonstrates the three different memory models:
+//! This example demonstrates the two memory models:
 //! - Fixed: Traditional fixed-size array with bounds checking
-//! - Wrapping: Circular buffer that wraps at boundaries
 //! - Unbounded: Dynamic growth up to a maximum limit
 //!
 //! Run with: cargo run --example memory_models
@@ -111,11 +110,6 @@ fn main() -> Result<(), BfError> {
     println!("  ✓ Strict bounds checking");
     println!("  ✓ Predictable memory usage");
     println!("  ✗ Fails on out-of-bounds access");
-    println!();
-    println!("Wrapping Memory:");
-    println!("  ✓ Never fails on bounds");
-    println!("  ✓ Circular buffer behavior");
-    println!("  ~ Different semantics (use carefully)");
     println!();
     println!("Unbounded Memory:");
     println!("  ✓ Grows automatically");

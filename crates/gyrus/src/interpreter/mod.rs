@@ -374,7 +374,7 @@ pub fn interpret_with_config(
 /// let mut input = StringIo::empty();
 /// let mut output = StringIo::empty();
 /// let stats = interpret_optimized_with_io(
-///     &optimized.instructions,
+///     &optimized,
 ///     ExecutionConfig::default(),
 ///     &mut input,
 ///     &mut output
@@ -382,10 +382,10 @@ pub fn interpret_with_config(
 /// # Ok::<(), gyrus::BfError>(())
 /// ```
 pub fn interpret_optimized_with_io<I: BfInput, O: BfOutput>(
-    instructions: &[crate::optimizer::OptimizedInstruction],
+    program: &crate::optimizer::OptimizedProgram,
     config: ExecutionConfig,
     input: &mut I,
     output: &mut O,
 ) -> Result<ExecutionStats> {
-    optimized::interpret_optimized(instructions, config, input, output)
+    optimized::interpret_optimized(program, config, input, output)
 }
