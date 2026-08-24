@@ -7,7 +7,7 @@ use gyrus::{
     BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
     interpret_optimized_with_io, interpret_with_io,
     io::{StdInput, StdOutput},
-    optimize, parse, parse_with_debug,
+    optimize_with_cell_model, parse, parse_with_debug,
 };
 use std::sync::{Arc, Mutex};
 
@@ -254,7 +254,7 @@ fn run() -> Result<(), BfError> {
     let mut output = StdOutput;
     let stats = if use_optimized {
         // OPTIMIZED MODE (default): Fast execution, no tracking
-        let optimized = optimize(&instructions);
+        let optimized = optimize_with_cell_model(&instructions, config.cell_model().to_owned());
 
         if cli.verbose && !cli.quiet {
             eprintln!("=== Optimization Results ===");

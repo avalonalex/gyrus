@@ -8,7 +8,7 @@ Back to the [README](../README.md).
 
 ## Memory Models
 
-gyrus supports three different memory models to handle different BrainFuck variants and use cases:
+gyrus supports two different memory models to handle different BrainFuck variants and use cases:
 
 ### Fixed Memory (Default)
 
