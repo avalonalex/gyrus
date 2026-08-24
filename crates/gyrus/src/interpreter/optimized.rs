@@ -397,13 +397,12 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // indirect call the compiler cannot inline into the single
             // wrapping_add it wraps. Checked cells keep the per-step loop, which
             // is what reports the overflow at the right value.
+            let steps = state.step_count;
             let cell = state.cell(None, 0)?;
             if WRAPPING {
                 *cell = cell.wrapping_add(*n);
             } else {
-                let steps = state.step_count;
                 let cells = config.cell_model().behavior();
-                let cell = state.cell(None, 0)?;
                 for _ in 0..*n {
                     cells.try_increment(cell, steps, None)?;
                 }
@@ -412,13 +411,12 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
         }
 
         OptimizedInstruction::Sub(n, _range) => {
+            let steps = state.step_count;
             let cell = state.cell(None, 0)?;
             if WRAPPING {
                 *cell = cell.wrapping_sub(*n);
             } else {
-                let steps = state.step_count;
                 let cells = config.cell_model().behavior();
-                let cell = state.cell(None, 0)?;
                 for _ in 0..*n {
                     cells.try_decrement(cell, steps, None)?;
                 }
@@ -543,11 +541,15 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 state.pointer = MemoryAddress::new((hi - 1) as isize);
             }
             loop {
-                if CHECK_LIMITS {
-                    check_limits(state, limits)?;
-                }
+                // Terminate before charging: a seek that arrives on the zero
+                // cell with its budget exactly spent has finished, and should
+                // not be failed for the step it did not need.
                 if *state.cell(None, 0)? == 0 {
                     break;
+                }
+                // A seek is a loop: honour step/time limits so it cannot spin forever
+                if CHECK_LIMITS {
+                    check_limits(state, limits)?;
                 }
                 state.pointer.increment();
                 state.step_count += 1;
@@ -576,11 +578,12 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 state.pointer = MemoryAddress::new(lo as isize);
             }
             loop {
-                if CHECK_LIMITS {
-                    check_limits(state, limits)?;
-                }
+                // Terminate before charging; see SeekRight.
                 if *state.cell(None, 0)? == 0 {
                     break;
+                }
+                if CHECK_LIMITS {
+                    check_limits(state, limits)?;
                 }
                 state.pointer.decrement();
                 state.step_count += 1;
@@ -1139,6 +1142,42 @@ mod tests {
         assert!(
             matches!(err, BfError::ExecutionTimeout { .. }),
             "expected the timeout to stop this, got {err:?}"
+        );
+    }
+
+    /// A seek that lands on its zero cell with the step budget exactly spent has
+    /// finished, and must not be failed for a step it did not take.
+    ///
+    /// This exercises the scanning path, which is the one that runs when the
+    /// zero is inside the window. It does *not* discriminate the fall-through
+    /// loop's ordering -- that loop tests for termination before consulting the
+    /// limit, deliberately, but reaching it with a budget that expires exactly
+    /// on the zero cell needs an unbounded tape that grows into the zero, and I
+    /// could not construct one that reliably distinguishes the two orders.
+    #[test]
+    fn a_seek_that_just_fits_its_budget_completes() {
+        // cells 1..=3 non-zero with a zero at 4; `[>]` from cell 1 walks three
+        // cells. Six instructions precede it, and the seek is charged one step
+        // for itself plus one per cell walked.
+        let src = ">+>+>+<<[>]";
+        let exact = {
+            let cfg = ExecutionConfigBuilder::new().with_memory_size(100).build();
+            let instrs = parse(src).unwrap();
+            let prog = optimize_with_cell_model(&instrs, *cfg.cell_model());
+            let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+            interpret_optimized(&prog, cfg, &mut i, &mut o)
+                .unwrap()
+                .total_steps
+                .get()
+        };
+
+        let cfg = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_max_steps(exact)
+            .build();
+        assert!(
+            run_opt(src, cfg).is_ok(),
+            "a seek needing exactly {exact} steps must not fail at {exact}"
         );
     }
 

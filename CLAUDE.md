@@ -408,6 +408,7 @@ are now scripts rather than good intentions:
 scripts/check-msrv.sh                 # workspace really builds on its declared MSRV
 scripts/check-readme-commands.py      # every flag README.md and docs/ use exists
 scripts/check-doc-links.py            # every relative Markdown link resolves
+scripts/check-examples.sh             # every example still runs, not just compiles
 ```
 
 ### Benchmarking and profiling
@@ -434,6 +435,11 @@ wrong once (1.85 by inference; 1.88 in fact, because of let-chains).
 `check-readme-commands.py` needs `cargo build --release --workspace` first. It
 exists because the README documented `gyrus --validate` and `gyrus --minify`
 long after both became `gyrus-tool` subcommands.
+
+`check-examples.sh` runs each example rather than only building it. Building is
+already covered by clippy, and it is not enough: when `MemoryAddress` became
+signed, `hooks_execution_tracer` still compiled and panicked on its first
+instruction, and nothing noticed because nothing ran it.
 
 **When adding a claim to the docs, ask whether a script could check it.** If it
 could, write the script — an unexecuted claim is one that will eventually be

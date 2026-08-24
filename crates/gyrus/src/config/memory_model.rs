@@ -84,6 +84,22 @@ impl MemoryBehavior for FixedMemory {
         // enormous and fails the same length test as running off the right.
         match cursor.index(memory.len()) {
             Some(idx) => Ok(&mut memory[idx]),
+            // Left of cell 0 is a different failure from running off the right:
+            // no tape size makes cell -1 exist, so suggesting a bigger one (or,
+            // worse, a smaller one, which the arithmetic below used to do on a
+            // default tape) is advice that cannot work.
+            None if cursor.get() < 0 => Err(out_of_bounds(
+                cursor,
+                memory,
+                MemorySize::new(self.size.get().saturating_sub(1)),
+                step_count,
+                debug_info,
+                instruction_index,
+                "Attempted to use cell {}, left of cell 0. Cells are indexed from 0 \
+                 upwards, so no tape size makes this cell exist. Moving the cursor \
+                 there is allowed; reading or writing it is not."
+                    .replace("{}", &cursor.get().to_string()),
+            )),
             None => Err(out_of_bounds(
                 cursor,
                 memory,
@@ -98,7 +114,7 @@ impl MemoryBehavior for FixedMemory {
                     cursor.get(),
                     self.size.get(),
                     self.size.get().saturating_sub(1),
-                    cursor.get().max(0) as usize + 1000
+                    (cursor.get().max(0) as usize + 1).max(self.size.get() * 2),
                 ),
             )),
         }

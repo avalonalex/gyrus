@@ -31,9 +31,14 @@ impl ExecutionTracer {
     }
 
     fn format_memory_context(context: &HookContext) -> String {
+        // The cursor is signed and may sit off either end of the tape, so the
+        // window has to be clipped to what the tape actually holds -- an
+        // unclamped `ptr - 2` at cell 0 is negative, and casting that to an
+        // index is a very large number.
         let ptr = context.pointer().get();
-        let start = ptr.saturating_sub(2);
-        let end = (ptr + 3).min(context.memory().len() as isize);
+        let len = context.memory().len() as isize;
+        let start = ptr.saturating_sub(2).clamp(0, len);
+        let end = ptr.saturating_add(3).clamp(start, len);
 
         let mut cells = Vec::new();
         for i in start..end {

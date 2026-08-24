@@ -217,11 +217,10 @@ into one step. Consistent with the documented model; the `# Limitations` list on
 
 ## Implementation plan
 
-0. ~~**The tape contract, on its own.**~~ **Done.** Signed `MemoryAddress`;
+0. **The tape contract.** Shipped. Signed `MemoryAddress`;
    checks at the access sites in both interpreters; `allow_negative_pointer`
-   removed; `peak_memory_used` derived from accesses. See "What the
-   implementation changed about this design" below -- several things did not go
-   as written here.
+   removed; `peak_memory_used` derived from accesses. See "Lessons from step 0"
+   below; the contract itself is documented in `docs/execution-models.md`.
 1. **Spike.** Implement the pass and the interpreter side crudely and measure
    mandelbrot and hanoi. The estimate is 17–30% fewer
    instructions; confirm that converts to wall clock before building it
@@ -234,61 +233,34 @@ into one step. Consistent with the documented model; the `# Limitations` list on
 5. `benchmark.sh` golden outputs must not move, and both cell-model
    differentials must still pass.
 
-## What the implementation changed about this design
+## Lessons from step 0, for the work that remains
 
-Recorded because the design was wrong in ways worth knowing before the optimizer
-work starts.
+Kept because the optimizer work has to be built on this and would otherwise
+repeat the mistakes. What now *exists* is described in `docs/`, not here.
 
-**The contract is a performance win on its own, not a cost to be repaid.** This
-document treated it as a prerequisite whose price is justified by the
-optimization it unblocks. Measured against the merged `main`:
+**A hot-path helper returning a large `Result` will not inline.** Routing every
+access through `MemoryBehavior` cost 59%: the accessor returns
+`Result<&mut u8>`, whose error variant is an 88-byte `BfError`, so it returns
+through memory and LLVM declines the `#[inline]`. The fix was to notice that
+the fast path's question -- is this index on the tape? -- is model-independent,
+and to leave only the "no" answer behind a `#[cold]` call. This is the second
+time this shape has bitten here; the first was `check_limits`. The offset work
+adds another per-access helper, so assume it applies.
 
-| | before | after |
-|---|---|---|
-| hanoi | 291ms | **258ms** (-11%) |
-| mandelbrot | 5227ms | **4821ms** (-8%) |
+**Counters on the hot path want conditional moves, not branches.**
+`if idx > peak { peak = idx }` cost 11% on hanoi -- almost never taken once the
+tape is warm, and mispredicted anyway. As an expression it is free.
 
-Removing a bounds check from every *move* is worth more than adding one to every
-*access*, because mandelbrot is 67% moves. That reframes the sequencing
-argument: step 0 stands on its own even if steps 1-5 never happen.
+**Errors move outward by one instruction, which moves loop call stacks.** The
+failing instruction is now a loop's *condition* rather than a `>` in its body,
+and a condition runs before its frame is pushed, so `loop_call_stack` is one
+frame shallower at an out-of-bounds error. Anything the offset work does to
+instruction-to-source mapping compounds this.
 
-**The access fast path must not consult the memory model.** The obvious
-implementation -- route every access through `MemoryBehavior` -- cost **59%**.
-The model's accessor returns `Result<&mut u8>`, whose error variant is an
-88-byte `BfError`, so it comes back through memory and will not inline; 33% of
-runtime went to a non-inlined `VmState::cell_at`. The fix is that "is this index
-on the tape?" is the same question for every model and needs no dispatch at all.
-Only the answer *no* differs, and that path is `#[cold]`. Same shape as the
-`check_limits` inlining problem, and worth remembering as a rule: a hot-path
-helper returning a large `Result` will not inline.
-
-**Peak tracking has to be branchless.** `peak_memory_used` now follows access,
-as designed, but written as `if idx > peak { peak = idx }` it cost **11%** on
-hanoi -- the branch is almost never taken once the tape is warm and mispredicts
-anyway. As an expression that compiles to a conditional move it is free.
-
-**The move API disappeared rather than moving.** The design said checks would
-move to the access sites. In practice `try_increment_pointer` and
-`try_decrement_pointer` are gone from `MemoryBehavior` entirely, replaced by a
-single `cell` accessor: under the contract there is nothing for a model to say
-about movement. `MemoryModel` shrank accordingly.
-
-**Errors move outward by one instruction, and that changes loop call stacks.**
-Not anticipated at all. The failing instruction is no longer the `>` inside a
-loop body but the loop's own condition, which runs *before* its frame is pushed
--- so `loop_call_stack` at an out-of-bounds error is one frame shallower than it
-was. Three nested-overflow tests assert this and were updated with the
-reasoning. Anything built on `loop_call_stack` should expect the shallower shape.
-
-**Two public API changes the design missed.** `HookContext::current_cell()`
-returns `Option<u8>`, because an off-tape cursor legitimately has no value; and
-`MemoryDump` clips its window to the tape, since it is built exactly when the
-cursor is outside it.
-
-**Nothing new diverged between the interpreters.** The 400-program differential
-shows the same 2/400 (wrapping) and 1/400 (checked) as before, and those are the
-pre-existing `--max-steps` step-accounting artifacts on non-terminating
-programs, not contract effects.
+**The contract paid for itself.** This document assumed step 0 was a cost the
+optimizer work would repay. It was a 8-11% win on its own, because removing a
+check from every move beats adding one to every access. The 17-30% estimate
+below is therefore on top of a faster baseline, not a slower one.
 
 ## Success criteria
 

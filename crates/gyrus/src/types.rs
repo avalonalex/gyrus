@@ -55,8 +55,9 @@ impl MemoryAddress {
     ///
     /// One comparison covers both ends: a negative cursor cast to `usize` is
     /// enormous, so it fails the same `< len` test that catches running off the
-    /// right. Callers pair this with `slice::get`, which repeats the check the
-    /// compiler can then elide.
+    /// right. This is the single definition of "is this cursor on the tape";
+    /// `VmState::cell_at` and `FixedMemory::cell` both go through it rather
+    /// than open-coding the cast.
     #[inline]
     pub const fn index(self, len: usize) -> Option<usize> {
         let idx = self.0 as usize;

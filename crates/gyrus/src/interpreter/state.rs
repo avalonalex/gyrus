@@ -86,8 +86,8 @@ impl VmState {
     ) -> Result<&mut u8> {
         // A negative cursor cast to usize is enormous, so one comparison rules
         // out both ends of the tape.
-        let idx = self.pointer.get().saturating_add(offset) as usize;
-        if idx < self.memory.len() {
+        let cursor = MemoryAddress::new(self.pointer.get().saturating_add(offset));
+        if let Some(idx) = cursor.index(self.memory.len()) {
             // Peak is recorded here, with the index already in hand, because
             // this is the only place a cell is reached. Written as an
             // expression rather than an `if` so it compiles to a conditional
@@ -100,7 +100,7 @@ impl VmState {
             };
             return Ok(&mut self.memory[idx]);
         }
-        self.cell_off_tape(offset, debug_info, instruction_index)
+        self.cell_off_tape(cursor, debug_info, instruction_index)
     }
 
     /// The cursor is not on the tape: grow to reach it, or report it.
@@ -111,19 +111,24 @@ impl VmState {
     #[inline(never)]
     fn cell_off_tape(
         &mut self,
-        offset: isize,
+        cursor: MemoryAddress,
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,
     ) -> Result<&mut u8> {
-        let cursor = MemoryAddress::new(self.pointer.get().saturating_add(offset));
         let (model, steps) = (self.memory_model, self.step_count);
-        model.cell(
+        let cell = model.cell(
             cursor,
             &mut self.memory,
             steps,
             debug_info,
             instruction_index,
-        )
+        )?;
+        // Reached a cell the tape did not previously cover -- an unbounded model
+        // just grew to it. This is an access like any other and counts towards
+        // the peak; the fast path above cannot see it because it only runs for
+        // cells the tape already had.
+        self.peak_used = self.peak_used.max(cursor.get().max(0) as usize);
+        Ok(cell)
     }
 
     /// Create a new VM state with the given memory model

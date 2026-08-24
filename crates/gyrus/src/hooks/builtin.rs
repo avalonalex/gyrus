@@ -104,7 +104,7 @@ use super::{ExecutionHook, HookContext, HookDecision};
 use crate::error::RuntimeWarning;
 use crate::instruction::Instruction;
 use crate::stats::ExecutionStats;
-use crate::types::{InstructionIndex, MemoryAddress, MemorySize};
+use crate::types::{InstructionIndex, MemorySize};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use termcolor::{Ansi, Color, ColorSpec, WriteColor};
@@ -247,20 +247,13 @@ impl ExecutionHook for StatsTrackerHook {
     fn after_instruction(
         &mut self,
         instruction: &Instruction,
-        context: &HookContext,
+        _context: &HookContext,
     ) -> HookDecision {
-        // Track peak memory usage: the highest cell *used*, plus one, not the
-        // furthest the cursor travelled. Under the tape contract a cursor may
-        // walk to cell 100_000 and back without touching anything, and a
-        // program that did that has not used 100_000 cells. `current_cell()`
-        // is None exactly when the cursor is off the tape, which is also
-        // exactly when this instruction cannot have used a cell.
-        if context.current_cell().is_some() {
-            let current_peak = context.pointer().get() + 1;
-            if current_peak > self.stats.peak_memory_used.get() {
-                self.stats.peak_memory_used = MemoryAddress::new(current_peak);
-            }
-        }
+        // Peak memory is not tracked here. Under the tape contract it means the
+        // highest cell *used*, and a hook watching the cursor cannot tell a use
+        // from a fly-past: it sees `>` land on a cell and would count it. The
+        // VM records it at the access instead, and `interpret_with_io` copies it
+        // in, so both interpreters share one definition.
 
         // Track I/O operations
         match instruction {

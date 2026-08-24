@@ -73,9 +73,20 @@ impl MemoryDump {
     /// so the window is clipped to what the tape actually holds. A cursor far
     /// off either end simply yields the nearest cells, or none.
     pub fn from_memory(memory: &[u8], pointer: MemoryAddress) -> Self {
+        // Slide the window onto the tape rather than merely clipping it. Under
+        // the tape contract the cursor is routinely far outside -- that is
+        // exactly when this dump gets built -- and a window centred on cell 100
+        // of a five-cell tape clips to nothing, printing "Nearby cells:" with
+        // nothing beneath it. Showing the nearest cells is the point of it.
+        const WINDOW: usize = 7;
+        let len = memory.len();
         let ptr = pointer.get();
-        let range_start = ptr.saturating_sub(3).max(0) as usize;
-        let range_end = ptr.saturating_add(4).max(0).min(memory.len() as isize) as usize;
+        let (range_start, range_end) = if len <= WINDOW {
+            (0, len)
+        } else {
+            let start = ptr.saturating_sub(3).clamp(0, (len - WINDOW) as isize) as usize;
+            (start, start + WINDOW)
+        };
 
         let nearby_cells: Vec<(usize, u8)> = (range_start..range_end)
             .map(|addr| (addr, memory[addr]))

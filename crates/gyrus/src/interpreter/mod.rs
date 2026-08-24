@@ -257,6 +257,13 @@ impl InterpreterContext {
                 // Extract statistics (no mutex locking!)
                 let mut stats = self.stats_hook.stats().clone();
                 stats.warnings = self.warning_hook.warnings().to_vec();
+                // Peak comes from the VM, not from a hook watching the cursor:
+                // under the tape contract it means the highest cell *used*, and
+                // the only place that is known is the access itself. Deriving it
+                // from a hook's view of the pointer counts travel instead, and
+                // made the two interpreters disagree on `>>>`.
+                stats.peak_memory_used =
+                    crate::types::MemoryAddress::new(state.peak_used as isize + 1);
                 Ok(stats)
             }
             Err(mut error) => {

@@ -1,7 +1,8 @@
 # Memory, Cells, and EOF
 
-Three orthogonal knobs control execution semantics: how the pointer moves, how
-cell arithmetic behaves at its boundaries, and what a read at end-of-input
+Three orthogonal knobs control execution semantics: what happens when a cell
+outside the tape is accessed, how cell arithmetic behaves at its boundaries, and
+what a read at end-of-input
 does. Any combination is valid.
 
 Back to the [README](../README.md).
@@ -23,6 +24,23 @@ $ gyrus --memory-size 5 program.bf     # program is: >>>>>>>>>><<<<<<<<<<+.
 while `<+` errors, because the `+` writes a cell that does not exist. The rule
 is uniform: only access counts, and where the cursor rests is never itself an
 error.
+
+### What the contract changes about diagnostics
+
+Two consequences worth knowing when reading an error:
+
+- **The reported instruction is the access, not the move.** `>>>>` past the end
+  of the tape is fine; the `+` that follows is what fails, and that is what the
+  source location points at.
+- **A loop's condition can be the failing instruction**, since `[` and `]` read
+  the current cell to decide. When that happens the error's loop call stack is
+  one frame shallower than you might expect: a loop's condition runs before that
+  loop's own frame is pushed.
+
+Statistics follow the same rule. `Peak memory used` counts the highest cell a
+program *used*, so travelling to cell 100,000 and back without touching anything
+reports one cell, not 100,000 — and under `--memory-model unbounded` the tape
+grows to cover cells that are used, not cells the cursor passed over.
 
 ## Memory Models
 
@@ -83,7 +101,7 @@ gyrus distinguishes between two orthogonal (independent) configuration axes:
 
 | Aspect | Controlled By | What It Affects |
 |--------|--------------|-----------------|
-| **Pointer movement** (`>`, `<`) | `--memory-model` | How pointer moves between cells |
+| **Tape access** (a cell outside the tape) | `--memory-model` | Whether it errors or the tape grows. Movement itself always succeeds — see the tape contract above |
 | **Cell arithmetic** (`+`, `-`) | `--cell-model` | How cell values increment/decrement |
 
 These are **completely independent** - you can combine any memory model with any cell model.
