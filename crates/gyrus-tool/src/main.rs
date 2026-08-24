@@ -3,9 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use gyrus::{
-    BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
+    BfError, CellModel, DebugInfo, SourceLocation, U8CheckedCells, U8WrappingCells,
     codegen::compile_string,
-    minify, optimize, parse, parse_with_debug,
+    minify, optimize_with_cell_model, parse, parse_with_debug,
     random::{RandomProgramConfig, generate_random_program},
     syntax::{ColorTheme, SyntaxHighlighter},
     validate,
@@ -140,6 +140,12 @@ enum Commands {
         /// Plain output (no colors)
         #[arg(long)]
         plain: bool,
+
+        /// Cell model the program will run under: wrapping (default) or
+        /// checked. Checked cells disable multiply-loop folding, so the
+        /// mapping and the compression ratio differ between the two.
+        #[arg(long, default_value = "wrapping")]
+        cell_model: String,
     },
 }
 
@@ -188,7 +194,12 @@ fn run() -> Result<(), BfError> {
             output,
             verbose,
         } => run_compile(text, output, verbose),
-        Commands::Optimize { file, theme, plain } => run_optimize(file, theme, plain),
+        Commands::Optimize {
+            file,
+            theme,
+            plain,
+            cell_model,
+        } => run_optimize(file, theme, plain, &cell_model),
     }
 }
 
@@ -569,7 +580,24 @@ fn get_char_at_location(source: &str, loc: &SourceLocation) -> char {
     source.chars().nth(loc.offset).unwrap_or('?')
 }
 
-fn run_optimize(file: PathBuf, theme: String, plain: bool) -> Result<(), BfError> {
+fn run_optimize(
+    file: PathBuf,
+    theme: String,
+    plain: bool,
+    cell_model: &str,
+) -> Result<(), BfError> {
+    // The mapping shown has to be the one the interpreter will actually run,
+    // and that depends on the cell model: checked cells decline the
+    // multiply-loop fold, which changes both the instructions and the ratio.
+    let cell_model = match cell_model.to_lowercase().as_str() {
+        "wrapping" | "wrap" | "u8-wrapping" => CellModel::U8Wrapping(U8WrappingCells),
+        "checked" | "check" | "u8-checked" => CellModel::U8Checked(U8CheckedCells),
+        other => {
+            eprintln!("Error: unknown cell model '{other}'. Valid options: wrapping, checked");
+            std::process::exit(1);
+        }
+    };
+
     // Read source file
     let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
         path: file.clone(),
@@ -590,7 +618,7 @@ fn run_optimize(file: PathBuf, theme: String, plain: bool) -> Result<(), BfError
     let (minified_instructions, debug_info) = parse_with_debug(&minified_source)?;
 
     // Optimize the minified instructions
-    let optimized = optimize(&minified_instructions);
+    let optimized = optimize_with_cell_model(&minified_instructions, cell_model);
 
     // Select theme
     let color_theme = match theme.to_lowercase().as_str() {

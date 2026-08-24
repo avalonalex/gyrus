@@ -145,12 +145,31 @@ pub struct UnboundedMemory {
 }
 
 impl UnboundedMemory {
-    /// Create a new unbounded memory model
-    pub fn new(initial_size: MemorySize, max_size: MemorySize) -> Self {
-        Self {
+    /// Create a new unbounded memory model.
+    ///
+    /// Rejects `initial_size > max_size` here rather than at the builder, so no
+    /// route into the type can produce one. Code downstream relies on the tape
+    /// never being longer than `max_size` -- the optimized interpreter's fused
+    /// pointer move treats `memory.len()` as an in-bounds limit on that basis.
+    pub fn new(initial_size: MemorySize, max_size: MemorySize) -> Result<Self> {
+        if initial_size.get() > max_size.get() {
+            return Err(BfError::ConfigurationError {
+                message: format!(
+                    "initial_size ({}) cannot exceed max_size ({})",
+                    initial_size.get(),
+                    max_size.get()
+                ),
+            });
+        }
+        if initial_size.get() == 0 {
+            return Err(BfError::ConfigurationError {
+                message: "initial_size must be greater than 0".to_string(),
+            });
+        }
+        Ok(Self {
             initial_size,
             max_size,
-        }
+        })
     }
 
     /// Get the maximum size for this unbounded memory model
