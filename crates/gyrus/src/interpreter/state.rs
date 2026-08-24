@@ -3,7 +3,7 @@
 use crate::config::MemoryModel;
 use crate::debug::DebugInfo;
 use crate::error::{BfError, Result};
-use crate::types::{MemoryAddress, StepCount};
+use crate::types::{MemoryAddress, MemorySize, StepCount};
 
 /// Control flow decision after instruction execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,15 +34,20 @@ pub(super) struct VmState {
     pub loop_depth: usize,
     /// Memory model that dictates how memory operations behave
     pub memory_model: MemoryModel,
-    /// Highest cell index actually *used*, for `peak_memory_used`.
+    /// Highest cell index actually *used*.
     ///
     /// Not the furthest the cursor travelled: under the tape contract a program
     /// may walk to cell 100_000 and back without touching anything, and it has
-    /// not used 100_000 cells. Maintained in `cell_at`, which is the only place
-    /// a cell is reached.
+    /// not used 100_000 cells. Maintained in `cell_at`, the only place a cell is
+    /// reached, and read by *both* interpreters through
+    /// [`Self::peak_cells_used`].
     ///
-    /// The optimized interpreter runs without hooks, so it accumulates the
-    /// statistics the debug path gets from `StatsTracker` here instead.
+    /// That makes it the first statistic to have a single home. The others are
+    /// still split: `bytes_read`, `bytes_written` and `loop_iterations` exist
+    /// both here (maintained by the optimized path) and in `StatsTrackerHook`
+    /// (counted for the debug path), which is why the two interpreters could
+    /// disagree about peak before. Moving the rest here is worth doing; until
+    /// then, a statistic that is a property of the VM belongs on the VM.
     pub peak_used: usize,
     /// Number of loop-body entries
     pub loop_iterations: u64,
@@ -84,20 +89,15 @@ impl VmState {
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,
     ) -> Result<&mut u8> {
-        // A negative cursor cast to usize is enormous, so one comparison rules
-        // out both ends of the tape.
-        let cursor = MemoryAddress::new(self.pointer.get().saturating_add(offset));
+        // Wrapping, and safe for it: `index` decides, correctly, for any isize.
+        let cursor = MemoryAddress::new(self.pointer.get().wrapping_add(offset));
         if let Some(idx) = cursor.index(self.memory.len()) {
-            // Peak is recorded here, with the index already in hand, because
-            // this is the only place a cell is reached. Written as an
-            // expression rather than an `if` so it compiles to a conditional
-            // move: the branch form costs 11% on hanoi, since it is taken
-            // almost never after the tape is warm and mispredicts anyway.
-            self.peak_used = if idx > self.peak_used {
-                idx
-            } else {
-                self.peak_used
-            };
+            // Recorded here, with the index already in hand, because this is
+            // the only place a cell is reached. `max` lowers to a conditional
+            // move; the `if` form costs 11% on hanoi, taken almost never once
+            // the tape is warm and mispredicted anyway.
+            self.peak_used = self.peak_used.max(idx);
+            // tape-access-ok: this is the accessor; `index` just proved idx < len.
             return Ok(&mut self.memory[idx]);
         }
         self.cell_off_tape(cursor, debug_info, instruction_index)
@@ -116,7 +116,7 @@ impl VmState {
         instruction_index: usize,
     ) -> Result<&mut u8> {
         let (model, steps) = (self.memory_model, self.step_count);
-        let cell = model.cell(
+        let cell = model.cell_off_tape(
             cursor,
             &mut self.memory,
             steps,
@@ -129,6 +129,16 @@ impl VmState {
         // cells the tape already had.
         self.peak_used = self.peak_used.max(cursor.get().max(0) as usize);
         Ok(cell)
+    }
+
+    /// How many cells the program has used, for `ExecutionStats`.
+    ///
+    /// The `+ 1` that turns a highest-index into a count lives here rather than
+    /// at each interpreter's exit, because having it in two places is what let
+    /// the two disagree about this statistic before.
+    #[inline]
+    pub fn peak_cells_used(&self) -> MemorySize {
+        MemorySize::new(self.peak_used + 1)
     }
 
     /// Create a new VM state with the given memory model

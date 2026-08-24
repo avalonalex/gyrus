@@ -30,6 +30,14 @@ impl ExecutionTracer {
         }
     }
 
+    /// The cell under the cursor, or "off tape" when the cursor is not on it --
+    /// a legal position under the tape contract, so `current_cell` returns None.
+    fn cell_str(context: &HookContext) -> String {
+        context
+            .current_cell()
+            .map_or_else(|| "off tape".to_string(), |v| v.to_string())
+    }
+
     fn format_memory_context(context: &HookContext) -> String {
         // The cursor is signed and may sit off either end of the tape, so the
         // window has to be clipped to what the tape actually holds -- an
@@ -66,9 +74,7 @@ impl ExecutionHook for ExecutionTracer {
                 context.step_count().get(),
                 Self::format_instruction(instruction),
                 context.pointer().get(),
-                context
-                    .current_cell()
-                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
+                Self::cell_str(context)
             );
 
             if context.loop_depth() > 0 {
@@ -103,9 +109,7 @@ impl ExecutionHook for ExecutionTracer {
             log.push(format!(
                 "         | >>> LOOP ENTER (depth {}) | cell = {}",
                 context.loop_depth(),
-                context
-                    .current_cell()
-                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
+                Self::cell_str(context)
             ));
         }
 
@@ -119,9 +123,7 @@ impl ExecutionHook for ExecutionTracer {
             log.push(format!(
                 "         | <<< LOOP EXIT (depth {}) | cell = {}",
                 context.loop_depth(),
-                context
-                    .current_cell()
-                    .map_or_else(|| "off tape".to_string(), |v| v.to_string())
+                Self::cell_str(context)
             ));
         }
 

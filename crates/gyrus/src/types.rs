@@ -64,22 +64,29 @@ impl MemoryAddress {
         if idx < len { Some(idx) } else { None }
     }
 
-    /// Move the cursor `n` cells right. Never fails: leaving the tape is legal.
+    /// Move the cursor `n` cells. Never fails: leaving the tape is legal.
+    ///
+    /// Wrapping, not saturating. Saturating costs three extra instructions per
+    /// move (`adds; asr; eor; csel` rather than `add`), and pointer movement is
+    /// 67% of the instructions mandelbrot executes -- 6% of its runtime for a
+    /// clamp that needs 2^63 moves to reach. [`Self::index`] is what keeps a
+    /// wild cursor safe, and it does so for any `isize` whatsoever.
     #[inline]
     pub fn advance(&mut self, n: isize) {
-        self.0 = self.0.saturating_add(n);
+        self.0 = self.0.wrapping_add(n);
     }
 
-    /// Increment the cursor
+    /// Move the cursor one cell right. See [`Self::advance`].
     #[inline]
     pub fn increment(&mut self) {
-        self.0 = self.0.saturating_add(1);
+        self.advance(1);
     }
 
-    /// Decrement the cursor. Never fails; cell -1 is a position, not an error.
+    /// Move the cursor one cell left. Never fails; cell -1 is a position, not
+    /// an error. See [`Self::advance`].
     #[inline]
     pub fn decrement(&mut self) {
-        self.0 = self.0.saturating_sub(1);
+        self.advance(-1);
     }
 }
 
@@ -92,12 +99,6 @@ impl fmt::Display for MemoryAddress {
 impl From<isize> for MemoryAddress {
     fn from(value: isize) -> Self {
         Self(value)
-    }
-}
-
-impl AddAssign<isize> for MemoryAddress {
-    fn add_assign(&mut self, rhs: isize) {
-        self.0 = self.0.saturating_add(rhs);
     }
 }
 

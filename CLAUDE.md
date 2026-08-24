@@ -409,6 +409,7 @@ scripts/check-msrv.sh                 # workspace really builds on its declared 
 scripts/check-readme-commands.py      # every flag README.md and docs/ use exists
 scripts/check-doc-links.py            # every relative Markdown link resolves
 scripts/check-examples.sh             # every example still runs, not just compiles
+scripts/check-tape-access.py          # the tape is only indexed where the contract is enforced
 ```
 
 ### Benchmarking and profiling
@@ -435,6 +436,13 @@ wrong once (1.85 by inference; 1.88 in fact, because of let-chains).
 `check-readme-commands.py` needs `cargo build --release --workspace` first. It
 exists because the README documented `gyrus --validate` and `gyrus --minify`
 long after both became `gyrus-tool` subcommands.
+
+`check-tape-access.py` enforces the tape contract's one structural requirement:
+every read and write goes through `VmState::cell`/`cell_at`, because that is
+where the bound lives. `docs/architecture.md` states it as an imperative --
+"Never index `state.memory` by the cursor" -- and a claim in prose is one that
+erodes. A site that genuinely needs a direct index says why with a
+`// tape-access-ok:` note.
 
 `check-examples.sh` runs each example rather than only building it. Building is
 already covered by clippy, and it is not enough: when `MemoryAddress` became

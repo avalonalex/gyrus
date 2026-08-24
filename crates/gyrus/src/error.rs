@@ -67,11 +67,6 @@ pub struct MemoryDump {
 
 impl MemoryDump {
     /// Create a memory dump showing cells around the cursor.
-    ///
-    /// The cursor may be outside the tape entirely -- that is the usual case
-    /// when this is built, since the dump accompanies an out-of-bounds access --
-    /// so the window is clipped to what the tape actually holds. A cursor far
-    /// off either end simply yields the nearest cells, or none.
     pub fn from_memory(memory: &[u8], pointer: MemoryAddress) -> Self {
         // Slide the window onto the tape rather than merely clipping it. Under
         // the tape contract the cursor is routinely far outside -- that is

@@ -262,8 +262,7 @@ impl InterpreterContext {
                 // the only place that is known is the access itself. Deriving it
                 // from a hook's view of the pointer counts travel instead, and
                 // made the two interpreters disagree on `>>>`.
-                stats.peak_memory_used =
-                    crate::types::MemoryAddress::new(state.peak_used as isize + 1);
+                stats.peak_memory_used = state.peak_cells_used();
                 Ok(stats)
             }
             Err(mut error) => {

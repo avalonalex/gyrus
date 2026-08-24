@@ -16,22 +16,6 @@ use crate::io::{BfInput, BfOutput};
 use crate::types::StepCount;
 use std::io;
 
-/// Move the cursor one cell right.
-///
-/// Infallible under the tape contract: a cursor may sit anywhere, on the tape
-/// or off it, and only using it can fail. The bound is enforced in
-/// `VmState::cell`, at the access.
-#[inline]
-fn increment_pointer(state: &mut VmState) {
-    state.pointer.increment();
-}
-
-/// Move the cursor one cell left. Infallible; see [`increment_pointer`].
-#[inline]
-fn decrement_pointer(state: &mut VmState) {
-    state.pointer.decrement();
-}
-
 /// Execute a single non-loop instruction
 ///
 /// This function handles the execution of individual BrainFuck instructions,
@@ -63,11 +47,11 @@ pub(super) fn execute_single_instruction<I: BfInput, O: BfOutput>(
 ) -> ExecutionResult {
     match instruction {
         Instruction::IncrementPointer => {
-            increment_pointer(state);
+            state.pointer.increment();
         }
 
         Instruction::DecrementPointer => {
-            decrement_pointer(state);
+            state.pointer.decrement();
         }
 
         // Cell arithmetic: Delegated to CellModel (configurable!)

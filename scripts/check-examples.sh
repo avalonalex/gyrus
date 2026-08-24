@@ -12,20 +12,17 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
-# `mapfile` is bash 4; macOS ships 3.2, so build the list the portable way.
-EXAMPLES=""
-while IFS= read -r name; do
-    EXAMPLES="$EXAMPLES $name"
-done < <(find crates/gyrus/examples -maxdepth 1 -name '*.rs' -exec basename {} .rs \; | sort)
-
-if [ -z "$EXAMPLES" ]; then
+shopt -s nullglob
+EXAMPLES=(crates/gyrus/examples/*.rs)
+if [ "${#EXAMPLES[@]}" -eq 0 ]; then
     echo "error: no examples found under crates/gyrus/examples" >&2
     exit 1
 fi
 
-echo "Running examples..."
+echo "Running ${#EXAMPLES[@]} example(s)..."
 failures=0
-for name in $EXAMPLES; do
+for file in "${EXAMPLES[@]}"; do
+    name=$(basename "$file" .rs)
     if out=$(cargo run --quiet --release --example "$name" 2>&1); then
         printf '  %-28s ok\n' "$name"
     else

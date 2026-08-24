@@ -146,7 +146,7 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
     // modified, bytes in and out) describe the program's actual behavior and do
     // match.
     stats.total_steps = state.step_count;
-    stats.peak_memory_used = MemoryAddress::new(state.peak_used as isize + 1);
+    stats.peak_memory_used = state.peak_cells_used();
     // `len()`, not `capacity()`: the debug interpreter reports the tape length and
     // a Vec's spare capacity is not addressable memory.
     stats.memory_allocated = crate::types::MemorySize::new(state.memory.len());
@@ -842,7 +842,7 @@ mod tests {
         );
         assert_eq!(
             stats.peak_memory_used,
-            MemoryAddress::new(3),
+            crate::types::MemorySize::new(3),
             "pointer reached cell 2, so the peak is 3 cells - not the 100-cell allocation"
         );
     }
@@ -1160,16 +1160,14 @@ mod tests {
         // cells. Six instructions precede it, and the seek is charged one step
         // for itself plus one per cell walked.
         let src = ">+>+>+<<[>]";
-        let exact = {
-            let cfg = ExecutionConfigBuilder::new().with_memory_size(100).build();
-            let instrs = parse(src).unwrap();
-            let prog = optimize_with_cell_model(&instrs, *cfg.cell_model());
-            let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
-            interpret_optimized(&prog, cfg, &mut i, &mut o)
-                .unwrap()
-                .total_steps
-                .get()
-        };
+        let exact = run_optimized(
+            src,
+            ExecutionConfigBuilder::new().with_memory_size(100).build(),
+        )
+        .unwrap()
+        .0
+        .total_steps
+        .get();
 
         let cfg = ExecutionConfigBuilder::new()
             .with_memory_size(100)
