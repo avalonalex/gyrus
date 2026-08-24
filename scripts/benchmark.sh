@@ -119,10 +119,54 @@ for entry in "${PROGRAMS[@]}"; do
     printf '%-46s %9sms %11sms %8s\n' "$name" "$opt_ms" "$dbg_ms" "$speedup"
 done
 
+# --- cell-model differential ------------------------------------------------
+# Everything above runs the default cell model, which is how a real bug lived
+# here undetected: the optimizer's multiply-loop fold assumes wrapping
+# arithmetic, so under --cell-model checked it computed `target += source * n`
+# in one step and wrapped past 255 silently, where the unfused program raises
+# CellOverflow. The two interpreters have to agree under *every* model, not
+# just the default one.
+#
+# Error text legitimately differs between the modes (--debug carries source
+# locations), so compare what the program produced and whether it failed --
+# not the diagnostic wording.
+echo
+echo "Cell-model differential (optimized vs --debug under --cell-model checked)"
+checked_bytes=0
+for entry in "${PROGRAMS[@]}"; do
+    prog="${entry%%:*}"
+    want_debug="${entry##*:}"
+    name=$(basename "$prog" .bf)
+    [ "$want_debug" = "yes" ] || [ "$FULL" = 1 ] || continue
+
+    "$GYRUS" --cell-model checked "$prog" < /dev/null > /tmp/gyrus-chk.opt 2>/dev/null
+    opt_rc=$?
+    "$GYRUS" --debug --cell-model checked "$prog" < /dev/null > /tmp/gyrus-chk.dbg 2>/dev/null
+    dbg_rc=$?
+
+    if ! cmp -s /tmp/gyrus-chk.opt /tmp/gyrus-chk.dbg || [ "$opt_rc" != "$dbg_rc" ]; then
+        printf '  %-44s MODES DISAGREE (exit %s vs %s)\n' "$name" "$opt_rc" "$dbg_rc"
+        failures=$((failures + 1))
+    else
+        printf '  %-44s agree (exit %s)\n' "$name" "$opt_rc"
+        checked_bytes=$((checked_bytes + $(wc -c < /tmp/gyrus-chk.opt)))
+    fi
+done
+
+# Guard against the comparison silently testing nothing. If --cell-model were
+# renamed, every run would fail identically with empty output, cmp would find
+# two empty files equal, and every program would report "agree".
+if [ "$checked_bytes" -eq 0 ]; then
+    echo "  FAIL: no program produced output under checked cells, so nothing was" >&2
+    echo "        actually compared. Does '--cell-model checked' still exist?" >&2
+    failures=$((failures + 1))
+fi
+
 echo
 if [ "$failures" -gt 0 ]; then
     echo "FAIL: $failures program(s) produced unexpected output." >&2
     exit 1
 fi
-echo "All outputs match benchmarks/expected/, and both interpreters agree."
+echo "All outputs match benchmarks/expected/, and both interpreters agree"
+echo "under the default and checked cell models."
 echo "Profile one with:  scripts/benchmark.sh --profile <program.bf>"

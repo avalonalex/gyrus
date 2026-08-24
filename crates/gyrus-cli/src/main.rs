@@ -4,10 +4,10 @@ use std::path::PathBuf;
 
 use gyrus::hooks::builtin::{ProfilingHook, SharedProfilingHook};
 use gyrus::{
-    BfError, CellModel, EofBehavior, ExecutionConfigBuilder, U8CheckedCells, U8WrappingCells,
-    interpret_optimized_with_io, interpret_with_io,
+    BfError, CellModel, EofBehavior, ExecutionConfigBuilder, interpret_optimized_with_io,
+    interpret_with_io,
     io::{StdInput, StdOutput},
-    optimize, parse, parse_with_debug,
+    optimize_with_cell_model, parse, parse_with_debug,
 };
 use std::sync::{Arc, Mutex};
 
@@ -130,11 +130,7 @@ fn run() -> Result<(), BfError> {
     // Parse cell model
     let cell_model = parse_or_exit(
         &cli.cell_model,
-        |s| match s.to_lowercase().as_str() {
-            "wrapping" | "wrap" | "u8-wrapping" => Some(CellModel::U8Wrapping(U8WrappingCells)),
-            "checked" | "check" | "u8-checked" => Some(CellModel::U8Checked(U8CheckedCells)),
-            _ => None,
-        },
+        |s| s.parse::<CellModel>().ok(),
         "cell model",
         "wrapping, checked",
     );
@@ -254,7 +250,7 @@ fn run() -> Result<(), BfError> {
     let mut output = StdOutput;
     let stats = if use_optimized {
         // OPTIMIZED MODE (default): Fast execution, no tracking
-        let optimized = optimize(&instructions);
+        let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
 
         if cli.verbose && !cli.quiet {
             eprintln!("=== Optimization Results ===");
@@ -264,8 +260,7 @@ fn run() -> Result<(), BfError> {
             eprintln!();
         }
 
-        match interpret_optimized_with_io(&optimized.instructions, config, &mut input, &mut output)
-        {
+        match interpret_optimized_with_io(&optimized, config, &mut input, &mut output) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error: {}", e.format_detailed());
