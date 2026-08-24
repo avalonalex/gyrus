@@ -25,6 +25,13 @@
 //! - **Type safety**: Newtype pattern prevents type confusion
 //! - **Execution statistics**: Track steps, memory usage, and I/O operations
 //!
+//! ## Cargo features
+//!
+//! - `random` (off by default) — `gyrus::random`, a generator for syntactically
+//!   valid BrainFuck programs, used for fuzzing and benchmark inputs. It is
+//!   the crate's only optional dependency (`rand`); leaving it off keeps
+//!   gyrus dependency-light for consumers that just want to run programs.
+//!
 //! ## Quick Start
 //!
 //! ```rust
@@ -151,11 +158,14 @@ mod location;
 mod minify;
 pub mod optimizer;
 mod parser;
+#[cfg(feature = "random")]
+pub mod random;
 mod stats;
 pub mod syntax;
-// Test utilities - exposed publicly to allow integration tests to use them
-// Integration tests are separate crates and need public access to test utilities
-pub mod test_utils;
+// Unit-test helpers. Private and test-only: no integration test, bench, or
+// example uses these, so there is no reason to commit to them publicly.
+#[cfg(test)]
+mod test_utils;
 mod types;
 mod validator;
 

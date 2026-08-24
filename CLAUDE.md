@@ -113,8 +113,11 @@ re-exports and crate docs.
 - **codegen** (`codegen.rs`): string → BrainFuck compiler
   (dynamic programming, ~12.3 ops/byte)
 - **debug** (`debug.rs`): debug symbol tables
-- **test_utils** (`test_utils.rs`): test helpers and
-  random program generation
+- **random** (`random.rs`): random BrainFuck program generation for fuzzing
+  and benchmark inputs. Behind the off-by-default `random` feature — the
+  crate's only optional dependency (`rand`)
+- **test_utils** (`test_utils.rs`): unit-test helpers. `#[cfg(test)]` and
+  private: not public API, not shipped to consumers
 - **lib** (`lib.rs`): Pure module interface with re-exports
 
 **CLI** (`crates/gyrus-cli/src/main.rs`) — execution only
@@ -324,7 +327,8 @@ This is a Cargo workspace with the following crates:
     ├── error.rs          - Error types and formatting
     ├── syntax.rs         - Syntax highlighting
     ├── io.rs             - I/O abstraction
-    ├── test_utils.rs     - Test helpers, random programs
+    ├── random.rs         - Random program generation (`random` feature)
+    ├── test_utils.rs     - Unit-test helpers (private, cfg(test))
     ├── debug.rs          - Debug symbol tables
     ├── validator.rs      - AST validation
     ├── codegen.rs        - String → BrainFuck compiler

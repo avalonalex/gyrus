@@ -104,9 +104,9 @@ pub enum OptimizedInstruction {
     Input(SourceRange),
     /// Set current cell to zero (optimized `[-]`)
     Zero(SourceRange),
-    /// Seek right to next zero cell (optimized [>])
+    /// Seek right to next zero cell (optimized `[>]`)
     SeekRight(SourceRange),
-    /// Seek left to previous zero cell (optimized [<])
+    /// Seek left to previous zero cell (optimized `[<]`)
     SeekLeft(SourceRange),
     /// Multiply current cell by multipliers and add to target offsets, then zero current cell
     /// Example: `[->+++>+<<]` → `MultiplyAdd(vec![(1, 3), (2, 1)])`
