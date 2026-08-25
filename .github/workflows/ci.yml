@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Every job compiles with the version in rust-toolchain.toml — rustup honors
+# that file for each cargo invocation, so CI and local development cannot
+# drift apart. `rustup show` materializes it; there is deliberately no
+# toolchain version anywhere in this file, because a second copy is a second
+# thing to forget when bumping.
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - name: Run tests
+      run: cargo test --workspace
+    # The integration corpus reads programs/ from the workspace root, so a
+    # release build plus one real program catches path and packaging breakage
+    # that the unit tests cannot.
+    - name: Build release
+      run: cargo build --release --workspace
+    - name: Smoke test the CLI
+      run: |
+        test "$(./target/release/gyrus programs/basic/hello_world.bf)" = "Hello World!"
+        # The JIT is a separate engine reached only through this flag; a unit
+        # test cannot catch the CLI failing to wire it up.
+        test "$(./target/release/gyrus --jit programs/basic/hello_world.bf)" = "Hello World!"
+        ./target/release/gyrus-tool minify programs/basic/hello_world.bf > /dev/null
+
+  # Reads rust-version from Cargo.toml and installs that toolchain itself, so
+  # there is no version restated here to fall out of sync with the manifest.
+  msrv:
+    name: MSRV (read from Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - run: scripts/check-msrv.sh
+
+  # The README documented `gyrus --validate` and `gyrus --minify` for months
+  # after both moved to gyrus-tool subcommands. These jobs make that class of
+  # rot fail the build instead of waiting for a reader to hit it. Each script
+  # exists because the claim it checks was wrong at least once.
+  docs:
+    name: Documented claims hold
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo build --release --workspace
+    - run: scripts/check-readme-commands.py
+    - run: scripts/check-doc-links.py
+    - run: scripts/check-tape-access.py
+    # Runs each example rather than only building it: clippy already builds
+    # them, and building was not enough when MemoryAddress became signed.
+    - run: scripts/check-examples.sh
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
