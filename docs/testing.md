@@ -16,8 +16,10 @@ file used to open with "136 total tests" long after there were far more. Run
 |---|---|
 | `crates/gyrus/src/**` | Unit tests beside the code they test, including `interpreter/tests.rs` |
 | `crates/gyrus/src/test_utils.rs` | Helpers shared by those tests — `#[cfg(test)]` and private, so it is not API |
-| `crates/gyrus/tests/program_corpus.rs` | Real BrainFuck programs, run end to end through the tree-walker |
+| `crates/gyrus/tests/program_corpus.rs` | The manifest's cases, run end to end through the tree-walker |
+| `crates/gyrus/tests/generated_differential.rs` | Optimizer against the tree-walker on generated programs |
 | `crates/gyrus/tests/property_debug_symbols.rs` | Proptest over debug-symbol invariants |
+| `crates/gyrus-corpus/` | The manifest, parsed once and shared by both corpus suites |
 | `crates/gyrus-jit/tests/corpus.rs` | The same corpus under the JIT, driven from the manifest |
 | `crates/gyrus-jit/tests/differential.rs` | JIT against the optimized interpreter on the bundled programs |
 | `crates/gyrus-jit/tests/generated.rs` | JIT against the interpreter on generated programs, every configuration |
@@ -32,6 +34,10 @@ at it; an optimizer that is subtly wrong still produces plausible output. So
 the engines are held against each other rather than against expectations
 written by hand:
 
+- **`generated_differential.rs`** (in `gyrus`) runs the optimizer against the
+  tree-walker, which executes the AST as written and is therefore the
+  reference. It needs no JIT, which is the point: the optimizer lives in
+  `gyrus`, so `cargo test -p gyrus` can falsify a fold on its own.
 - **`differential.rs`** runs the JIT and the optimized interpreter on the same
   source and input and requires the same bytes out, and the same error where
   there is one. The optimized interpreter is in turn held to the tree-walker,
@@ -63,11 +69,24 @@ and the utilities, each credited in
 expected output, expected exit, and any configuration the program needs
 (memory size, step limit, timeout, EOF behavior).
 
-**One caveat worth knowing before you add a case.** The JIT's `corpus.rs`
-parses the manifest and runs what it finds there. `program_corpus.rs` — the
-tree-walker's — does not: its cases are hand-written to *mirror* the manifest.
-The two can drift, and adding a manifest entry does not automatically give the
-tree-walker a test. Add both until that is fixed.
+Both corpus suites read it through the `gyrus-corpus` crate, so adding a case
+to the manifest gives the tree-walker, the optimized interpreter, and the JIT a
+test at once. That sharing is deliberate: the two suites used to keep separate
+ideas of the corpus, with the tree-walker's hand-written to *mirror* the
+manifest, and the mirror drifted in both directions — eleven programs ended up
+tested by one engine and not the other.
+
+Two things the manifest cannot express as a plain expected output:
+
+- **Programs that never terminate on purpose** (rot13, fibonacci) declare
+  `expected_output_prefix` and an expected `limit` error. The step budget is the
+  Ctrl-C a human would type.
+- **Runs stopped by a limit are not compared byte-for-byte across engines.**
+  `max_steps` counts optimized instructions in the interpreter and loop
+  iterations in the JIT, so the two stop at different points in a program that
+  emits forever — rot13 under a 100,000-step budget leaves 32,897 trailing NULs
+  on one side and 3,146 on the other, after identical real output. The prefix is
+  what is comparable, and both engines are held to it.
 
 Programs that never terminate on purpose (rot13, fibonacci) are tested by
 giving them a step limit and asserting on a prefix of the output — the limit
@@ -109,6 +128,18 @@ It produces two kinds of program: uniformly random instruction soup, which is
 good at finding crashes, and *idiomatic* programs built from recognizable
 patterns (clear loops, copies, multiplies, scans), which are good at finding
 optimizer bugs because they contain the shapes the optimizer rewrites.
+
+**A generator can only falsify what it can express.** The idiomatic mode emits
+values near the top of a cell — a clear followed by a run of 200-255 `+`, and
+sometimes a second run carrying it past 255 — for one specific reason. Folding
+`[-]` and a following `+` run into a single `Set` is valid only while the sum
+stays under 256; past that, under checked cells, the overflow is exactly what
+the program was supposed to report. That guard was once wrong, and no number of
+seeds could catch it, because every other fragment writes single-digit values
+and no generated program ever came near a cell boundary. A review found it
+instead. With the boundary fragment, reintroducing the same bug fails the suite
+at the third seed. Worth remembering when adding a fold: ask whether the
+generator can produce the shape that would prove it wrong.
 
 ## Benchmarks
 

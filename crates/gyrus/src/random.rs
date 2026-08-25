@@ -226,6 +226,26 @@ impl<R: Rng> Idioms<'_, R> {
                 let n = self.rng.random_range(1..=5);
                 self.repeat('-', n);
             }
+            // A constant near the top of the cell, and sometimes a second run
+            // that carries it past 255.
+            //
+            // This shape exists because a fold once got it wrong: `[-]` then
+            // `+` runs fuses to a single `Set`, and folding the second run in
+            // is only valid while the sum stays under 256 -- past that, under
+            // checked cells, the overflow is the thing the program was
+            // supposed to report. Without a fragment that reaches the
+            // boundary, no amount of seeds can falsify that guard: every other
+            // fragment here writes single-digit values, so the whole harness
+            // ran hundreds of programs that never came near a cell limit. The
+            // bug was found by review instead, which is the wrong way round.
+            2 => {
+                let n = self.rng.random_range(200..=255);
+                self.repeat('+', n);
+                if self.rng.random_bool(0.5) {
+                    let carry = self.rng.random_range(1..=60);
+                    self.repeat('+', carry);
+                }
+            }
             _ => {
                 let n = self.rng.random_range(1..=12);
                 self.repeat('+', n);

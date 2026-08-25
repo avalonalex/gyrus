@@ -31,6 +31,10 @@ criterion.workspace = true
 # The `random` module's own unit tests need it enabled when testing this crate
 # on its own (`cargo test -p gyrus`), not only via gyrus-tool's feature union.
 gyrus = { path = ".", features = ["random"] }
+# A seedable RNG for the generated differential, and the corpus manifest that
+# drives the program tests -- the same one gyrus-jit's corpus test reads.
+rand.workspace = true
+gyrus-corpus.workspace = true
 
 [[bench]]
 name = "interpreter"

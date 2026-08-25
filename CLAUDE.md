@@ -17,6 +17,10 @@ the development compiler.
 - **gyrus-tool** (`crates/gyrus-tool/`): `gyrus-tool` binary — development tools
 - **gyrus-jit** (`crates/gyrus-jit/`): Cranelift JIT for the optimized IR
   (`gyrus --jit`); see `docs/execution-models.md` and the crate's module docs
+- **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
+  `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
+  read the same cases. Not a product crate; nothing depends on it outside
+  `[dev-dependencies]`
 - Future: TUI debugger, REPL as separate crates
 
 ## Documentation Organization
@@ -574,7 +578,12 @@ The test suite covers:
 - **Hook system tests**: Hook infrastructure and manager behavior
 - **Optimizer tests**: Run fusion, clear/scan/multiply loop recognition
 - **Program corpus** (`crates/gyrus/tests/program_corpus.rs`): real BrainFuck
-  programs run end to end, expectations declared in `programs/test_manifest.toml`
+  programs run end to end, every case read from `programs/test_manifest.toml`
+  via `gyrus-corpus`. The JIT's `corpus.rs` reads the same cases, so a manifest
+  entry tests both engines — add programs there, not as hand-written tests
+- **Generated differential** (`crates/gyrus/tests/generated_differential.rs`):
+  the optimizer against the tree-walker on generated programs, under both
+  memory models and both cell models
 - **Property tests** (`crates/gyrus/tests/property_debug_symbols.rs`): proptest
   over debug symbol invariants
 
