@@ -1,6 +1,6 @@
 # PRD: Cranelift JIT
 
-**Status**: Step 1 (the spike) done and measured; steps 2–6 remain
+**Status**: Steps 1–3 done (spike; errors; cell and memory models, limits, statistics). Steps 4–6 remain: `--jit`, the corpus under it, docs
 **Last Updated**: 2026-08-24
 **Priority**: High — the largest remaining win, and the interpreter is close to done
 
@@ -102,12 +102,16 @@ constructors. Source location comes from the instruction index via
 `DebugInfo`, as it does today. No DWARF, no debugger protocol: the interactive
 debugger has the tree-walker.
 
-**Unbounded memory is allocated at its maximum up front.** JIT code holds the
-tape base in a register, so the tape cannot move underneath it. A zeroed
-allocation of `--unbounded-max` costs nothing until pages are touched, and the
-bound is then a fixed tape of that size. Divergences, documented: under
-`--jit`, `memory_allocated` reports the maximum and `MemoryExpanded` warnings
-are not produced. Growth-on-access is an interpreter behaviour.
+**Unbounded memory grows on the cold path, as the interpreter's does.** JIT
+code holds the tape base in a register, which was the argument for
+allocating `--unbounded-max` up front; but nothing on the hot path needs to
+know the tape can move. Base and length are Cranelift variables; when an
+access fails its bounds check under the unbounded model the cold path calls
+`bf_grow`, which resizes the tape to cover the cell -- the interpreter's
+exact policy, so `memory_allocated` comes out identical -- and the code
+reloads base and length and re-runs the check. The hot path is still one
+compare and one branch. (Decided 2026-08-24, replacing the up-front
+allocation; the suggestion was the user's.)
 
 **Limits are checked at loop back-edges.** A step counter in the interpreter's
 sense would cost a register write per instruction; back-edges are where time
@@ -123,7 +127,9 @@ counter is never emitted, as `CHECK_LIMITS = false` deletes the check today.
 `bytes_read`/`bytes_written` from the I/O callbacks; `peak_memory_used` from a
 `umax` into a register on each access (the interpreter found this free as a
 conditional move); `cells_modified` by scanning the tape at exit;
-`memory_allocated` the tape length. `warnings` empty.
+`memory_allocated` the tape length. `warnings` empty. Every statistic both
+engines define alike is equal by test; `total_steps` is the one in different
+units (optimized instructions there, loop iterations here).
 
 ### Translation
 
@@ -158,7 +164,6 @@ Cranelift's own diagnostics readable; it is not a debugging feature.
 - **AOT.** `cranelift-object` can emit an object from the same translator; a
   standalone binary also needs a runtime library and a linker step. Worth a
   section in this document when someone wants it, not before.
-- **Growing memory.** See the allocation decision.
 
 ### Cranelift, as of 0.135
 

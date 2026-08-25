@@ -154,15 +154,11 @@ fn out_of_tape_access_is_the_same_error() {
     }
 }
 
-/// The multiply fold is only valid under wrapping cells, and the program
-/// records the model it was built for; the spike refuses anything else
-/// rather than run folds that do not hold.
+/// A program carries the cell model it was optimized for; running it under
+/// another is refused, as the interpreter refuses it.
 #[test]
-fn checked_cells_are_refused_for_now() {
-    let program = gyrus::optimize_with_cell_model(
-        &parse("+").unwrap(),
-        gyrus::CellModel::U8Checked(gyrus::U8CheckedCells),
-    );
+fn a_program_built_for_one_cell_model_is_refused_under_another() {
+    let program = optimize(&parse("+").unwrap());
     let config = ExecutionConfigBuilder::new()
         .with_memory_size(10)
         .with_checked_cells()
@@ -298,4 +294,255 @@ fn io_errors_are_the_interpreters() {
     };
     assert_eq!(oa, ob);
     assert_eq!((sa.kind(), sa.to_string()), (sb.kind(), sb.to_string()));
+}
+
+/// Compare both engines on the same source, input and configuration.
+fn compare(
+    src: &str,
+    input: &str,
+    build: impl Fn() -> gyrus::ExecutionConfig,
+) -> (Result<Vec<u8>, BfError>, Result<Vec<u8>, BfError>) {
+    let program = gyrus::optimize_with_cell_model(&parse(src).unwrap(), *build().cell_model());
+    let run = |jit: bool| {
+        let mut i = StringIo::new(input);
+        let mut o = StringIo::empty();
+        let result = if jit {
+            gyrus_jit::run(&program, &build(), &mut i, &mut o, None)
+        } else {
+            interpret_optimized_with_io(&program, build(), &mut i, &mut o)
+        };
+        result.map(|_| o.output_bytes().to_vec())
+    };
+    (run(false), run(true))
+}
+
+/// Errors compared by everything but `instruction_index` (the interpreter's
+/// step count; the JIT's instruction), including the formatted message.
+fn same_error(a: &BfError, b: &BfError, what: &str) {
+    assert_eq!(
+        std::mem::discriminant(a),
+        std::mem::discriminant(b),
+        "{what}: {a:?} vs {b:?}"
+    );
+    let scrub = |text: String| {
+        // "at instruction 12" / "instruction 12": drop the number.
+        let mut out = String::new();
+        let mut rest = text.as_str();
+        while let Some(pos) = rest.find("instruction ") {
+            out.push_str(&rest[..pos + "instruction ".len()]);
+            rest = &rest[pos + "instruction ".len()..];
+            let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+            rest = &rest[digits..];
+            out.push('?');
+        }
+        out.push_str(rest);
+        out
+    };
+    assert_eq!(
+        scrub(a.format_detailed()),
+        scrub(b.format_detailed()),
+        "{what}"
+    );
+}
+
+/// Checked cells: the fused `Add(n)` fails where the unfused steps would,
+/// with the interpreter's message; and what does not overflow agrees.
+#[test]
+fn checked_cells_agree_with_the_interpreter() {
+    let build = || {
+        ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_checked_cells()
+            .build()
+    };
+    for src in [
+        "+++++[>+++<-]>.",
+        "[-]+++.",
+        "+++++[-]++.",
+        ",+.",
+        "++[->++<]>.",
+    ] {
+        let (interp, jit) = compare(src, "\u{5}", build);
+        assert_eq!(jit.as_ref().unwrap(), interp.as_ref().unwrap(), "{src}");
+    }
+    let overflow = "+".repeat(256);
+    for (src, what) in [
+        ("-", "underflow at 0"),
+        (overflow.as_str(), "overflow at 255"),
+        ("[-]---", "clear then underflow"),
+        (
+            "+++++++++[>++++++++++++++++++++++++++++++<-]>.",
+            "overflow inside a loop",
+        ),
+    ] {
+        let (interp, jit) = compare(src, "", build);
+        let (Err(a), Err(b)) = (&interp, &jit) else {
+            panic!("{what}: {interp:?} vs {jit:?}")
+        };
+        same_error(a, b, what);
+        match (a, b) {
+            (
+                BfError::CellOverflow {
+                    current_value: x, ..
+                },
+                BfError::CellOverflow {
+                    current_value: y, ..
+                },
+            )
+            | (
+                BfError::CellUnderflow {
+                    current_value: x, ..
+                },
+                BfError::CellUnderflow {
+                    current_value: y, ..
+                },
+            ) => assert_eq!(x, y, "{what}"),
+            _ => panic!("{what}: {a:?} vs {b:?}"),
+        }
+    }
+}
+
+/// Unbounded memory grows on access, to the cell touched, in both engines --
+/// so `memory_allocated` agrees -- and beyond the maximum is the same error.
+#[test]
+fn unbounded_memory_grows_like_the_interpreter() {
+    let build = || {
+        ExecutionConfigBuilder::new()
+            .with_unbounded_memory(4, 100)
+            .unwrap()
+            .build()
+    };
+    for src in [
+        ">>>>>>>>+.",
+        ">>>>>>>>>>>>>>>>>>>>+<<<<<<<<<<<<<<<<<<<<+.",
+        ">+>+>+>+>+>+>+>+>+[<]>[>]<.",
+        "+++[->>>>>>+<<<<<<]>>>>>>.",
+    ] {
+        let program = optimize(&parse(src).unwrap());
+        let run = |jit: bool| {
+            let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+            let stats = if jit {
+                gyrus_jit::run(&program, &build(), &mut i, &mut o, None)
+            } else {
+                interpret_optimized_with_io(&program, build(), &mut i, &mut o)
+            };
+            (stats.unwrap(), o.output_bytes().to_vec())
+        };
+        let (a, out_a) = run(false);
+        let (b, out_b) = run(true);
+        assert_eq!(out_a, out_b, "{src}");
+        assert_eq!(
+            a.memory_allocated, b.memory_allocated,
+            "{src}: memory_allocated"
+        );
+        assert_eq!(
+            a.peak_memory_used, b.peak_memory_used,
+            "{src}: peak_memory_used"
+        );
+    }
+    let small = || {
+        ExecutionConfigBuilder::new()
+            .with_unbounded_memory(4, 8)
+            .unwrap()
+            .build()
+    };
+    for src in [">>>>>>>>+", "<+", "+++[->>>>>>>>+<<<<<<<<]"] {
+        let (interp, jit) = compare(src, "", small);
+        let (Err(a), Err(b)) = (&interp, &jit) else {
+            panic!("{src}: {interp:?} vs {jit:?}")
+        };
+        same_error(a, b, src);
+    }
+}
+
+/// Limits: the JIT counts loop iterations, and `--max-steps` bounds exactly
+/// that; the timeout fires on a loop that never ends.
+#[test]
+fn limits_stop_the_run() {
+    let build = |max: u64| {
+        move || {
+            ExecutionConfigBuilder::new()
+                .with_memory_size(10)
+                .with_max_steps(max)
+                .build()
+        }
+    };
+    // Three iterations, budget of a thousand: completes, and reports three.
+    let program = optimize(&parse("+++[.-]").unwrap());
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    let stats = gyrus_jit::run(&program, &build(1000)(), &mut i, &mut o, None).unwrap();
+    assert_eq!((stats.total_steps.get(), stats.loop_iterations), (3, 3));
+    // Budget of exactly three: still completes.
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    assert!(gyrus_jit::run(&program, &build(3)(), &mut i, &mut o, None).is_ok());
+    // A loop that never ends: stopped on the iteration the limit names.
+    let forever = optimize(&parse("+[]").unwrap());
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    let err = gyrus_jit::run(&forever, &build(5000)(), &mut i, &mut o, None).unwrap_err();
+    let BfError::StepLimitExceeded {
+        limit,
+        actual_steps,
+        ..
+    } = err
+    else {
+        panic!("{err:?}")
+    };
+    assert_eq!((limit, actual_steps.get()), (5000, 5000));
+    // And by the clock.
+    let timed = ExecutionConfigBuilder::new()
+        .with_memory_size(10)
+        .with_timeout_ms(30)
+        .build();
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    let err = gyrus_jit::run(&forever, &timed, &mut i, &mut o, None).unwrap_err();
+    assert!(matches!(err, BfError::ExecutionTimeout { .. }), "{err:?}");
+}
+
+/// Every statistic the two engines both define is equal; `total_steps` is
+/// in different units by design (optimized instructions vs loop iterations).
+#[test]
+fn statistics_agree_where_they_are_defined_alike() {
+    let build = || ExecutionConfigBuilder::new().with_memory_size(50).build();
+    for (src, input) in [
+        (
+            "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.",
+            "",
+        ),
+        (",[.,]", "hello"),
+        ("+>+>+>+>+<<<<[>]<.", ""),
+    ] {
+        let program = optimize(&parse(src).unwrap());
+        let run = |jit: bool| {
+            let (mut i, mut o) = (StringIo::new(input), StringIo::empty());
+            if jit {
+                gyrus_jit::run(&program, &build(), &mut i, &mut o, None).unwrap()
+            } else {
+                interpret_optimized_with_io(&program, build(), &mut i, &mut o).unwrap()
+            }
+        };
+        let (a, b) = (run(false), run(true));
+        assert_eq!(
+            a.loop_iterations, b.loop_iterations,
+            "{src}: loop_iterations"
+        );
+        assert_eq!(
+            a.peak_memory_used, b.peak_memory_used,
+            "{src}: peak_memory_used"
+        );
+        assert_eq!(a.cells_modified, b.cells_modified, "{src}: cells_modified");
+        assert_eq!(
+            (a.bytes_read, a.bytes_written),
+            (b.bytes_read, b.bytes_written),
+            "{src}: bytes"
+        );
+        assert_eq!(
+            a.memory_allocated, b.memory_allocated,
+            "{src}: memory_allocated"
+        );
+        assert_eq!(
+            b.total_steps.get(),
+            b.loop_iterations,
+            "{src}: JIT steps are iterations"
+        );
+    }
 }
