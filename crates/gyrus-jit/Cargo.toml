@@ -21,3 +21,4 @@ cranelift-native.workspace = true
 # and a seedable RNG.
 gyrus = { workspace = true, features = ["random"] }
 rand.workspace = true
+gyrus-corpus.workspace = true

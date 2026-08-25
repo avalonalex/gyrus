@@ -226,6 +226,30 @@ impl<R: Rng> Idioms<'_, R> {
                 let n = self.rng.random_range(1..=5);
                 self.repeat('-', n);
             }
+            // A constant that reaches, and often crosses, the top of a cell.
+            //
+            // Crossing is the point. Run fusion caps an `Add` at 255, so a
+            // source run longer than that becomes `Add(255)` then `Add(rest)`,
+            // and after the clear that is `Set(255)` followed by `Add(rest)` --
+            // exactly the pair whose fold is valid only while the sum stays
+            // under 256. Past it, under checked cells, the overflow is the
+            // thing the program existed to report, and folding it away hides
+            // that.
+            //
+            // The range spans the boundary rather than stopping at it because
+            // a run of 255 or fewer fuses to a single `Add` and never forms the
+            // pair. This emits one contiguous run: the second `Add` comes from
+            // fusion, not from a second `repeat`.
+            //
+            // Without a fragment that gets here, no number of seeds can falsify
+            // that guard -- every other fragment writes single-digit values, so
+            // the harness ran hundreds of programs that never came near a cell
+            // limit, and the bug was found by review instead, which is the
+            // wrong way round.
+            2 => {
+                let n = self.rng.random_range(200..=315);
+                self.repeat('+', n);
+            }
             _ => {
                 let n = self.rng.random_range(1..=12);
                 self.repeat('+', n);

@@ -56,15 +56,15 @@ input = ""
 expected_exit = "success"
 description = "Self-replicating program (outputs its own source)"
 tags = ["advanced", "quine", "self-referential"]
-skip_output_check = true  # Special handling required
+output_is_source = true  # Special handling required
 
 [[test]]
 name = "factor"
 file = "third-party/advanced/factor.bf"
 input = "12\n"
-# Factor.bf is complex and may need special handling
+expected_output = "12: 2 2 3\n"
 expected_exit = "success"
-description = "Integer factorization program"
+description = "Integer factorization: 12 = 2 x 2 x 3"
 tags = ["advanced", "math", "slow"]
 timeout_ms = 60000  # May take a while
 
@@ -103,6 +103,8 @@ config = { eof_behavior = "no_change" }
 name = "warnings_only"
 file = "tests/warnings_only.bf"
 input = ""
+# Produces nothing: these exist to trigger static warnings, not output.
+expected_output = ""
 expected_exit = "success"
 expected_warnings = 2
 description = "Program with validation warnings but no errors"
@@ -112,6 +114,8 @@ tags = ["validation", "warnings"]
 name = "warnings_test"
 file = "tests/warnings_test.bf"
 input = ""
+# Produces nothing: these exist to trigger static warnings, not output.
+expected_output = ""
 expected_exit = "success"
 expected_warnings = 1
 description = "Mixed program with warnings"
@@ -158,56 +162,177 @@ config = { max_steps = 1000 }
 name = "deep_nesting"
 file = "tests/deep_nesting.bf"
 input = ""
+# Produces nothing: these exist to trigger static warnings, not output.
+expected_output = ""
 expected_exit = "success"
 expected_warnings = 1  # Extreme nesting warning
 description = "Deeply nested loops (11 levels)"
 tags = ["stress", "validation"]
 
 # ============================================================================
-# PROGRAMS TO ADD (TODO)
+# MORE FACTORISATION -- the answers are checkable by hand, which is the point
 # ============================================================================
 
-# [[test]]
-# name = "fibonacci"
-# file = "third-party/advanced/fibonacci.bf"
-# input = ""
-# expected_output = "1, 1, 2, 3, 5, 8, 13, 21, 34, 55"
-# description = "Fibonacci sequence generator"
-# tags = ["math", "advanced"]
+[[test]]
+name = "factor_prime"
+file = "third-party/advanced/factor.bf"
+input = "97\n"
+expected_output = "97: 97\n"
+expected_exit = "success"
+description = "A prime factors to itself"
+tags = ["advanced", "math", "slow"]
+timeout_ms = 60000
 
-# [[test]]
-# name = "rot13"
-# file = "third-party/advanced/rot13.bf"
-# input = "Hello World"
-# expected_output = "Uryyb Jbeyq"
-# description = "ROT13 cipher"
-# tags = ["cipher", "io"]
+[[test]]
+name = "factor_360"
+file = "third-party/advanced/factor.bf"
+input = "360\n"
+expected_output = "360: 2 2 2 3 3 5\n"
+expected_exit = "success"
+description = "360 = 2^3 x 3^2 x 5, exercising repeated factors"
+tags = ["advanced", "math", "slow"]
+timeout_ms = 60000
 
-# [[test]]
-# name = "mandelbrot"
-# file = "third-party/advanced/mandelbrot.bf"
-# input = ""
-# description = "Mandelbrot set renderer"
-# tags = ["graphics", "stress", "slow"]
-# timeout_ms = 120000
+# ============================================================================
+# ADVANCED PROGRAMS
+# ============================================================================
 
-# [[test]]
-# name = "99_bottles"
-# file = "third-party/advanced/99_bottles.bf"
-# input = ""
-# description = "99 Bottles of Beer song"
-# tags = ["text", "loops"]
+[[test]]
+name = "collatz"
+file = "third-party/advanced/collatz.bf"
+input = "5\n"
+expected_output = "5\n"
+expected_exit = "success"
+# The program prints the LENGTH of the sequence, not the sequence: 5 -> 16 ->
+# 8 -> 4 -> 2 -> 1 is five steps. The old hand-written test asserted only that
+# the output was non-empty, so it never established that.
+description = "Collatz sequence length for 5 is 5"
+tags = ["advanced", "math"]
+config = { max_steps = 50_000_000 }
 
-# [[test]]
-# name = "prime"
-# file = "third-party/advanced/prime.bf"
-# input = ""
-# description = "Prime number generator"
-# tags = ["math"]
+[[test]]
+name = "collatz_27"
+file = "third-party/advanced/collatz.bf"
+input = "27\n"
+expected_output = "111\n"
+expected_exit = "success"
+description = "Collatz length for 27 is 111, the well-known long one"
+tags = ["advanced", "math", "slow"]
+config = { max_steps = 50_000_000 }
+timeout_ms = 60000
 
-# [[test]]
-# name = "hanoi"
-# file = "third-party/advanced/hanoi.bf"
-# input = "3"
-# description = "Towers of Hanoi solver"
-# tags = ["algorithm", "recursion"]
+[[test]]
+name = "rot13"
+file = "third-party/advanced/rot13.bf"
+input = "HelloWorld"
+expected_output_prefix = "UryybJbeyq"
+expected_exit = "error"
+expected_error_type = "limit"
+# Interactive and never terminates: the step limit is the Ctrl-C. 100k is
+# enough to see the whole input transformed; the old test spent 10 million.
+description = "ROT13 cipher, stopped by the step limit"
+tags = ["advanced", "cipher", "io"]
+config = { max_steps = 100_000 }
+
+[[test]]
+name = "fibonacci"
+file = "third-party/advanced/fibonacci.bf"
+input = ""
+expected_output_prefix = "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n89\n144\n233\n"
+expected_exit = "error"
+expected_error_type = "limit"
+# Emits the sequence forever. The prefix runs past 99 deliberately: three-digit
+# terms are what exercise the multi-digit arithmetic. 200k steps reach 4181;
+# the old test spent 50 million to check less.
+description = "Fibonacci, multi-digit arithmetic, stopped by the step limit"
+tags = ["advanced", "math"]
+config = { max_steps = 200_000 }
+
+# ============================================================================
+# UTILITIES -- Cristofani's collection, each doing one small thing
+# ============================================================================
+
+[[test]]
+name = "cat"
+file = "third-party/utilities/cat.bf"
+input = "Hello World"
+expected_output = "Hello World"
+expected_exit = "success"
+description = "Copies input to output"
+tags = ["utility", "io"]
+
+[[test]]
+name = "reverse"
+file = "third-party/utilities/reverse.bf"
+input = "hello"
+expected_output = "olleh"
+expected_exit = "success"
+description = "Reverses its input"
+tags = ["utility", "io"]
+config = { memory_size = 1000 }
+
+[[test]]
+name = "strip_tabs_lf"
+file = "third-party/utilities/strip_tabs_lf.bf"
+input = "hi\tthere\n"
+expected_output = "hithere"
+expected_exit = "success"
+description = "Drops tabs and line feeds"
+tags = ["utility", "io"]
+
+[[test]]
+name = "ascii_unary"
+file = "third-party/utilities/ascii_unary.bf"
+input = "AB"
+# 'A' is 65 and 'B' is 66, each printed as that many '!' and a space.
+expected_output = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! "
+expected_exit = "success"
+description = "Each input byte as its value in unary"
+tags = ["utility", "io"]
+
+[[test]]
+name = "clearscreen"
+file = "third-party/utilities/clearscreen.bf"
+input = ""
+expected_output = "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+expected_exit = "success"
+description = "Exactly 100 newlines"
+tags = ["utility", "output"]
+
+[[test]]
+name = "beep"
+file = "third-party/utilities/beep.bf"
+input = ""
+expected_output = "\u0007"
+expected_exit = "success"
+description = "One BEL byte"
+tags = ["utility", "output"]
+
+[[test]]
+name = "true"
+file = "third-party/utilities/true.bf"
+input = ""
+expected_output = ""
+expected_exit = "success"
+description = "Outputs nothing and exits cleanly"
+tags = ["utility"]
+
+[[test]]
+name = "brainfuck_print"
+file = "third-party/utilities/brainfuck_print.bf"
+input = ""
+expected_output = "brainfuck\n"
+expected_exit = "success"
+description = "Prints the word brainfuck"
+tags = ["utility", "output"]
+
+[[test]]
+name = "eof_neg_one"
+file = "tests/test_eof.bf"
+input = ""
+# The byte is the whole point of the case: SetNegOne must leave 255, not 0.
+expected_output = "\u00FF"
+expected_exit = "success"
+description = "EOF leaves the cell at 255 (-1)"
+tags = ["eof", "config"]
+config = { eof_behavior = "neg_one" }

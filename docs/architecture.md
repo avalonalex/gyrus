@@ -24,6 +24,7 @@ Back to the [README](../README.md).
 | `gyrus-cli` | The `gyrus` binary — run a program, in any of the four modes |
 | `gyrus-tool` | The `gyrus-tool` binary — minify, validate, view, inspect, generate |
 | `gyrus-jit` | Cranelift JIT over the optimized IR, behind `gyrus --jit` |
+| `gyrus-corpus` | Test support: the program manifest, parsed once for both corpus suites |
 
 The file-by-file layout is in [Project Structure](#project-structure) below;
 this section covers the parts whose design is worth explaining.
@@ -255,9 +256,11 @@ gyrus/
 │   │   └── src/main.rs      # CLI interface and entry point
 │   ├── gyrus-tool/ # `gyrus-tool` binary — development workflows
 │   │   └── src/main.rs      # Subcommands: minify, validate, view, ...
-│   └── gyrus-jit/  # Cranelift JIT over OptimizedProgram
-│       ├── src/             # Translator, runtime, slow-path interpreter
-│       └── tests/           # Corpus, differential, and generated-program tests
+│   ├── gyrus-jit/  # Cranelift JIT over OptimizedProgram
+│   │   ├── src/             # Translator, runtime, slow-path interpreter
+│   │   └── tests/           # Corpus, differential, and generated-program tests
+│   └── gyrus-corpus/        # The test manifest, parsed; shared by both
+│       └── src/lib.rs       #   corpus suites. Test support, not a product.
 ├── programs/                # BrainFuck programs for testing
 │   ├── README.md            # Programs documentation
 │   ├── basic/               # Simple demonstration programs

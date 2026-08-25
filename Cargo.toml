@@ -4,6 +4,7 @@ members = [
     "crates/gyrus-cli",
     "crates/gyrus-tool",
     "crates/gyrus-jit",
+    "crates/gyrus-corpus",
 ]
 resolver = "2"
 
@@ -44,6 +45,7 @@ rust-version = "1.95"
 # Internal
 gyrus = { path = "crates/gyrus" }
 gyrus-jit = { path = "crates/gyrus-jit" }
+gyrus-corpus = { path = "crates/gyrus-corpus" }
 
 # Error handling
 thiserror = "2"
