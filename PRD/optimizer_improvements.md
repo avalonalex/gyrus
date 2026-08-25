@@ -403,6 +403,62 @@ value in SSA within a run, and read Cranelift's output for a hot loop.
 Kept so that nobody measures these again. Each has a branch or PR with the
 code; the numbers are what decided it.
 
+### One shared exit epilogue in the JIT — 2026-08-25, negative
+
+**The observation.** `GYRUS_JIT_DISASM=1` prints what Cranelift emitted. For
+mandelbrot that is 19,968 instructions, and 1,088 of them are `retabsp`. Each
+failure site ends in its own `return_`, and a return carries the frame teardown
+with it: six register-pair restores plus the authenticated return, nine
+instructions a site. **Half the emitted function is frame teardown**, spread
+from instruction 159 to 19,967, in between the loops that do the work.
+
+**The idea:** one shared cold block taking the cursor and the site id as block
+parameters, so each site is a two-instruction trampoline. mandelbrot drops to
+13,288 instructions (-33.5%) and two epilogues, byte-identical output, JIT
+suite green.
+
+**Code:** PR #26 (branch `experiment/jit-shared-exit-epilogue`), not merged.
+
+**Result.** Interleaved min-of-7 against a `main` binary in a separate
+worktree:
+
+| program | `main` | shared exit | vs `main` |
+|---|---|---|---|
+| mandelbrot | 947 ms | 961 ms | **+1.5%** |
+| mandelbrot, second round | 1090 ms | 1101 ms | **+1.0%** |
+| hanoi | 133 ms | 136 ms | **+2.4%** |
+| hello_world | 5.3 ms | 5.0 ms | -6.5% |
+
+Slower on both real programs, on both rounds, including the compile-bound one.
+Only hello_world improves, and at 5 ms that is noise. The absolute times moved
+between rounds because the machine was loaded; the ratios did not.
+
+**Why.** The epilogues were cold and never executed, so their only cost was
+instruction-cache footprint -- and a line that is never fetched costs nothing.
+Against that, the shared block's parameters pin the cursor into a fixed
+register at every branch out of hot code, which constrains the register
+allocator where it does matter. Code size is not the thing; the executed path
+is.
+
+**What it rules out.** Shrinking cold code. It also gives the hot loop's exact
+cost: mandelbrot's strided seek, 47% of executed instructions, is six
+instructions an iteration --
+
+```
+subs xzr, x2, x20      ; bounds check
+b.lo body
+ldrb w7, [x19, x2]     ; load the cell
+ands wzr, w7, #255     ; test zero
+b.ne step
+add  x2, x2, #4        ; cursor += stride
+b    header
+```
+
+-- of which two are the bounds check, consistent with the 4.5% ceiling measured
+for removing checks altogether. A native `while (tape[i]) i += 4;` is four
+instructions. The remaining 1.6x to native is not in cold code and not in the
+guards.
+
 ### Offset addressing (lazy pointer motion) — 2026-08-24, negative
 
 **The idea:** give cell operations an offset from the pointer, so a
@@ -521,3 +577,4 @@ For each new optimization:
 
 - 2025-11-02: Initial document with 6 optimization opportunities identified
 - 2026-08-24: Offset addressing tried and recorded as a negative result; scan by N promoted on its evidence
+- 2026-08-25: JIT shared exit epilogue tried and recorded as a negative result; `GYRUS_JIT_DISASM=1` added to make emitted code inspectable

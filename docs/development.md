@@ -100,6 +100,13 @@ scripts/benchmark.sh --profile PROG  # loop profile via --trace
 cargo bench                          # criterion micro-benchmarks
 ```
 
+`GYRUS_JIT_DISASM=1` makes `gyrus --jit` print the machine code Cranelift
+emitted, on stderr, before running. It is how you find out what a translation
+choice actually costs rather than guessing -- and, as often, what it does not
+cost: see the shared-exit experiment in
+[`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md), where
+removing a third of the emitted instructions made the program slower.
+
 `benchmark.sh` is a differential test that also reports timings: it diffs every
 run against a golden output, so a number that improves while the output moves
 fails the script instead of being printed. Only re-record with `--record` after
