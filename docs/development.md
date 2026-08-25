@@ -1,144 +1,114 @@
 # Development
 
-Building, testing, benchmarking, and the checks that keep this repository's
+Building gyrus, running its gates, and the checks that keep this repository's
 claims honest.
 
-Back to the [README](../README.md).
+Back to the [README](../README.md). For what the test suite actually contains,
+see [Testing](testing.md).
 
-## Development
-
-### Checks
+## Building
 
 ```bash
-cargo test --workspace                # the full suite
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo fmt --all -- --check
-
-scripts/check-msrv.sh                 # builds on the MSRV declared in Cargo.toml
-scripts/check-readme-commands.py      # every flag documented here really exists
-
-scripts/benchmark.sh                  # time the interpreter, verify output
-scripts/benchmark.sh --profile PROG   # execution profile via --trace
-cargo bench                           # criterion micro-benchmarks
+cargo build                    # whole workspace, debug
+cargo build --release          # what you want for anything timed
+cargo build -p gyrus           # just the library
+cargo run -p gyrus-cli -- programs/basic/hello_world.bf
+cargo run -p gyrus-tool -- view programs/basic/simple.bf --line-numbers
 ```
 
-The last two guard claims that rot quietly: the declared MSRV, and this file's
-own command lines. Both were wrong at some point, which is why they are scripts
-now. `check-readme-commands.py` needs `cargo build --release --workspace` first.
+`rust-toolchain.toml` pins the compiler, so `cargo` picks the right one on its
+own and local builds cannot drift from CI. That pin is a different fact from
+`rust-version` in `Cargo.toml`: the pin is the compiler this repository is
+developed and gated against, while `rust-version` is the oldest compiler a
+consumer needs. Both are declared, and `scripts/check-msrv.sh` is what keeps the
+second one true.
+
+The pin exists because the lint surface genuinely moves — the same tree reported
+one clippy warning on 1.93.1 and four on 1.97.1. Since CI gates on
+`-D warnings`, an unpinned toolchain turns unrelated changes red for no reason.
+Bumping it is a deliberate one-line edit followed by fixing whatever the newer
+lints find.
 
 Dependencies are declared at breaking-change granularity (`"2"`, not
 `"2.0.17"`), so `cargo update` picks up compatible upgrades on its own and
 `Cargo.lock` records exactly what is in use.
 
-### Running Tests
+## The gates
 
-gyrus has a comprehensive testing infrastructure: unit tests, integration tests
-over a corpus of real programs, property-based tests, and benchmarks.
-
-#### Run All Tests
+Everything below has to pass before a change lands:
 
 ```bash
-# Run all unit tests
-cargo test
+cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
 
-# Run with output
-cargo test -- --nocapture
-```
-
-#### Run Property-Based Tests
-
-Property-based tests use [proptest](https://github.com/proptest-rs/proptest) to verify properties hold across thousands of randomly generated inputs:
-
-```bash
-# Run only property tests
-cargo test proptest
-
-# Run property tests with more cases (default is 100)
-PROPTEST_CASES=1000 cargo test proptest
-```
-
-**What property tests verify:**
-- Parsing never panics on any input
-- Valid BrainFuck programs always parse successfully
-- Parsing is deterministic (same input = same output)
-- Balanced brackets always parse correctly
-- Comments don't affect program validity
-
-#### Run Benchmarks
-
-Benchmarks use [criterion](https://github.com/bheisler/criterion.rs) to measure performance with statistical analysis:
-
-```bash
-# Run all benchmarks
-cargo bench
-
-# Run specific benchmark suite
-cargo bench --bench interpreter
-cargo bench --bench parser
-
-# Run specific benchmark
-cargo bench -- simple_arithmetic
-```
-
-**Benchmark suites:**
-- **Interpreter benchmarks**: Arithmetic, loops, pointer movement, I/O, Hello World
-- **Parser benchmarks**: Simple programs, nested loops, long programs, comments
-
-Benchmark results are saved in `target/criterion/` with detailed HTML reports including:
-- Performance graphs
-- Regression analysis
-- Statistical comparisons
-
-**View HTML reports:**
-```bash
-# After running benchmarks
-open target/criterion/report/index.html
-```
-
-#### Test Organization
-
-```
-crates/gyrus/
-├── src/
-│   ├── test_utils.rs        # Test helpers (private, cfg(test))
-│   ├── parser.rs            # Unit tests + property tests
-│   ├── interpreter.rs       # Unit tests
-│   └── ...
-└── benches/
-    ├── interpreter.rs       # Interpreter benchmarks
-    └── parser.rs            # Parser benchmarks
-```
-
-### Development Build
-
-```bash
-cargo build
-```
-
-### Running with Cargo
-
-```bash
-cargo run -- path/to/your/program.bf
-```
-
-## Testing strategy
-
-See [Testing](testing.md) for coverage goals, property-based testing, and the
-program corpus.
-
-## Checks that guard claims
-
-Some facts about this repository are claims nobody exercises day to day, so
-they rot silently. Each of these has been wrong at least once, which is why it
-is now a script rather than a habit:
-
-```bash
 scripts/check-msrv.sh              # the workspace builds on its declared MSRV
 scripts/check-readme-commands.py   # every flag the docs use really exists
-scripts/check-doc-links.py         # every relative link resolves
-scripts/benchmark.sh               # output still matches benchmarks/expected/
+scripts/check-doc-links.py         # every relative Markdown link resolves
+scripts/check-examples.sh          # every example runs, not just compiles
+scripts/check-tape-access.py       # the tape is indexed only where the contract is enforced
 ```
+
+`check-readme-commands.py` needs `cargo build --release --workspace` first.
+
+The five scripts guard claims that rot quietly, and each of them exists because
+the claim it checks was wrong at least once:
+
+- **MSRV** was declared 1.85 by inference from the edition. It was actually 1.88
+  — let-chains — and is now 1.95, which is Cranelift's floor. The script reads
+  the number out of `Cargo.toml` rather than restating it, so it cannot drift
+  from what it checks.
+- **Documented commands** included `gyrus --validate` and `gyrus --minify` long
+  after both became `gyrus-tool` subcommands. The script extracts every
+  documented invocation and checks its flags against clap's `--help`.
+- **Doc links** broke when five files moved during a documentation cleanup, two
+  of them having been broken beforehand.
+- **Examples** are run, not just built. Building is already covered by clippy and
+  it is not enough: when `MemoryAddress` became signed,
+  `hooks_execution_tracer` still compiled and panicked on its first instruction,
+  because nothing ran it.
+- **Tape access** enforces the one structural requirement of the tape contract —
+  every read and write goes through `VmState::cell`/`cell_at`, because that is
+  where the bound lives. A site that genuinely needs a direct index says why
+  with a `// tape-access-ok:` note.
 
 When adding a claim to the docs, ask whether a script could check it. If it
 could, write the script: an unexecuted claim is one that will eventually be
 false.
+
+## Tests
+
+```bash
+cargo test --workspace                    # everything
+cargo test -- --nocapture                 # with output
+cargo test proptest                       # just the property tests
+PROPTEST_CASES=1000 cargo test proptest   # more cases than the default 100
+cargo test -p gyrus --features random     # the program generator
+```
+
+The suite is unit tests beside the code, a corpus of real BrainFuck programs run
+end to end, property tests over invariants, and a differential harness holding
+the JIT, the optimized interpreter, and the tree-walker to identical output.
+[Testing](testing.md) covers what each of those does and where to add to them.
+
+## Benchmarks
+
+```bash
+scripts/benchmark.sh                 # time each mode, verify output against benchmarks/expected/
+scripts/benchmark.sh --full          # include the slow --debug runs
+scripts/benchmark.sh --profile PROG  # loop profile via --trace
+cargo bench                          # criterion micro-benchmarks
+```
+
+`benchmark.sh` is a differential test that also reports timings: it diffs every
+run against a golden output, so a number that improves while the output moves
+fails the script instead of being printed. Only re-record with `--record` after
+confirming the new output is correct.
+
+## Documentation
+
+The rules, in short: `docs/` describes what exists, `PRD/` describes what does
+not exist yet, and a PRD is deleted when its feature ships rather than archived
+— the code and `docs/` describe what was built, and git history keeps the
+reasoning. Test counts, line counts, and status tables do not belong in either;
+they go stale on every commit, and a stale number is worse than no number.

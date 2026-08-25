@@ -68,8 +68,9 @@ cargo build --release
 ```
 
 `rust-toolchain.toml` pins the compiler, so `cargo` picks the right one on its
-own. Building against another toolchain needs Rust **1.95** or newer (the code
-uses let-chains, which stabilized there).
+own. Building against another toolchain needs Rust **1.95** or newer — that is
+Cranelift's floor, inherited through the JIT. The library on its own needs
+1.88, where let-chains stabilized.
 
 ## Features
 
@@ -81,7 +82,7 @@ The unreasonable part is that all of this actually works.
   interpreter that tracks source locations, and a tracing interpreter
   (`--trace`) that profiles execution and prints a heatmap of hot code
 - An optimizer that fuses instruction runs and recognizes clear, scan, and
-  multiply loops — Hello World compresses 103 instructions to 55
+  multiply loops — Hello World compresses 103 instructions to 45
 - Memory models: fixed (bounds-checked) or unbounded (grows to a limit)
 - Cell models: `wrapping` (standard BrainFuck) or `checked` (errors on
   overflow, for finding arithmetic bugs) — orthogonal to the memory model
