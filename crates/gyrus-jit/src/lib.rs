@@ -785,9 +785,21 @@ fn compile<'p>(program: &'p OptimizedProgram, options: Options) -> Result<Compil
         (t.sites, t.guarded)
     };
 
+    // `GYRUS_JIT_DISASM=1` prints the machine code Cranelift emitted, which is
+    // the only way to see what a translation choice actually costs. Off by
+    // default and read once per compile, so it costs nothing when unset.
+    let want_disasm = std::env::var_os("GYRUS_JIT_DISASM").is_some();
+    ctx.set_disasm(want_disasm);
+
     module
         .define_function(main_id, &mut ctx)
         .map_err(|e| cranelift(&e))?;
+    if want_disasm
+        && let Some(code) = ctx.compiled_code()
+        && let Some(text) = code.vcode.as_ref()
+    {
+        eprintln!("{text}");
+    }
     module.clear_context(&mut ctx);
     module.finalize_definitions().map_err(|e| cranelift(&e))?;
     let code = module.get_finalized_function(main_id);
