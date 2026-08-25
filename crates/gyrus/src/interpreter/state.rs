@@ -89,8 +89,29 @@ impl VmState {
         debug_info: Option<&DebugInfo>,
         instruction_index: usize,
     ) -> Result<&mut u8> {
+        self.cell_from(self.pointer, offset, debug_info, instruction_index)
+    }
+
+    /// Borrow the cell `offset` cells from `cursor`, a cursor the caller holds
+    /// rather than [`Self::pointer`]. See [`Self::cell_at`].
+    ///
+    /// This exists so that the optimized executor can keep the cursor in a
+    /// local for the length of a block instead of in this struct. Read from
+    /// the struct, the cursor is a load that depends on the store the previous
+    /// move made to it, and that store-to-load hop sat on the critical path of
+    /// every instruction; held in a register, a move is one add. The field is
+    /// still the cursor of record -- the executor writes it back at block
+    /// boundaries -- but nothing on the fast path should read it.
+    #[inline(always)]
+    pub fn cell_from(
+        &mut self,
+        cursor: MemoryAddress,
+        offset: isize,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> Result<&mut u8> {
         // Wrapping, and safe for it: `index` decides, correctly, for any isize.
-        let cursor = MemoryAddress::new(self.pointer.get().wrapping_add(offset));
+        let cursor = MemoryAddress::new(cursor.get().wrapping_add(offset));
         if let Some(idx) = cursor.index(self.memory.len()) {
             // Recorded here, with the index already in hand, because this is
             // the only place a cell is reached. `max` lowers to a conditional

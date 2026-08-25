@@ -1,8 +1,8 @@
 //! Type-safe wrappers for interpreter primitives.
 //!
 //! This module provides newtype wrappers ([`MemoryAddress`], [`MemorySize`],
-//! [`StepCount`], [`InstructionIndex`]) that prevent mixing up logically
-//! distinct concepts at compile time.
+//! [`StepCount`], [`InstructionIndex`], [`CellOffset`]) that prevent mixing up
+//! logically distinct concepts at compile time.
 //!
 //! # Type Safety Benefits
 //!
@@ -98,6 +98,61 @@ impl fmt::Display for MemoryAddress {
 
 impl From<isize> for MemoryAddress {
     fn from(value: isize) -> Self {
+        Self(value)
+    }
+}
+
+/// A displacement from the cursor, in cells.
+///
+/// Offset addressing lets a straight-line run of instructions do its work
+/// without moving the cursor: `>+<` is one `Add` at offset `+1` rather than
+/// three instructions. The offset is part of the operation, so it is never a
+/// position on its own -- it becomes one only when [`MemoryAddress::index`]
+/// resolves `cursor + offset`, which is where the tape bound is enforced.
+///
+/// `i32` rather than `isize`: it keeps the cell-touching variants of
+/// `OptimizedInstruction` inside the 48 bytes `MultiplyAdd` already costs, and
+/// two billion cells is past any tape. The optimizer materializes a move rather
+/// than let a run accumulate past the range.
+///
+/// A newtype rather than a bare `i32` because it sits next to the operand in
+/// `Add(u8, CellOffset, _)`, where the two are otherwise easy to swap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct CellOffset(pub i32);
+
+impl CellOffset {
+    /// The cursor itself -- exactly the behaviour of every operation before
+    /// offsets existed, which is why the fold pass is optional.
+    pub const ZERO: Self = Self(0);
+
+    /// Create an offset of `value` cells from the cursor.
+    #[inline]
+    pub const fn new(value: i32) -> Self {
+        Self(value)
+    }
+
+    /// Get the inner value, widened for cursor arithmetic.
+    #[inline]
+    pub const fn get(self) -> isize {
+        self.0 as isize
+    }
+
+    /// Whether this offset is the cursor itself.
+    #[inline]
+    pub const fn is_zero(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl fmt::Display for CellOffset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Signed, always: an offset reads as a displacement, not a position.
+        write!(f, "{:+}", self.0)
+    }
+}
+
+impl From<i32> for CellOffset {
+    fn from(value: i32) -> Self {
         Self(value)
     }
 }

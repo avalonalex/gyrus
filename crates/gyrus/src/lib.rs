@@ -187,5 +187,5 @@ pub use optimizer::{
 };
 pub use parser::{parse, parse_with_debug};
 pub use stats::ExecutionStats;
-pub use types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};
+pub use types::{CellOffset, InstructionIndex, MemoryAddress, MemorySize, StepCount};
 pub use validator::validate;

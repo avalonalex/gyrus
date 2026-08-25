@@ -172,12 +172,12 @@ pub fn interpret_optimized<I: BfInput, O: BfOutput>(
 /// living in registers. Outlining the cold half buys back 40% of the
 /// `--max-steps` overhead and 25% of `--timeout`.
 #[inline(always)]
-fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
-    let steps = state.step_count.get();
+fn check_limits(step_count: StepCount, limits: &Limits) -> Result<()> {
+    let steps = step_count.get();
     if let Some(max_steps) = limits.max_steps
         && steps >= max_steps
     {
-        return Err(step_limit_error(max_steps, state.step_count));
+        return Err(step_limit_error(max_steps, step_count));
     }
 
     if let Some(timeout_ms) = limits.timeout_ms
@@ -187,7 +187,7 @@ fn check_limits(state: &VmState, limits: &Limits) -> Result<()> {
             .next_time_check
             .set(steps.saturating_add(TIME_CHECK_INTERVAL));
         if limits.start_time.elapsed().as_millis() as u64 > timeout_ms {
-            return Err(timeout_error(timeout_ms, state.step_count));
+            return Err(timeout_error(timeout_ms, step_count));
         }
     }
 
@@ -307,6 +307,42 @@ impl Limits {
     }
 }
 
+/// The VM registers, held in locals for the length of a block.
+///
+/// `VmState` owns the cursor and the step count, but a block does not read
+/// them from there: it copies both in on entry, works on the copies, and
+/// writes them back on exit. Kept in the struct, each is a load that depends
+/// on the store the previous instruction made to it, and those two
+/// store-to-load hops were a third of hanoi's run time -- more than the
+/// dispatch itself. In registers, a move and a step are each one add.
+///
+/// The struct's copies are therefore only current at block boundaries. Nothing
+/// on the error path reads them: an error carries the step count it was raised
+/// at, and the state is dropped. Anything that later needs them mid-block --
+/// hooks, say -- must `store` first and `load` after, as the `Loop` arm does
+/// around the nested block.
+#[derive(Clone, Copy)]
+struct Regs {
+    ptr: MemoryAddress,
+    steps: StepCount,
+}
+
+impl Regs {
+    #[inline(always)]
+    fn load(state: &VmState) -> Self {
+        Self {
+            ptr: state.pointer,
+            steps: state.step_count,
+        }
+    }
+
+    #[inline(always)]
+    fn store(self, state: &mut VmState) {
+        state.pointer = self.ptr;
+        state.step_count = self.steps;
+    }
+}
+
 /// Execute a block of optimized instructions
 fn execute_block<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: BfOutput>(
     instructions: &[OptimizedInstruction],
@@ -316,16 +352,18 @@ fn execute_block<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: 
     input: &mut I,
     output: &mut O,
 ) -> ExecutionResult {
+    let mut regs = Regs::load(state);
     for instruction in instructions {
         // Check execution limits
         if CHECK_LIMITS {
-            check_limits(state, limits)?;
+            check_limits(regs.steps, limits)?;
         }
 
         // Execute the instruction
         execute_instruction::<CHECK_LIMITS, WRAPPING, _, _>(
             instruction,
             state,
+            &mut regs,
             config,
             limits,
             input,
@@ -333,9 +371,11 @@ fn execute_block<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: 
         )?;
 
         // One step per instruction; seeks add the cells they walk on top.
-        state.step_count += 1;
+        regs.steps += 1;
     }
-
+    // Success only: on `?` above the registers are not written back, and need
+    // not be -- see `Regs`.
+    regs.store(state);
     Ok(ExecutionFlow::Continue)
 }
 
@@ -345,15 +385,15 @@ fn execute_block<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: 
 /// `--max-steps` a bound on the run instead of a switch between two
 /// implementations of it. Without a step limit the window is the whole tape.
 #[inline]
-fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usize {
+fn seek_window_end(check_limits: bool, regs: Regs, state: &VmState, limits: &Limits) -> usize {
     let len = state.memory.len();
     if !check_limits {
         return len;
     }
     match limits.max_steps {
         Some(max) => {
-            let budget = max.saturating_sub(state.step_count.get());
-            let reach = (state.pointer.get() as u64).saturating_add(budget);
+            let budget = max.saturating_sub(regs.steps.get());
+            let reach = (regs.ptr.get() as u64).saturating_add(budget);
             // +1 so the cell the limit lands on is still examined, matching the
             // per-cell loop, which checks the limit before moving.
             (reach.saturating_add(1)).min(len as u64) as usize
@@ -364,18 +404,143 @@ fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usiz
 
 /// How far left a seek may scan. See [`seek_window_end`].
 #[inline]
-fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> usize {
+fn seek_window_start(check_limits: bool, regs: Regs, _state: &VmState, limits: &Limits) -> usize {
     if !check_limits {
         return 0;
     }
     match limits.max_steps {
         Some(max) => {
-            let budget = max.saturating_sub(state.step_count.get());
+            let budget = max.saturating_sub(regs.steps.get());
             // Widen and subtract, as seek_window_end does: the result is never
             // above `pointer`, so narrowing back is lossless on any target.
-            ((state.pointer.get() as u64).saturating_sub(budget)) as usize
+            ((regs.ptr.get() as u64).saturating_sub(budget)) as usize
         }
         None => 0,
+    }
+}
+
+/// `+` run: add `n` to the cell `offset` from the cursor.
+///
+/// See Right for the fused-run argument. It bites harder here: behavior()
+/// hands out a &dyn CellBehavior, so each unit step is an indirect call the
+/// compiler cannot inline into the single wrapping_add it wraps. Checked cells
+/// keep the per-step loop, which is what reports the overflow at the right
+/// value.
+///
+/// `inline(always)`, not `inline`: the plain `Add` arm passes a literal 0 and
+/// relies on this body being folded into it so that the offset add disappears.
+#[inline(always)]
+fn add<const WRAPPING: bool>(
+    state: &mut VmState,
+    regs: Regs,
+    config: &ExecutionConfig,
+    n: u8,
+    offset: isize,
+) -> Result<()> {
+    let steps = regs.steps;
+    let cell = state.cell_from(regs.ptr, offset, None, 0)?;
+    if WRAPPING {
+        *cell = cell.wrapping_add(n);
+    } else {
+        let cells = config.cell_model().behavior();
+        for _ in 0..n {
+            cells.try_increment(cell, steps, None)?;
+        }
+    }
+    Ok(())
+}
+
+/// `-` run: subtract `n` from the cell `offset` from the cursor. See [`add`].
+#[inline(always)]
+fn sub<const WRAPPING: bool>(
+    state: &mut VmState,
+    regs: Regs,
+    config: &ExecutionConfig,
+    n: u8,
+    offset: isize,
+) -> Result<()> {
+    let steps = regs.steps;
+    let cell = state.cell_from(regs.ptr, offset, None, 0)?;
+    if WRAPPING {
+        *cell = cell.wrapping_sub(n);
+    } else {
+        let cells = config.cell_model().behavior();
+        for _ in 0..n {
+            cells.try_decrement(cell, steps, None)?;
+        }
+    }
+    Ok(())
+}
+
+/// `.`: write the cell `offset` from the cursor.
+#[inline(always)]
+fn output_cell<const CHECK_LIMITS: bool, O: BfOutput>(
+    state: &mut VmState,
+    regs: Regs,
+    limits: &Limits,
+    output: &mut O,
+    offset: isize,
+) -> Result<()> {
+    let byte = *state.cell_from(regs.ptr, offset, None, 0)?;
+    output.write_byte(byte).map_err(|source| BfError::IoError {
+        operation: "writing output".to_string(),
+        instruction_index: Some(regs.steps.into()),
+        source,
+    })?;
+    state.bytes_written += 1;
+    // After the out-call: an unknown amount of wall time just passed.
+    arm_time_check::<CHECK_LIMITS>(limits, regs.steps.get(), OUTPUT_CHECK_WITHIN);
+    Ok(())
+}
+
+/// `,`: read a byte into the cell `offset` from the cursor, or apply the
+/// configured EOF behaviour to it.
+#[inline(always)]
+fn input_cell<const CHECK_LIMITS: bool, I: BfInput>(
+    state: &mut VmState,
+    regs: Regs,
+    config: &ExecutionConfig,
+    limits: &Limits,
+    input: &mut I,
+    offset: isize,
+) -> Result<()> {
+    let byte = input.read_byte();
+    // After the out-call: `,` can have blocked on a terminal for any length of
+    // time, so the next check reads the clock unconditionally.
+    arm_time_check::<CHECK_LIMITS>(limits, regs.steps.get(), 0);
+    match byte {
+        Ok(Some(byte)) => {
+            *state.cell_from(regs.ptr, offset, None, 0)? = byte;
+            state.bytes_read += 1;
+            Ok(())
+        }
+        Ok(None) => {
+            // EOF - handle according to config
+            match config.eof_behavior() {
+                crate::config::EofBehavior::SetZero => {
+                    *state.cell_from(regs.ptr, offset, None, 0)? = 0;
+                    Ok(())
+                }
+                crate::config::EofBehavior::SetNegOne => {
+                    *state.cell_from(regs.ptr, offset, None, 0)? = 255;
+                    Ok(())
+                }
+                crate::config::EofBehavior::NoChange => Ok(()),
+                crate::config::EofBehavior::Error => Err(BfError::IoError {
+                    operation: "reading input (EOF reached)".to_string(),
+                    instruction_index: Some(regs.steps.into()),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "unexpected EOF on input",
+                    ),
+                }),
+            }
+        }
+        Err(source) => Err(BfError::IoError {
+            operation: "reading input".to_string(),
+            instruction_index: Some(regs.steps.into()),
+            source,
+        }),
     }
 }
 
@@ -384,6 +549,7 @@ fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> us
 fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: BfOutput>(
     instruction: &OptimizedInstruction,
     state: &mut VmState,
+    regs: &mut Regs,
     config: &ExecutionConfig,
     limits: &Limits,
     input: &mut I,
@@ -391,36 +557,26 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
 ) -> ExecutionResult {
     match instruction {
         // Fused arithmetic operations
+        // Cell operations. Each plain variant and its `*At` twin share one
+        // body, parameterized by the offset from the cursor; the plain arm
+        // passes a literal 0, which `cell_at` folds away, so it compiles to
+        // exactly the code it did before offsets existed. That is the point of
+        // having twins at all -- see `OptimizedInstruction::AddAt`.
         OptimizedInstruction::Add(n, _range) => {
-            // See Right for the fused-run argument. It bites harder here:
-            // behavior() hands out a &dyn CellBehavior, so each unit step is an
-            // indirect call the compiler cannot inline into the single
-            // wrapping_add it wraps. Checked cells keep the per-step loop, which
-            // is what reports the overflow at the right value.
-            let steps = state.step_count;
-            let cell = state.cell(None, 0)?;
-            if WRAPPING {
-                *cell = cell.wrapping_add(*n);
-            } else {
-                let cells = config.cell_model().behavior();
-                for _ in 0..*n {
-                    cells.try_increment(cell, steps, None)?;
-                }
-            }
+            add::<WRAPPING>(state, *regs, config, *n, 0)?;
+            Ok(ExecutionFlow::Continue)
+        }
+        OptimizedInstruction::AddAt(n, at, _range) => {
+            add::<WRAPPING>(state, *regs, config, *n, at.get())?;
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Sub(n, _range) => {
-            let steps = state.step_count;
-            let cell = state.cell(None, 0)?;
-            if WRAPPING {
-                *cell = cell.wrapping_sub(*n);
-            } else {
-                let cells = config.cell_model().behavior();
-                for _ in 0..*n {
-                    cells.try_decrement(cell, steps, None)?;
-                }
-            }
+            sub::<WRAPPING>(state, *regs, config, *n, 0)?;
+            Ok(ExecutionFlow::Continue)
+        }
+        OptimizedInstruction::SubAt(n, at, _range) => {
+            sub::<WRAPPING>(state, *regs, config, *n, at.get())?;
             Ok(ExecutionFlow::Continue)
         }
 
@@ -432,74 +588,42 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
         // check that used to live here now happens once, at whatever access comes
         // next, instead of once per move.
         OptimizedInstruction::Right(n, _range) => {
-            state.pointer.advance(*n as isize);
+            regs.ptr.advance(*n as isize);
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Left(n, _range) => {
-            state.pointer.advance(-(*n as isize));
+            regs.ptr.advance(-(*n as isize));
             Ok(ExecutionFlow::Continue)
         }
 
         // I/O operations
         OptimizedInstruction::Output(_range) => {
-            let byte = *state.cell(None, 0)?;
-            output.write_byte(byte).map_err(|source| BfError::IoError {
-                operation: "writing output".to_string(),
-                instruction_index: Some(state.step_count.into()),
-                source,
-            })?;
-            state.bytes_written += 1;
-            // After the out-call: an unknown amount of wall time just passed.
-            arm_time_check::<CHECK_LIMITS>(limits, state.step_count.get(), OUTPUT_CHECK_WITHIN);
+            output_cell::<CHECK_LIMITS, _>(state, *regs, limits, output, 0)?;
+            Ok(ExecutionFlow::Continue)
+        }
+        OptimizedInstruction::OutputAt(at, _range) => {
+            output_cell::<CHECK_LIMITS, _>(state, *regs, limits, output, at.get())?;
             Ok(ExecutionFlow::Continue)
         }
 
         OptimizedInstruction::Input(_range) => {
-            let byte = input.read_byte();
-            // After the out-call: `,` can have blocked on a terminal for any
-            // length of time, so the next check reads the clock unconditionally.
-            arm_time_check::<CHECK_LIMITS>(limits, state.step_count.get(), 0);
-            match byte {
-                Ok(Some(byte)) => {
-                    *state.cell(None, 0)? = byte;
-                    state.bytes_read += 1;
-                    Ok(ExecutionFlow::Continue)
-                }
-                Ok(None) => {
-                    // EOF - handle according to config
-                    match config.eof_behavior() {
-                        crate::config::EofBehavior::SetZero => {
-                            *state.cell(None, 0)? = 0;
-                            Ok(ExecutionFlow::Continue)
-                        }
-                        crate::config::EofBehavior::SetNegOne => {
-                            *state.cell(None, 0)? = 255;
-                            Ok(ExecutionFlow::Continue)
-                        }
-                        crate::config::EofBehavior::NoChange => Ok(ExecutionFlow::Continue),
-                        crate::config::EofBehavior::Error => Err(BfError::IoError {
-                            operation: "reading input (EOF reached)".to_string(),
-                            instruction_index: Some(state.step_count.into()),
-                            source: std::io::Error::new(
-                                std::io::ErrorKind::UnexpectedEof,
-                                "unexpected EOF on input",
-                            ),
-                        }),
-                    }
-                }
-                Err(source) => Err(BfError::IoError {
-                    operation: "reading input".to_string(),
-                    instruction_index: Some(state.step_count.into()),
-                    source,
-                }),
-            }
+            input_cell::<CHECK_LIMITS, _>(state, *regs, config, limits, input, 0)?;
+            Ok(ExecutionFlow::Continue)
+        }
+        OptimizedInstruction::InputAt(at, _range) => {
+            input_cell::<CHECK_LIMITS, _>(state, *regs, config, limits, input, at.get())?;
+            Ok(ExecutionFlow::Continue)
         }
 
         // Optimized loop patterns
         OptimizedInstruction::Zero(_range) => {
             // [-] → set cell to 0
-            *state.cell(None, 0)? = 0;
+            *state.cell_from(regs.ptr, 0, None, 0)? = 0;
+            Ok(ExecutionFlow::Continue)
+        }
+        OptimizedInstruction::ZeroAt(at, _range) => {
+            *state.cell_from(regs.ptr, at.get(), None, 0)? = 0;
             Ok(ExecutionFlow::Continue)
         }
 
@@ -519,17 +643,17 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // when a limit is set: both give the same answer, but branching away
             // from the scan made --max-steps a 10x slowdown on seek-heavy
             // programs, and a limit should bound a run, not change how it runs.
-            if *state.cell(None, 0)? == 0 {
+            if *state.cell_from(regs.ptr, 0, None, 0)? == 0 {
                 return Ok(ExecutionFlow::Continue);
             }
-            let start = state.pointer.get() as usize;
-            let hi = seek_window_end(CHECK_LIMITS, state, limits);
+            let start = regs.ptr.get() as usize;
+            let hi = seek_window_end(CHECK_LIMITS, *regs, state, limits);
             if hi > start
                 && let Some(offset) = state.memory[start..hi].iter().position(|&b| b == 0)
             {
                 let end = start + offset;
-                state.pointer = MemoryAddress::new(end as isize);
-                state.step_count += offset as u64;
+                regs.ptr = MemoryAddress::new(end as isize);
+                regs.steps += offset as u64;
                 return Ok(ExecutionFlow::Continue);
             }
             // No zero within the window. Every cell from `start` to `hi` is
@@ -537,22 +661,22 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // last and let the loop decide what happens next -- fire the step
             // limit, grow an unbounded tape, or report a fixed one's overrun.
             if hi > start {
-                state.step_count += (hi - 1 - start) as u64;
-                state.pointer = MemoryAddress::new((hi - 1) as isize);
+                regs.steps += (hi - 1 - start) as u64;
+                regs.ptr = MemoryAddress::new((hi - 1) as isize);
             }
             loop {
                 // Terminate before charging: a seek that arrives on the zero
                 // cell with its budget exactly spent has finished, and should
                 // not be failed for the step it did not need.
-                if *state.cell(None, 0)? == 0 {
+                if *state.cell_from(regs.ptr, 0, None, 0)? == 0 {
                     break;
                 }
                 // A seek is a loop: honour step/time limits so it cannot spin forever
                 if CHECK_LIMITS {
-                    check_limits(state, limits)?;
+                    check_limits(regs.steps, limits)?;
                 }
-                state.pointer.increment();
-                state.step_count += 1;
+                regs.ptr.increment();
+                regs.steps += 1;
             }
             Ok(ExecutionFlow::Continue)
         }
@@ -561,32 +685,32 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // [<] → seek to previous zero cell. See SeekRight for why this is a
             // scan rather than a per-cell call, why it is charged per cell, and
             // why the window is clamped rather than abandoned under limits.
-            if *state.cell(None, 0)? == 0 {
+            if *state.cell_from(regs.ptr, 0, None, 0)? == 0 {
                 return Ok(ExecutionFlow::Continue);
             }
-            let start = state.pointer.get() as usize;
-            let lo = seek_window_start(CHECK_LIMITS, state, limits);
+            let start = regs.ptr.get() as usize;
+            let lo = seek_window_start(CHECK_LIMITS, *regs, state, limits);
             if let Some(found) = state.memory[lo..=start].iter().rposition(|&b| b == 0) {
                 // rposition indexes the window, so shift it back to the tape.
                 let end = lo + found;
-                state.pointer = MemoryAddress::new(end as isize);
-                state.step_count += (start - end) as u64;
+                regs.ptr = MemoryAddress::new(end as isize);
+                regs.steps += (start - end) as u64;
                 return Ok(ExecutionFlow::Continue);
             }
             if start > lo {
-                state.step_count += (start - lo) as u64;
-                state.pointer = MemoryAddress::new(lo as isize);
+                regs.steps += (start - lo) as u64;
+                regs.ptr = MemoryAddress::new(lo as isize);
             }
             loop {
                 // Terminate before charging; see SeekRight.
-                if *state.cell(None, 0)? == 0 {
+                if *state.cell_from(regs.ptr, 0, None, 0)? == 0 {
                     break;
                 }
                 if CHECK_LIMITS {
-                    check_limits(state, limits)?;
+                    check_limits(regs.steps, limits)?;
                 }
-                state.pointer.decrement();
-                state.step_count += 1;
+                regs.ptr.decrement();
+                regs.steps += 1;
             }
             Ok(ExecutionFlow::Continue)
         }
@@ -595,7 +719,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             // Generalized multiplication loop
             // For each (offset, multiplier): cell[ptr + offset] += cell[ptr] * multiplier
             // Then: cell[ptr] = 0
-            let source_value = *state.cell(None, 0)?;
+            let source_value = *state.cell_from(regs.ptr, 0, None, 0)?;
 
             // Early exit if source is already zero (optimization)
             if source_value == 0 {
@@ -608,13 +732,13 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 // doing: a fixed tape reports the overrun, an unbounded one
                 // grows to cover the target. No walking, and no restoring the
                 // cursor afterwards, because it never moved.
-                let target = state.cell_at(*offset, None, 0)?;
+                let target = state.cell_from(regs.ptr, *offset, None, 0)?;
                 let delta = (*target as i32) + (source_value as i32) * multiplier;
                 *target = delta as u8; // Wrapping
             }
 
             // Zero the source cell
-            *state.cell(None, 0)? = 0;
+            *state.cell_from(regs.ptr, 0, None, 0)? = 0;
             Ok(ExecutionFlow::Continue)
         }
 
@@ -624,20 +748,25 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
 
             // Loop while current cell is non-zero. The condition reads the
             // cell, so it is an access and the cursor must be on the tape.
-            while *state.cell(None, 0)? != 0 {
+            while *state.cell_from(regs.ptr, 0, None, 0)? != 0 {
                 // Check limits per iteration, not only per instruction: a loop with
                 // an empty body (`[]`) executes no instructions, so without this the
                 // step limit and timeout would never be consulted and it would hang.
                 if CHECK_LIMITS {
-                    check_limits(state, limits)?;
+                    check_limits(regs.steps, limits)?;
                 }
                 // The `[` condition check is itself a step, which is also what lets
                 // the step limit make progress on an empty body.
-                state.step_count += 1;
+                regs.steps += 1;
                 state.loop_iterations += 1;
+                // The body is a block with registers of its own: hand ours over
+                // and take back what it leaves. On error neither happens, and
+                // neither needs to -- see `Regs`.
+                regs.store(state);
                 execute_block::<CHECK_LIMITS, WRAPPING, _, _>(
                     body, state, config, limits, input, output,
                 )?;
+                *regs = Regs::load(state);
             }
 
             state.loop_depth -= 1;
@@ -931,10 +1060,10 @@ mod tests {
 
         let stats = interpret_optimized(&optimized, config, &mut input, &mut output).unwrap();
 
-        // Should be 3 steps: Add(5), Right(1), Add(3), Right(1), Add(2)
-        // Wait, that's 5 steps. Let me recalculate:
-        // Optimized IR: Add(5), Right(1), Add(3), Right(1), Add(2) = 5 instructions
-        assert_eq!(stats.total_steps.get(), 5);
+        // Fusion gives Add(5) Right(1) Add(3) Right(1) Add(2); the offset fold
+        // then drops the moves into the adds and leaves one net move at the
+        // end: Add(5)@0 Add(3)@+1 Add(2)@+2 Right(2). Four steps, one each.
+        assert_eq!(stats.total_steps.get(), 4);
     }
 
     #[test]
@@ -967,11 +1096,11 @@ mod tests {
         let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
         let stats = interpret_optimized(&program, config, &mut i, &mut o).unwrap();
 
-        // Seven optimized instructions -- Right(1), Add(1) three times over,
-        // then SeekLeft -- and the seek walks cells 3, 2 and 1 to reach the
-        // zero at cell 0, so it is charged three more.
-        assert_eq!(program.optimized_count, 7);
-        assert_eq!(stats.total_steps.get(), 7 + 3);
+        // Five optimized instructions -- Add(1) at offsets +1, +2, +3, the net
+        // Right(3), then SeekLeft -- and the seek walks cells 3, 2 and 1 to
+        // reach the zero at cell 0, so it is charged three more.
+        assert_eq!(program.optimized_count, 5);
+        assert_eq!(stats.total_steps.get(), 5 + 3);
     }
 
     /// A program carries the cell model it was optimized for, and running it

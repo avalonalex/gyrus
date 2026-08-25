@@ -43,6 +43,7 @@
 
 use crate::config::CellModel;
 use crate::instruction::Instruction;
+use crate::types::CellOffset;
 
 /// Source location range for optimized instructions.
 ///
@@ -105,6 +106,27 @@ pub enum OptimizedInstruction {
     Input(SourceRange),
     /// Set current cell to zero (optimized `[-]`)
     Zero(SourceRange),
+    /// [`Add`](Self::Add) at `cursor + offset`, without moving the cursor.
+    ///
+    /// The offset-addressed forms are what `fold_offsets` produces when it
+    /// deletes the moves around an operation: `>>+<<` becomes one `AddAt(1, +2)`.
+    /// They are separate variants rather than an offset field on the plain
+    /// ones because the plain ones must stay exactly as cheap as they are: a
+    /// single `Add` with an always-present offset costs one extra dependent add
+    /// per access, and on the pointer-chase this interpreter is bound by that
+    /// one instruction measured at -13% on hanoi -- enough to cancel the fold.
+    /// With the choice in the discriminant, the jump table pays for it, the
+    /// plain arm still constant-folds its zero, and only an operation that
+    /// actually replaced a dispatch pays for an add.
+    AddAt(u8, CellOffset, SourceRange),
+    /// [`Sub`](Self::Sub) at `cursor + offset`. See [`AddAt`](Self::AddAt).
+    SubAt(u8, CellOffset, SourceRange),
+    /// [`Output`](Self::Output) at `cursor + offset`. See [`AddAt`](Self::AddAt).
+    OutputAt(CellOffset, SourceRange),
+    /// [`Input`](Self::Input) at `cursor + offset`. See [`AddAt`](Self::AddAt).
+    InputAt(CellOffset, SourceRange),
+    /// [`Zero`](Self::Zero) at `cursor + offset`. See [`AddAt`](Self::AddAt).
+    ZeroAt(CellOffset, SourceRange),
     /// Seek right to next zero cell (optimized `[>]`)
     SeekRight(SourceRange),
     /// Seek left to previous zero cell (optimized `[<]`)
@@ -135,6 +157,11 @@ impl OptimizedInstruction {
             OptimizedInstruction::Output(r) => *r,
             OptimizedInstruction::Input(r) => *r,
             OptimizedInstruction::Zero(r) => *r,
+            OptimizedInstruction::AddAt(_, _, r) => *r,
+            OptimizedInstruction::SubAt(_, _, r) => *r,
+            OptimizedInstruction::OutputAt(_, r) => *r,
+            OptimizedInstruction::InputAt(_, r) => *r,
+            OptimizedInstruction::ZeroAt(_, r) => *r,
             OptimizedInstruction::SeekRight(r) => *r,
             OptimizedInstruction::SeekLeft(r) => *r,
             OptimizedInstruction::MultiplyAdd(_, r) => *r,
@@ -236,7 +263,130 @@ pub fn optimize_with_cell_model(
 ) -> OptimizedProgram {
     let original_count = count_original_instructions(instructions);
     let optimized = optimize_block(instructions, 0, cell_model).0;
+    let optimized = if std::env::var_os("GYRUS_NO_FOLD").is_some() {
+        optimized
+    } else {
+        fold_offsets(optimized)
+    }; // EXPERIMENT
     OptimizedProgram::new(optimized, original_count, cell_model)
+}
+
+/// Fold pointer moves into the offsets of the operations that follow them.
+///
+/// Within a straight-line run, the pass carries a running displacement: each
+/// move adds to it and is dropped, and each cell operation is rewritten to act
+/// at `cursor + displacement`. One net move is emitted where the run ends, and
+/// only if the run left the cursor somewhere new. So
+///
+/// ```text
+/// Right(3) Add(1) Left(3) Right(5) Sub(2) Left(5)     6 instructions, 4 moves
+///     ->   Add(1)@+3  Sub(2)@+5                        2 instructions, 0 moves
+/// ```
+///
+/// A run ends at anything that needs the cursor to be real: a `Loop`, whose
+/// condition reads the cell under the cursor on entry and after every
+/// iteration; a seek, which starts from the cursor and moves it by an amount
+/// not known until run time; `MultiplyAdd`, which is already cursor-relative
+/// and is left as a boundary until the simpler variants are measured; and the
+/// end of the block.
+///
+/// This is only sound because moving the cursor off the tape is not an error
+/// -- the tape contract is about access. Under the old rule every deleted move
+/// was also a deleted bounds check, and reproducing that would have needed a
+/// guard per run, which on mandelbrot is more dispatches than the fold removes.
+///
+/// Source mapping gets coarser here, deliberately. A folded operation keeps its
+/// own `SourceRange`, but the moves it absorbed no longer have instructions of
+/// their own; the net move, if any, carries the range of the last move it
+/// absorbed, so that no range in the output overlaps another. Ranges in a
+/// folded block are therefore not in source order.
+fn fold_offsets(instructions: Vec<OptimizedInstruction>) -> Vec<OptimizedInstruction> {
+    let mut result = Vec::with_capacity(instructions.len());
+    // The displacement the run has accumulated. Wider than a CellOffset so the
+    // overflow test below is a plain comparison, not a checked add.
+    let mut pending: i64 = 0;
+    // The range the net move will carry: that of the last move absorbed.
+    let mut pending_range: Option<SourceRange> = None;
+
+    // Emit the run's net move, if it moved at all, and start a new run.
+    fn flush(
+        result: &mut Vec<OptimizedInstruction>,
+        pending: &mut i64,
+        pending_range: &mut Option<SourceRange>,
+    ) {
+        if let Some(range) = pending_range.take() {
+            if *pending > 0 {
+                result.push(OptimizedInstruction::Right(*pending as usize, range));
+            } else if *pending < 0 {
+                result.push(OptimizedInstruction::Left(
+                    pending.unsigned_abs() as usize,
+                    range,
+                ));
+            }
+        }
+        *pending = 0;
+    }
+
+    for instruction in instructions {
+        // A cell operation is rewritten to the displacement the run has
+        // accumulated. An i32 covers any tape, and a displacement that does
+        // not fit has already been flushed by the move that would have
+        // overflowed it. At zero the plain variant is kept, deliberately: it
+        // is the cheaper one, and a run's first operation is usually there.
+        let at = CellOffset::new(pending as i32);
+        let folded = match instruction {
+            OptimizedInstruction::Right(n, range) => {
+                if pending + n as i64 > i32::MAX as i64 {
+                    flush(&mut result, &mut pending, &mut pending_range);
+                }
+                pending += n as i64;
+                pending_range = Some(range);
+                continue;
+            }
+            OptimizedInstruction::Left(n, range) => {
+                if pending - (n as i64) < i32::MIN as i64 {
+                    flush(&mut result, &mut pending, &mut pending_range);
+                }
+                pending -= n as i64;
+                pending_range = Some(range);
+                continue;
+            }
+            plain @ (OptimizedInstruction::Add(..)
+            | OptimizedInstruction::Sub(..)
+            | OptimizedInstruction::Zero(..)
+            | OptimizedInstruction::Output(..)
+            | OptimizedInstruction::Input(..))
+                if at.is_zero() =>
+            {
+                plain
+            }
+            OptimizedInstruction::Add(n, range) => OptimizedInstruction::AddAt(n, at, range),
+            OptimizedInstruction::Sub(n, range) => OptimizedInstruction::SubAt(n, at, range),
+            OptimizedInstruction::Zero(range) => OptimizedInstruction::ZeroAt(at, range),
+            OptimizedInstruction::Output(range) => OptimizedInstruction::OutputAt(at, range),
+            OptimizedInstruction::Input(range) => OptimizedInstruction::InputAt(at, range),
+            // Already folded: the pass is idempotent, so a second run over its
+            // own output changes nothing.
+            folded @ (OptimizedInstruction::AddAt(..)
+            | OptimizedInstruction::SubAt(..)
+            | OptimizedInstruction::ZeroAt(..)
+            | OptimizedInstruction::OutputAt(..)
+            | OptimizedInstruction::InputAt(..)) => folded,
+            OptimizedInstruction::Loop(body, range) => {
+                flush(&mut result, &mut pending, &mut pending_range);
+                OptimizedInstruction::Loop(fold_offsets(body), range)
+            }
+            boundary @ (OptimizedInstruction::SeekRight(_)
+            | OptimizedInstruction::SeekLeft(_)
+            | OptimizedInstruction::MultiplyAdd(_, _)) => {
+                flush(&mut result, &mut pending, &mut pending_range);
+                boundary
+            }
+        };
+        result.push(folded);
+    }
+    flush(&mut result, &mut pending, &mut pending_range);
+    result
 }
 
 /// Count original instructions (including nested loops)
@@ -549,6 +699,16 @@ fn recognize_multiply_loop(
 mod tests {
     use super::*;
 
+    /// The instruction stream's cache footprint. `MultiplyAdd` sets the size at
+    /// 48 bytes (a `Vec` plus a `SourceRange`); the cell-touching variants fit
+    /// their offset into padding that was already there. A variant that grows
+    /// the enum makes every instruction in every program larger, so it should
+    /// fail here rather than show up as a benchmark regression later.
+    #[test]
+    fn optimized_instruction_is_no_larger_than_multiply_add_requires() {
+        assert_eq!(std::mem::size_of::<OptimizedInstruction>(), 48);
+    }
+
     /// `[->+++<]` folds to a single MultiplyAdd under the default cell model.
     #[test]
     fn multiply_loop_folds_under_wrapping_cells() {
@@ -621,6 +781,9 @@ mod tests {
         assert_eq!(optimized.optimized_count, 1);
     }
 
+    /// Fusion turns `>><` into `Right(2) Left(1)`; the offset fold then
+    /// collapses the two into the one net move, since nothing between them
+    /// needs the cursor. `optimize` shows only the combined result.
     #[test]
     fn test_fuse_pointer_movement() {
         let instructions = vec![
@@ -629,14 +792,10 @@ mod tests {
             Instruction::DecrementPointer,
         ];
         let optimized = optimize(&instructions);
-        assert_eq!(optimized.instructions.len(), 2);
+        assert_eq!(optimized.instructions.len(), 1);
         assert!(matches!(
             optimized.instructions[0],
-            OptimizedInstruction::Right(2, _)
-        ));
-        assert!(matches!(
-            optimized.instructions[1],
-            OptimizedInstruction::Left(1, _)
+            OptimizedInstruction::Right(1, _)
         ));
     }
 
@@ -769,8 +928,10 @@ mod tests {
             );
         };
         assert_eq!(*loop_range, SourceRange::new(0, 3));
-        assert_eq!(body[0].source_range(), SourceRange::new(1, 2), "the '>'");
-        assert_eq!(body[1].source_range(), SourceRange::new(2, 3), "the '.'");
+        // The offset fold moves the '>' behind the '.', which now outputs at
+        // offset +1; the ranges follow their instructions, not source order.
+        assert_eq!(body[0].source_range(), SourceRange::new(2, 3), "the '.'");
+        assert_eq!(body[1].source_range(), SourceRange::new(1, 2), "the '>'");
         assert_eq!(
             optimized.instructions[1].source_range(),
             SourceRange::new(3, 4),
