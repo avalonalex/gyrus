@@ -6,7 +6,9 @@ use gyrus::{
     BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
     codegen::compile_string,
     minify, optimize_with_cell_model, parse, parse_with_debug,
-    random::{RandomProgramConfig, generate_random_program},
+    random::{
+        IdiomaticConfig, RandomProgramConfig, generate_idiomatic_program, generate_random_program,
+    },
     syntax::{ColorTheme, SyntaxHighlighter},
     validate,
 };
@@ -104,6 +106,13 @@ enum Commands {
         #[arg(short = 'p', long, default_value = "0.3")]
         loop_probability: f64,
 
+        /// Compose the program from idioms (clears, multiplies, scans,
+        /// counted loops) on a 32-cell tape, so that it terminates and stays
+        /// on the tape. --length is then the number of fragments, and
+        /// --loop-probability is ignored.
+        #[arg(long)]
+        idiomatic: bool,
+
         /// Output file (stdout if not specified)
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -186,9 +195,17 @@ fn run() -> Result<(), BfError> {
             length,
             max_depth,
             loop_probability,
+            idiomatic,
             output,
             verbose,
-        } => run_generate(length, max_depth, loop_probability, output, verbose),
+        } => run_generate(
+            length,
+            max_depth,
+            loop_probability,
+            idiomatic,
+            output,
+            verbose,
+        ),
         Commands::Compile {
             text,
             output,
@@ -396,6 +413,7 @@ fn run_generate(
     length: usize,
     max_depth: usize,
     loop_probability: f64,
+    idiomatic: bool,
     output: Option<PathBuf>,
     verbose: bool,
 ) -> Result<(), BfError> {
@@ -408,23 +426,34 @@ fn run_generate(
         std::process::exit(1);
     }
 
-    // Create configuration
-    let config = RandomProgramConfig {
-        max_depth,
-        avg_commands: length,
-        loop_probability,
-    };
-
-    if verbose {
-        eprintln!("Generating random BrainFuck program...");
-        eprintln!("  Length: {} commands (average)", length);
-        eprintln!("  Max depth: {} levels", max_depth);
-        eprintln!("  Loop probability: {:.1}%", loop_probability * 100.0);
-    }
-
-    // Generate the program
     let mut rng = rand::rng();
-    let program = generate_random_program(&mut rng, &config);
+    let program = if idiomatic {
+        let config = IdiomaticConfig {
+            fragments: length,
+            max_depth,
+            ..IdiomaticConfig::default()
+        };
+        if verbose {
+            eprintln!("Generating an idiomatic BrainFuck program...");
+            eprintln!("  Fragments: {}", length);
+            eprintln!("  Max depth: {} levels", max_depth);
+            eprintln!("  Tape: {} cells", config.tape);
+        }
+        generate_idiomatic_program(&mut rng, &config)
+    } else {
+        let config = RandomProgramConfig {
+            max_depth,
+            avg_commands: length,
+            loop_probability,
+        };
+        if verbose {
+            eprintln!("Generating random BrainFuck program...");
+            eprintln!("  Length: {} commands (average)", length);
+            eprintln!("  Max depth: {} levels", max_depth);
+            eprintln!("  Loop probability: {:.1}%", loop_probability * 100.0);
+        }
+        generate_random_program(&mut rng, &config)
+    };
 
     // Output
     if let Some(output_path) = &output {

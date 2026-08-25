@@ -9,7 +9,9 @@
 //! completion, or which error with what position -- must match.
 
 use gyrus::io::StringIo;
-use gyrus::random::{RandomProgramConfig, generate_random_program};
+use gyrus::random::{
+    IdiomaticConfig, RandomProgramConfig, generate_idiomatic_program, generate_random_program,
+};
 use gyrus::{
     BfError, ExecutionConfig, ExecutionConfigBuilder, interpret_optimized_with_io,
     optimize_with_cell_model, parse,
@@ -99,6 +101,27 @@ fn outcome(result: Result<(), BfError>, output: Vec<u8>) -> Outcome {
     }
 }
 
+/// Programs built from the idioms the optimizer folds -- clears,
+/// multiplies in both rotations, strided scans, counted loops -- which
+/// stay on the tape and complete, so what is compared is what they compute.
+#[test]
+fn idiomatic_programs_agree_under_every_configuration() {
+    let shape = IdiomaticConfig {
+        tape: 32,
+        fragments: 24,
+        max_depth: 3,
+    };
+    // Half the seeds: these are long programs that always run to the end.
+    let programs: Vec<String> = (0..SEEDS / 2)
+        .map(|seed| generate_idiomatic_program(&mut StdRng::seed_from_u64(seed), &shape))
+        .collect();
+    let (compared, skipped) = compare_all(&programs);
+    eprintln!(
+        "idiomatic: compared {compared} runs, skipped {skipped} at the interpreter's step budget"
+    );
+    assert!(compared > SEEDS as usize, "too few comparisons: {compared}");
+}
+
 #[test]
 fn generated_programs_agree_under_every_configuration() {
     // Two shapes: short and loop-light, so that most runs complete and every
@@ -116,18 +139,31 @@ fn generated_programs_agree_under_every_configuration() {
             loop_probability: 0.8,
         },
     ];
+    let programs: Vec<String> = shapes
+        .iter()
+        .enumerate()
+        .flat_map(|(k, shape)| {
+            // Half as many of the deep ones: each takes several times longer.
+            (0..SEEDS >> k).map(move |seed| (shape, seed))
+        })
+        .map(|(shape, seed)| generate_random_program(&mut StdRng::seed_from_u64(seed), shape))
+        .collect();
+    let (compared, skipped) = compare_all(&programs);
+    eprintln!("compared {compared} runs, skipped {skipped} at the interpreter's step budget");
+    assert!(
+        compared > SEEDS as usize * 2,
+        "too few comparisons: {compared}"
+    );
+}
+
+/// Run every program under every configuration in both engines; panic on
+/// the first disagreement, listing all of them. Returns (compared, skipped).
+fn compare_all(programs: &[String]) -> (usize, usize) {
     let mut compared = 0;
     let mut skipped = 0;
     let mut disagreements = Vec::new();
-    // Half as many of the deep ones: each takes several times longer.
-    for (shape, seed) in shapes
-        .iter()
-        .enumerate()
-        .flat_map(|(k, shape)| (0..SEEDS >> k).map(move |seed| (shape, seed)))
-    {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let source = generate_random_program(&mut rng, shape);
-        let instructions = parse(&source).unwrap();
+    for (seed, source) in programs.iter().enumerate() {
+        let instructions = parse(source).unwrap();
         for (name, build) in configs() {
             let program = optimize_with_cell_model(&instructions, *build(0).cell_model());
             let (mut i, mut o) = (StringIo::new("hello, world"), StringIo::empty());
@@ -161,19 +197,17 @@ fn generated_programs_agree_under_every_configuration() {
             );
             compared += 1;
             if jit != interp {
-                disagreements.push(format!("seed {seed} {name}: {source:?}\n   interpreter {interp:?}\n   jit         {jit:?}"));
+                disagreements.push(format!(
+                    "program {seed} {name}: {source:?}\n   interpreter {interp:?}\n   jit         {jit:?}"
+                ));
             }
         }
     }
-    eprintln!("compared {compared} runs, skipped {skipped} at the interpreter's step budget");
-    assert!(
-        compared > SEEDS as usize * 2,
-        "too few comparisons: {compared}"
-    );
     assert!(
         disagreements.is_empty(),
         "{} disagreements:\n{}",
         disagreements.len(),
         disagreements.join("\n")
     );
+    (compared, skipped)
 }
