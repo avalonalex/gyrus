@@ -344,8 +344,12 @@ fn execute_block<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInput, O: 
 /// Clamping the window rather than abandoning the scan is what keeps
 /// `--max-steps` a bound on the run instead of a switch between two
 /// implementations of it. Without a step limit the window is the whole tape.
+///
+/// The window is in cells, and a seek with a stride examines one cell in
+/// every `stride`, so the budget of steps -- one per cell examined -- reaches
+/// `stride` times as far.
 #[inline]
-fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usize {
+fn seek_window_end(check_limits: bool, stride: usize, state: &VmState, limits: &Limits) -> usize {
     let len = state.memory.len();
     if !check_limits {
         return len;
@@ -353,7 +357,8 @@ fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usiz
     match limits.max_steps {
         Some(max) => {
             let budget = max.saturating_sub(state.step_count.get());
-            let reach = (state.pointer.get() as u64).saturating_add(budget);
+            let reach =
+                (state.pointer.get() as u64).saturating_add(budget.saturating_mul(stride as u64));
             // +1 so the cell the limit lands on is still examined, matching the
             // per-cell loop, which checks the limit before moving.
             (reach.saturating_add(1)).min(len as u64) as usize
@@ -364,7 +369,7 @@ fn seek_window_end(check_limits: bool, state: &VmState, limits: &Limits) -> usiz
 
 /// How far left a seek may scan. See [`seek_window_end`].
 #[inline]
-fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> usize {
+fn seek_window_start(check_limits: bool, stride: usize, state: &VmState, limits: &Limits) -> usize {
     if !check_limits {
         return 0;
     }
@@ -373,10 +378,74 @@ fn seek_window_start(check_limits: bool, state: &VmState, limits: &Limits) -> us
             let budget = max.saturating_sub(state.step_count.get());
             // Widen and subtract, as seek_window_end does: the result is never
             // above `pointer`, so narrowing back is lossless on any target.
-            ((state.pointer.get() as u64).saturating_sub(budget)) as usize
+            ((state.pointer.get() as u64).saturating_sub(budget.saturating_mul(stride as u64)))
+                as usize
         }
         None => 0,
     }
+}
+
+/// What a strided scan of the tape found.
+enum Scan {
+    /// A zero cell, this many cells from where the scan started.
+    Found(usize),
+    /// No zero in the window; this many cells were examined.
+    Exhausted(usize),
+}
+
+/// Scan `tape[start..hi]` for a zero at `start`, `start + stride`,
+/// `start + 2 * stride`, ...
+///
+/// Stride 1 is kept as a plain `position` over the slice, which the compiler
+/// vectorizes; it is the common case and must not pay for the general one.
+#[inline]
+fn scan_right(tape: &[u8], start: usize, hi: usize, stride: usize) -> Scan {
+    // tape-access-ok: every index below is in start..hi, and the caller has
+    // shown start is on the tape and hi <= len.
+    if hi <= start {
+        return Scan::Exhausted(0);
+    }
+    let window = &tape[start..hi];
+    if stride == 1 {
+        return match window.iter().position(|&b| b == 0) {
+            Some(distance) => Scan::Found(distance),
+            None => Scan::Exhausted(window.len()),
+        };
+    }
+    let mut examined = 0;
+    let mut i = 0;
+    while i < window.len() {
+        if window[i] == 0 {
+            return Scan::Found(i);
+        }
+        examined += 1;
+        i += stride;
+    }
+    Scan::Exhausted(examined)
+}
+
+/// Mirror of [`scan_right`]: scan `tape[lo..=start]` for a zero at `start`,
+/// `start - stride`, ..., reporting the distance back from `start`.
+#[inline]
+fn scan_left(tape: &[u8], lo: usize, start: usize, stride: usize) -> Scan {
+    // tape-access-ok: every index below is in lo..=start; see scan_right.
+    let window = &tape[lo..=start];
+    if stride == 1 {
+        return match window.iter().rposition(|&b| b == 0) {
+            Some(found) => Scan::Found(start - (lo + found)),
+            None => Scan::Exhausted(window.len()),
+        };
+    }
+    let mut examined = 0;
+    let mut back = 0;
+    while back <= start - lo {
+        if window[start - lo - back] == 0 {
+            return Scan::Found(back);
+        }
+        examined += 1;
+        back += stride;
+    }
+    Scan::Exhausted(examined)
 }
 
 /// Execute a single optimized instruction
@@ -503,14 +572,17 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             Ok(ExecutionFlow::Continue)
         }
 
-        OptimizedInstruction::SeekRight(_range) => {
-            // [>] → seek to next zero cell.
+        OptimizedInstruction::SeekRight(stride, _range) => {
+            // [>], [>>], ... → seek to the next zero cell, `stride` cells at
+            // a time.
             //
             // A seek reads every cell it tests, so unlike a plain move it is
             // bounded by the tape: the starting cell must be on it, and running
             // off the right is an access, which errors or grows as the model
             // decides. The scan itself is a search for a zero byte in a slice,
-            // which the standard library does far faster than a call per cell.
+            // which for stride 1 the compiler vectorizes, far faster than a call
+            // per cell. Cells the stride skips over are never read, exactly as
+            // the loop it replaces never read them.
             //
             // The seek is charged one step per cell it examines. The unfused
             // `[>]` costs a step per cell, so charging one per fused instruction
@@ -522,23 +594,27 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             if *state.cell(None, 0)? == 0 {
                 return Ok(ExecutionFlow::Continue);
             }
+            let stride = *stride;
             let start = state.pointer.get() as usize;
-            let hi = seek_window_end(CHECK_LIMITS, state, limits);
-            if hi > start
-                && let Some(offset) = state.memory[start..hi].iter().position(|&b| b == 0)
-            {
-                let end = start + offset;
-                state.pointer = MemoryAddress::new(end as isize);
-                state.step_count += offset as u64;
-                return Ok(ExecutionFlow::Continue);
-            }
-            // No zero within the window. Every cell from `start` to `hi` is
-            // non-zero, so testing them again would only repeat work; skip to the
-            // last and let the loop decide what happens next -- fire the step
-            // limit, grow an unbounded tape, or report a fixed one's overrun.
-            if hi > start {
-                state.step_count += (hi - 1 - start) as u64;
-                state.pointer = MemoryAddress::new((hi - 1) as isize);
+            let hi = seek_window_end(CHECK_LIMITS, stride, state, limits);
+            match scan_right(&state.memory, start, hi, stride) {
+                Scan::Found(distance) => {
+                    state.pointer = MemoryAddress::new((start + distance) as isize);
+                    state.step_count += (distance / stride) as u64;
+                    return Ok(ExecutionFlow::Continue);
+                }
+                Scan::Exhausted(examined) => {
+                    // No zero within the window. Every cell examined was
+                    // non-zero, so testing them again would only repeat work;
+                    // skip to the last and let the loop decide what happens next
+                    // -- fire the step limit, grow an unbounded tape, or report
+                    // a fixed one's overrun.
+                    if examined > 0 {
+                        state.step_count += (examined - 1) as u64;
+                        state.pointer =
+                            MemoryAddress::new((start + (examined - 1) * stride) as isize);
+                    }
+                }
             }
             loop {
                 // Terminate before charging: a seek that arrives on the zero
@@ -551,31 +627,36 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 if CHECK_LIMITS {
                     check_limits(state, limits)?;
                 }
-                state.pointer.increment();
+                state.pointer.advance(stride as isize);
                 state.step_count += 1;
             }
             Ok(ExecutionFlow::Continue)
         }
 
-        OptimizedInstruction::SeekLeft(_range) => {
-            // [<] → seek to previous zero cell. See SeekRight for why this is a
-            // scan rather than a per-cell call, why it is charged per cell, and
-            // why the window is clamped rather than abandoned under limits.
+        OptimizedInstruction::SeekLeft(stride, _range) => {
+            // [<], [<<], ... → seek to the previous zero cell. See SeekRight
+            // for why this is a scan rather than a per-cell call, why it is
+            // charged per cell, and why the window is clamped rather than
+            // abandoned under limits.
             if *state.cell(None, 0)? == 0 {
                 return Ok(ExecutionFlow::Continue);
             }
+            let stride = *stride;
             let start = state.pointer.get() as usize;
-            let lo = seek_window_start(CHECK_LIMITS, state, limits);
-            if let Some(found) = state.memory[lo..=start].iter().rposition(|&b| b == 0) {
-                // rposition indexes the window, so shift it back to the tape.
-                let end = lo + found;
-                state.pointer = MemoryAddress::new(end as isize);
-                state.step_count += (start - end) as u64;
-                return Ok(ExecutionFlow::Continue);
-            }
-            if start > lo {
-                state.step_count += (start - lo) as u64;
-                state.pointer = MemoryAddress::new(lo as isize);
+            let lo = seek_window_start(CHECK_LIMITS, stride, state, limits);
+            match scan_left(&state.memory, lo, start, stride) {
+                Scan::Found(distance) => {
+                    state.pointer = MemoryAddress::new((start - distance) as isize);
+                    state.step_count += (distance / stride) as u64;
+                    return Ok(ExecutionFlow::Continue);
+                }
+                Scan::Exhausted(examined) => {
+                    if examined > 0 {
+                        state.step_count += (examined - 1) as u64;
+                        state.pointer =
+                            MemoryAddress::new((start - (examined - 1) * stride) as isize);
+                    }
+                }
             }
             loop {
                 // Terminate before charging; see SeekRight.
@@ -585,7 +666,7 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                 if CHECK_LIMITS {
                     check_limits(state, limits)?;
                 }
-                state.pointer.decrement();
+                state.pointer.advance(-(stride as isize));
                 state.step_count += 1;
             }
             Ok(ExecutionFlow::Continue)
@@ -1006,7 +1087,16 @@ mod tests {
                 b.build()
             }
         };
-        for src in [">+>+>+[<]", "+>+>+><<<[>]", "[>]", "[<]", "+>+>[<]"] {
+        for src in [
+            ">+>+>+[<]",
+            "+>+>+><<<[>]",
+            "[>]",
+            "[<]",
+            "+>+>[<]",
+            "+>>+<<[>>]",
+            ">>+>>+[<<]",
+            "+>+>+>+>+<<<<[>>>]",
+        ] {
             let mut seen = Vec::new();
             for limited in [false, true] {
                 let config = build(limited);
@@ -1193,6 +1283,120 @@ mod tests {
             matches!(err, BfError::MemoryOutOfBounds { .. }),
             "got {err:?}"
         );
+    }
+
+    // --- strided seeks --------------------------------------------------
+    //
+    // `[>>]` is a scan with a stride of two: it examines every other cell and
+    // never reads the ones between. These pin the difference from `[>]`, and
+    // hold the strided path to everything the stride-1 path is held to.
+
+    /// Cells 0 and 2 are non-zero, cell 1 is zero. `[>]` would stop on 1;
+    /// `[>>]` never looks at 1 and stops on 4. `<.` then prints cell 3 (zero)
+    /// rather than cell 0 (one).
+    #[test]
+    fn strided_seek_skips_the_cells_between() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        assert_eq!(run_opt("+>>+<<[>>]<.", config).unwrap().as_bytes(), &[0]);
+    }
+
+    /// Mirror of the above: from cell 4, `[<<]` examines 4, 2, 0 and stops
+    /// on 0, so `>.` prints cell 1 (zero) -- not cell 4 (one), which is where
+    /// `>.` would land had the seek stopped on cell 3 like `[<]` does.
+    #[test]
+    fn strided_seek_left_skips_the_cells_between() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        assert_eq!(run_opt(">>+>>+[<<]>.", config).unwrap().as_bytes(), &[0]);
+    }
+
+    /// A strided seek is charged for the cells it examines, not the cells it
+    /// passes over, because that is what the loop it replaces was charged.
+    #[test]
+    fn strided_seek_is_charged_one_step_per_cell_examined() {
+        let config = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        let instructions = parse("+>>+<<[>>]").unwrap();
+        let program = optimize_with_cell_model(&instructions, *config.cell_model());
+        let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+        let stats = interpret_optimized(&program, config, &mut i, &mut o).unwrap();
+        // Five instructions -- Add, Right(2), Add, Left(2), SeekRight(2) --
+        // and the seek moves twice (0 -> 2 -> 4) to reach the zero at cell 4.
+        assert_eq!(program.optimized_count, 5);
+        assert_eq!(stats.total_steps.get(), 5 + 2);
+    }
+
+    /// The exact-budget guarantee holds for a stride too.
+    #[test]
+    fn a_strided_seek_that_just_fits_its_budget_completes() {
+        let src = "+>>+<<[>>]";
+        let exact = run_optimized(
+            src,
+            ExecutionConfigBuilder::new().with_memory_size(100).build(),
+        )
+        .unwrap()
+        .0
+        .total_steps
+        .get();
+        let cfg = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_max_steps(exact)
+            .build();
+        assert!(run_opt(src, cfg).is_ok(), "needs exactly {exact} steps");
+        // The limit is consulted before a move, never after the last one, so
+        // a seek can finish one step over it; two short is where it must fail.
+        let cfg = ExecutionConfigBuilder::new()
+            .with_memory_size(100)
+            .with_max_steps(exact - 2)
+            .build();
+        assert!(
+            matches!(run_opt(src, cfg), Err(BfError::StepLimitExceeded { .. })),
+            "two steps short must fail"
+        );
+    }
+
+    /// Off the tape, the stride lands the read past the end -- a fixed tape
+    /// reports it, an unbounded one grows to it and finds the zero there.
+    #[test]
+    fn a_strided_seek_off_the_tape_is_an_access() {
+        // Cells 0 and 2 non-zero on a three-cell tape: the next cell examined
+        // is 4, which does not exist.
+        let fixed = ExecutionConfigBuilder::new().with_memory_size(3).build();
+        assert!(matches!(
+            run_opt("+>>+<<[>>]", fixed),
+            Err(BfError::MemoryOutOfBounds { .. })
+        ));
+        let left = ExecutionConfigBuilder::new().with_memory_size(100).build();
+        assert!(matches!(
+            run_opt("+[<<]", left),
+            Err(BfError::MemoryOutOfBounds { .. })
+        ));
+
+        let growing = ExecutionConfigBuilder::new()
+            .with_unbounded_memory(3, 100)
+            .unwrap()
+            .build();
+        // Grows to cover cell 4, stops there, and `<.` prints cell 3.
+        assert_eq!(run_opt("+>>+<<[>>]<.", growing).unwrap().as_bytes(), &[0]);
+    }
+
+    /// The reference for all of the above is the tree-walking interpreter,
+    /// which runs `[>>]` as the loop it is written as.
+    #[test]
+    fn strided_seeks_agree_with_the_debug_interpreter() {
+        for src in [
+            "+>>+<<[>>]<.",
+            ">>+>>+[<<]>.",
+            "+>+>+>+>+<<<<[>>>]<.",
+            "+>>>+>>>+<<<<<<[>>>]<<.",
+            "[>>]+.",
+        ] {
+            let build = || ExecutionConfigBuilder::new().with_memory_size(100).build();
+            let instructions = parse(src).unwrap();
+            let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+            crate::interpret_with_io(&instructions, build(), &mut i, &mut o, None).unwrap();
+            let debug = o.output_bytes().to_vec();
+            let optimized = run_opt(src, build()).unwrap();
+            assert_eq!(optimized.as_bytes(), &debug[..], "{src}");
+        }
     }
 
     /// A MultiplyAdd target more than one cell past the end of a fixed tape used to
