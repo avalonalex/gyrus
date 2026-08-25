@@ -451,12 +451,76 @@ moved, -3.7%, and that is a 10 ms program where the win is compile time.
 from half the runtime changed nothing, so the seek loop is not
 instruction-throughput-bound. Its branch depends on its load, and there is
 exactly one load in flight at a time: the loop runs at load-to-branch latency
-no matter how few instructions surround it. That also explains the earlier
-4.5% ceiling for removing every bounds check -- the checks were never the
-constraint either.
+no matter how few instructions surround it. That also explained the then-current
+4.5% ceiling for removing every bounds check. (Both numbers have since moved --
+see the re-measurement below.)
 
 **So the next thing to try is memory-level parallelism, not fewer
 instructions.** — and it was, and it worked. See below.
+
+### Re-profiled after the unrolling, and what it says to do — 2026-08-25
+
+Every number above was measured against a program the unrolling then made 17.6%
+faster, so the profile and the bounds-check ceiling were both re-taken.
+
+**Where the time goes now:**
+
+| construct | before | now |
+|---|---|---|
+| `Loop` (the header test) | 24.6% | **29.6%** |
+| `SeekRight` | 30.3% | 25.4% |
+| `SeekLeft` | 18.4% | 12.1% |
+| `MultiplyAdd` | 9.5% | 12.3% |
+
+Seeks fell from 48.7% to 37.5%; `Loop` is now the largest construct. Read as
+absolute time rather than share -- the run is 17% shorter -- every untouched
+construct held its cost exactly: `Loop` was about 234 ms before and 234 ms
+after. The shares moved only where work was removed, which is the check that
+the profile measures what it claims to.
+
+**The bounds-check ceiling is 7.5%, not 4.5%** -- mandelbrot 7.7% and 7.5% over
+two rounds, hanoi 9.0%, measured with a same-binary toggle compiling every
+access without its check, output byte-identical to the golden file in both
+modes. The checks did not get more expensive; the run got shorter around them.
+The toggle was not merged: it compiles out the tape contract, and an
+environment variable that silently makes the JIT unsound is a hazard the
+disassembly flag is not.
+
+**That 7.5% is declined.** Bounds-checked memory is what gyrus is for -- the
+README leads with it, and the tape contract is the one invariant a script
+exists to enforce. A `--unsafe` flag may earn a place later; it has none now.
+
+What remains, and it is a different thing the ceiling number blurs together:
+*removing* a check is unsound, but *not repeating* one is not. A loop header
+that re-reads the cell a seek just stopped on is re-establishing a fact it
+already holds. Eliminating that is ordinary bounds-check elimination inside the
+contract. A loop containing a seek can never be guarded -- `span()` returns
+`None` on a seek, because the reach depends on the data -- so those loops pay a
+check every iteration, and every hot loop in mandelbrot contains a seek. Two
+things the proof must survive: the redundancy holds on the back edge but not on
+loop entry, and under the unbounded model the tape can move mid-loop, which is
+where a soundness bug would live. Worth a fraction of 7.5%, and only with that
+argument made.
+
+### Removing instructions from hot code, three times — 2026-08-25, all neutral
+
+Worth stating together, because the conclusion is stronger than any one of
+them:
+
+| change | mandelbrot |
+|---|---|
+| `loop_test`: drop the `I8` mask, 6 instructions to 5 in 49% of the run | 0.0% |
+| Share one exit epilogue, -33% emitted code | +1.5% |
+| `MultiplyAdd`: drop the same mask from its source test | +0.2% |
+
+Against the one structural change, unrolling the seek: **-17.6%**.
+
+Three separate attempts to make hot code shorter changed nothing measurable,
+while one attempt to change its *shape* -- independent loads in flight instead
+of a dependent load-test-branch per cell -- paid. This target is not
+instruction-throughput-limited anywhere that has been looked at. Before
+proposing an optimization here, the question worth asking is not "how many
+instructions is this" but "what is waiting on what".
 
 ### Unrolling the seek — 2026-08-25, **-17.6%**
 
@@ -699,3 +763,4 @@ For each new optimization:
 - 2026-08-25: JIT shared exit epilogue tried and recorded as a negative result; `GYRUS_JIT_DISASM=1` added to make emitted code inspectable
 - 2026-08-25: profiled the JIT by construct (`GYRUS_JIT_DUMP` + srcloc); seeks are 49% of mandelbrot and the loop is latency-bound, so instruction count is the wrong target
 - 2026-08-25: seek unrolled on that evidence, -17.6% on mandelbrot; the first tuning curve was an artifact of a chained `umin` reduction and was redone
+- 2026-08-25: re-profiled after it -- `Loop` is now the largest construct at 29.6%, the bounds-check ceiling is 7.5% rather than 4.5%, and that 7.5% is declined on purpose
