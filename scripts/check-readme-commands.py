@@ -26,6 +26,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FLAG = re.compile(r"(--[a-z][a-z0-9-]*)")
 
+# `cargo run [-p CRATE] [--release] -- ` addresses a binary in this workspace.
+CARGO_RUN = re.compile(
+    r"^cargo run\s+(?:-p\s+(?P<crate>[a-z-]+)\s+)?(?:--release\s+)?--\s+"
+)
+# Which binary each crate produces. An unqualified `cargo run` in a workspace
+# with several binaries is ambiguous, but every such line in these docs means
+# the interpreter, and that is the one whose flags rot.
+CRATE_BINARY = {
+    "": "gyrus",
+    "gyrus-cli": "gyrus",
+    "gyrus-tool": "gyrus-tool",
+}
+
 
 def help_flags(argv):
     """Every long flag clap prints for a command."""
@@ -64,6 +77,12 @@ def main():
       for lineno, raw in enumerate(target_file.read_text().split("\n"), 1):
         line = raw.strip().lstrip("$").strip()
         line = re.sub(r"^\./target/release/", "", line)
+        # `cargo run -p gyrus-cli -- program.bf --flag` is the same claim as
+        # `gyrus program.bf --flag`, and the docs use both spellings. Only the
+        # bare one used to be checked, which is how a dozen lines in
+        # docs/tooling.md kept documenting `--inspect-debug` for however long
+        # it had been since that became `gyrus-tool debug-info`.
+        line = CARGO_RUN.sub(lambda m: CRATE_BINARY[m.group("crate") or ""] + " ", line)
         for prog in ("gyrus-tool", "gyrus"):  # longest first
             if line.startswith(prog + " "):
                 break

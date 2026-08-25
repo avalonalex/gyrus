@@ -103,7 +103,7 @@ gyrus includes tools for inspecting and debugging BrainFuck programs at the sour
 
 ### Debug Symbol Inspector
 
-**Command**: `cargo run -- <program.bf> --inspect-debug`
+**Command**: `gyrus-tool debug-info <program.bf>`
 
 **Purpose**: Visualize the debug symbol table showing how runtime execution maps to source code.
 
@@ -111,14 +111,14 @@ gyrus includes tools for inspecting and debugging BrainFuck programs at the sour
 
 ```bash
 # Inspect a simple program
-cargo run -- programs/basic/simple.bf --inspect-debug
+gyrus-tool debug-info programs/basic/simple.bf
 
 # Inspect nested loops
-cargo run -- programs/debug/symbol_demo.bf --inspect-debug
+gyrus-tool debug-info programs/debug/symbol_demo.bf
 
 # Create and inspect your own
 echo "+++[>++<-]>." > test.bf
-cargo run -- test.bf --inspect-debug
+gyrus-tool debug-info test.bf
 ```
 
 ### Output Explained
@@ -248,28 +248,28 @@ If you suspect parser issues:
 
 ```bash
 # Inspect symbols for a program that would generate warnings
-cargo run -- overflow.bf --inspect-debug
+gyrus-tool debug-info overflow.bf
 
-# Validate AND inspect (two separate runs needed)
-cargo run -- program.bf --validate
-cargo run -- program.bf --inspect-debug
+# Validate, then inspect
+gyrus-tool validate program.bf
+gyrus-tool debug-info program.bf
 
-# Minify AND inspect original
-cargo run -- program.bf --minify -o min.bf
-cargo run -- program.bf --inspect-debug
+# Minify, and inspect the original
+gyrus-tool minify program.bf -o min.bf
+gyrus-tool debug-info program.bf
 ```
 
 ### Integration with Other Tools
 
 ```bash
 # Pipe to grep to find specific instructions
-cargo run -- program.bf --inspect-debug | grep "'>'"
+gyrus-tool debug-info program.bf | grep "'>'"
 
 # Count loops
-cargo run -- program.bf --inspect-debug | grep -c "'['"
+gyrus-tool debug-info program.bf | grep -c "'['"
 
 # Save for later analysis
-cargo run -- program.bf --inspect-debug > symbols.txt
+gyrus-tool debug-info program.bf > symbols.txt
 ```
 
 ### Implementation Details
