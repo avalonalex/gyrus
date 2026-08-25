@@ -366,7 +366,12 @@ fn checked_cells_agree_with_the_interpreter() {
         assert_eq!(jit.as_ref().unwrap(), interp.as_ref().unwrap(), "{src}");
     }
     let overflow = "+".repeat(256);
+    // `[-]` then 300 `+`: the optimizer folds `[-]+...` into a constant, and
+    // must stop folding where the constant would pass 255 -- review found
+    // it did not, and all three engines ran the folded program.
+    let cleared_overflow = format!("[-]{}.", "+".repeat(300));
     for (src, what) in [
+        (cleared_overflow.as_str(), "clear then overflow"),
         ("-", "underflow at 0"),
         (overflow.as_str(), "overflow at 255"),
         ("[-]---", "clear then underflow"),
@@ -510,6 +515,11 @@ fn statistics_agree_where_they_are_defined_alike() {
         ),
         (",[.,]", "hello"),
         ("+>+>+>+>+<<<<[>]<.", ""),
+        // Unbalanced bodies ending in a move: the header's re-read at the
+        // new cursor counts, which the JIT once missed.
+        ("+[+>]", ""),
+        (">+[<+>>]", ""),
+        ("++++++++[>++++++++<-]>[.>]", ""),
     ] {
         let program = optimize(&parse(src).unwrap());
         let run = |jit: bool| {
@@ -664,4 +674,47 @@ fn a_nest_that_outgrows_the_tape_grows_it_like_the_interpreter() {
         )
     };
     assert_eq!(run(false), run(true));
+}
+
+/// The tree-walker reports a final flush that fails as an I/O error; so
+/// must the JIT, instead of returning success for bytes that never arrived.
+#[test]
+fn a_failed_flush_is_an_io_error() {
+    struct Unflushable(Vec<u8>);
+    impl gyrus::io::BfOutput for Unflushable {
+        fn write_byte(&mut self, byte: u8) -> std::io::Result<()> {
+            self.0.push(byte);
+            Ok(())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gone"))
+        }
+    }
+    let program = optimize(&parse("+.").unwrap());
+    let config = ExecutionConfigBuilder::new().with_memory_size(10).build();
+    let mut input = StringIo::empty();
+    let mut output = Unflushable(Vec::new());
+    let err = gyrus_jit::run(&program, &config, &mut input, &mut output, None).unwrap_err();
+    match err {
+        BfError::IoError { operation, .. } => assert_eq!(operation, "flushing output"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Hooks are the tree-walker's; a configuration that carries one is refused
+/// rather than run with the hook silently never called.
+#[test]
+fn a_configuration_with_hooks_is_refused() {
+    struct Nop;
+    impl gyrus::hooks::ExecutionHook for Nop {}
+    let program = optimize(&parse("+.").unwrap());
+    let config = ExecutionConfigBuilder::new()
+        .with_memory_size(10)
+        .with_hook(Box::new(Nop))
+        .build();
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    assert!(matches!(
+        gyrus_jit::run(&program, &config, &mut i, &mut o, None),
+        Err(BfError::ConfigurationError { .. })
+    ));
 }

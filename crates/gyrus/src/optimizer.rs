@@ -283,9 +283,18 @@ fn fuse_sets(
             (Some(OptimizedInstruction::Zero(z)), OptimizedInstruction::Add(n, a)) => Some(
                 OptimizedInstruction::Set(*n, SourceRange::new(z.start, a.end)),
             ),
-            (Some(OptimizedInstruction::Set(v, z)), OptimizedInstruction::Add(n, a)) => Some(
-                OptimizedInstruction::Set(v.wrapping_add(*n), SourceRange::new(z.start, a.end)),
-            ),
+            // A second run of `+` folds into the constant, but only where the
+            // unfused program would have got there: under checked cells a sum
+            // past 255 is the overflow the program exists to report, and the
+            // `Add` stays behind to raise it.
+            (Some(OptimizedInstruction::Set(v, z)), OptimizedInstruction::Add(n, a))
+                if wrapping || u16::from(*v) + u16::from(*n) <= u16::from(u8::MAX) =>
+            {
+                Some(OptimizedInstruction::Set(
+                    v.wrapping_add(*n),
+                    SourceRange::new(z.start, a.end),
+                ))
+            }
             (Some(OptimizedInstruction::Zero(z)), OptimizedInstruction::Sub(n, a)) if wrapping => {
                 Some(OptimizedInstruction::Set(
                     0u8.wrapping_sub(*n),
@@ -759,6 +768,32 @@ mod tests {
                     SourceRange::new(1, 6)
                 ),
             ]
+        );
+    }
+
+    /// Under checked cells a constant may only be folded as far as the
+    /// unfused program would have got: `[-]` then 256 `+` overflows at the
+    /// 256th, and the `Add` that carries it past 255 must stay behind to
+    /// raise that. (Found by review after the fold shipped.)
+    #[test]
+    fn set_does_not_swallow_an_overflow_under_checked_cells() {
+        let checked = CellModel::U8Checked(crate::config::U8CheckedCells);
+        let src = format!("[-]{}", "+".repeat(300));
+        let optimized = optimize_with_cell_model(&crate::parser::parse(&src).unwrap(), checked);
+        // Fusion caps a run at 255, so this is `[-] +255 +45`: the first run
+        // folds into Set(255), the second would pass 255 and stays an Add.
+        assert_eq!(
+            optimized.instructions,
+            vec![
+                OptimizedInstruction::Set(255, SourceRange::new(0, 257)),
+                OptimizedInstruction::Add(45, SourceRange::new(257, 302)),
+            ]
+        );
+        // Wrapping cells fold the whole thing.
+        let optimized = optimize(&crate::parser::parse(&src).unwrap());
+        assert_eq!(
+            optimized.instructions,
+            vec![OptimizedInstruction::Set(44, SourceRange::new(0, 302))]
         );
     }
 

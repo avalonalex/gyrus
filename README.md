@@ -76,7 +76,8 @@ uses let-chains, which stabilized there).
 The unreasonable part is that all of this actually works.
 
 **Execution**
-- Three execution modes: an optimized interpreter (default), a debug
+- Four execution modes: an optimized interpreter (default), a Cranelift JIT
+  (`--jit`) that compiles the same optimized program to native code, a debug
   interpreter that tracks source locations, and a tracing interpreter
   (`--trace`) that profiles execution and prints a heatmap of hot code
 - An optimizer that fuses instruction runs and recognizes clear, scan, and
@@ -124,13 +125,17 @@ The unreasonable part is that all of this actually works.
 
 ## Status
 
-**Working**: the parser with full source locations, three execution modes
-(optimized, debug, tracing), the optimizer, the hook system, static validation,
-minification, syntax highlighting, and the `gyrus-tool` subcommands.
+**Working**: the parser with full source locations, four execution modes
+(optimized, JIT, debug, tracing), the optimizer, the hook system, static
+validation, minification, syntax highlighting, and the `gyrus-tool`
+subcommands. The JIT is `gyrus --jit program.bf`: the same bytes and the same
+errors as the interpreters, with source locations, three times faster on
+mandelbrot -- and slower on programs that finish before it has finished
+compiling. See [execution models](docs/execution-models.md#the-jit).
 
 **Planned**: a TUI debugger with breakpoints and memory visualization, a REPL,
-and a Cranelift JIT/AOT backend — because if you are going to over-engineer a
-BrainFuck implementation, you may as well JIT-compile it. Designs live in
+and an AOT build on the JIT's translator — because if you are going to
+over-engineer a BrainFuck implementation, you may as well. Designs live in
 [`PRD/`](PRD/).
 
 ## Development

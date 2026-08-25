@@ -46,9 +46,14 @@ grows to cover cells that are used, not cells the cursor passed over.
 
 `--jit` compiles the optimized program to native code with Cranelift and runs
 that. It enforces the same contract as the interpreters -- every read or write
-is checked against the tape, every failure is reported as the same error with
-the same message -- and is held to them by test: the benchmark corpus runs
-under all three engines and must agree byte for byte, under both cell models.
+is checked against the tape, and every failure is the same error: the same
+variant, position, hint and memory dump for tape and cell errors, built by
+the same code -- and is held to them by test: the benchmark corpus and the
+program corpus run under the JIT and the optimized interpreter and must agree
+byte for byte under both cell models (`cargo test`, `benchmark.sh`); and
+generated programs run under the tree-walker too, which is what catches an
+optimizer fold that does not hold. Limit errors necessarily word their hints
+differently, since the engines count different things (below).
 
 Where it differs, on purpose:
 
@@ -63,7 +68,13 @@ Where it differs, on purpose:
   approximations of the unfused program, and the JIT counts nothing finer.
   A loop that ends exactly at its budget completes, as in the interpreter.
 - **Compile time is part of the run.** Tens of milliseconds for the largest
-  programs in the corpus; a program too short to loop is faster interpreted.
+  programs in the corpus, so a program that finishes sooner than that is
+  faster interpreted: on the benchmark corpus the JIT wins on mandelbrot (3×)
+  and hanoi and loses on the five that run in a few milliseconds.
+- **No hooks, no runtime warnings.** Generated code calls nothing back per
+  instruction; a configuration carrying hooks is refused with a
+  `ConfigurationError`, and `--jit --verbose` prints no `MemoryExpanded`
+  warnings under the unbounded model. The tree-walker is the engine for both.
 - **Statistics are counted only when asked for.** Keeping the counters costs
   up to a fifth of the run, so the JIT keeps them only under `--verbose`,
   which is the only thing that prints them. With `--verbose` every statistic

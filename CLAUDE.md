@@ -14,8 +14,8 @@ the development compiler.
 - **gyrus** (`crates/gyrus/`): Core library crate
 - **gyrus-cli** (`crates/gyrus-cli/`): `gyrus` binary — program execution
 - **gyrus-tool** (`crates/gyrus-tool/`): `gyrus-tool` binary — development tools
-- **gyrus-jit** (`crates/gyrus-jit/`): Cranelift JIT for the optimized IR;
-  see `PRD/cranelift-jit.md`
+- **gyrus-jit** (`crates/gyrus-jit/`): Cranelift JIT for the optimized IR
+  (`gyrus --jit`); see `docs/execution-models.md` and the crate's module docs
 - Future: TUI debugger, REPL as separate crates
 
 ## Documentation Organization

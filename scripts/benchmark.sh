@@ -7,10 +7,11 @@
 #
 # Every run is diffed against a recorded golden output in benchmarks/expected/.
 # A run that got faster while producing different bytes is not a faster
-# interpreter, so this script fails instead of reporting the number. Where a
-# program is fast enough to also run under --debug, the two interpreters are
-# compared against each other, which makes this a differential test of the
-# optimizer as well as a benchmark.
+# engine, so this script fails instead of reporting the number. The JIT is
+# held to the interpreter's bytes on every program; where a program is fast
+# enough to also run under --debug, the tree-walker is compared too, which
+# makes this a differential test of the optimizer and the JIT as well as a
+# benchmark.
 #
 # Usage:
 #   scripts/benchmark.sh                 # time every program, verify output
@@ -49,8 +50,17 @@ done
 
 [ -x "$GYRUS" ] || { echo "error: $GYRUS not built. Run: cargo build --release --workspace" >&2; exit 1; }
 
-ms_now() { python3 -c 'import time; print(time.perf_counter() * 1000)'; }
-elapsed() { python3 -c "print(f'{$2 - $1:.0f}')"; }
+# One run of "$@" with stdout in the file named by OUT, printed as
+# "<milliseconds> <exit status>". Timed with bash's own `time`: a python3
+# timestamp on either side cost ~24 ms of its own, more than most of the
+# corpus takes to run. Called in a command substitution, so it prints rather
+# than sets its results.
+timed_run() {
+    local rc
+    TIMEFORMAT=%R
+    { time "$@" < /dev/null > "$OUT" 2>/dev/null; rc=$?; } 2> /tmp/gyrus-bench.time
+    python3 -c "print(round(float(open('/tmp/gyrus-bench.time').read().strip().replace(',', '.')) * 1000), $rc)"
+}
 
 # --- profile mode -----------------------------------------------------------
 if [ -n "$PROFILE" ]; then
@@ -81,8 +91,10 @@ if [ "$RECORD" = 1 ]; then
 fi
 
 # --- benchmark mode ---------------------------------------------------------
-printf '%-38s %10s %10s %12s %8s\n' "program" "optimized" "--jit" "--debug" "speedup"
-printf '%-38s %10s %10s %12s %8s\n' "$(printf '%.0s-' {1..38})" "----------" "----------" "------------" "--------"
+# jit x = optimized / --jit, so a JIT slower than the interpreter shows as
+# less than 1x; speedup = --debug / optimized, the two interpreters.
+printf '%-38s %10s %10s %7s %12s %8s\n' "program" "optimized" "--jit" "jit x" "--debug" "speedup"
+printf '%-38s %10s %10s %7s %12s %8s\n' "$(printf '%.0s-' {1..38})" "----------" "----------" "-------" "------------" "--------"
 
 failures=0
 for entry in "${PROGRAMS[@]}"; do
@@ -91,8 +103,7 @@ for entry in "${PROGRAMS[@]}"; do
     name=$(basename "$prog" .bf)
     golden="$GOLDEN/$name.txt"
 
-    t0=$(ms_now); "$GYRUS" "$prog" < /dev/null > /tmp/gyrus-bench.out 2>/dev/null; t1=$(ms_now)
-    opt_ms=$(elapsed "$t0" "$t1")
+    OUT=/tmp/gyrus-bench.out; read -r opt_ms _ <<< "$(timed_run "$GYRUS" "$prog")"
 
     if [ -f "$golden" ] && ! cmp -s /tmp/gyrus-bench.out "$golden"; then
         printf '%-38s  OUTPUT CHANGED vs %s\n' "$name" "$golden"
@@ -101,23 +112,27 @@ for entry in "${PROGRAMS[@]}"; do
         continue
     fi
 
-    # The JIT is a third engine, held to the same bytes; compile time is in
-    # the number, as it is for the user.
-    t0=$(ms_now); "$GYRUS" --jit "$prog" < /dev/null > /tmp/gyrus-bench.jit 2>/dev/null; t1=$(ms_now)
-    jit_ms=$(elapsed "$t0" "$t1")
+    # The JIT is a third engine, held to the same bytes and the same exit
+    # status; compile time is in the number, as it is for the user.
+    OUT=/tmp/gyrus-bench.jit; read -r jit_ms jit_rc <<< "$(timed_run "$GYRUS" --jit "$prog")"
+    if [ "$jit_rc" != 0 ]; then
+        printf '%-38s  --jit FAILED (exit %s; is the jit feature built?)\n' "$name" "$jit_rc"
+        failures=$((failures + 1))
+        continue
+    fi
     if ! cmp -s /tmp/gyrus-bench.out /tmp/gyrus-bench.jit; then
         printf '%-38s  MODES DISAGREE: optimized output != --jit output\n' "$name"
         failures=$((failures + 1))
         continue
     fi
+    jit_x=$(python3 -c "print(f'{$opt_ms / max($jit_ms, 1):.2f}x')")
 
     if [ "$want_debug" = "no" ] && [ "$FULL" != 1 ]; then
-        printf '%-38s %9sms %9sms %12s %8s\n' "$name" "$opt_ms" "$jit_ms" "(--full)" "-"
+        printf '%-38s %9sms %9sms %7s %12s %8s\n' "$name" "$opt_ms" "$jit_ms" "$jit_x" "(--full)" "-"
         continue
     fi
 
-    t0=$(ms_now); "$GYRUS" --debug "$prog" < /dev/null > /tmp/gyrus-bench.dbg 2>/dev/null; t1=$(ms_now)
-    dbg_ms=$(elapsed "$t0" "$t1")
+    OUT=/tmp/gyrus-bench.dbg; read -r dbg_ms _ <<< "$(timed_run "$GYRUS" --debug "$prog")"
 
     if ! cmp -s /tmp/gyrus-bench.out /tmp/gyrus-bench.dbg; then
         printf '%-38s  MODES DISAGREE: optimized output != --debug output\n' "$name"
@@ -126,7 +141,7 @@ for entry in "${PROGRAMS[@]}"; do
     fi
 
     speedup=$(python3 -c "print(f'{$dbg_ms / max($opt_ms, 1):.1f}x')")
-    printf '%-38s %9sms %9sms %11sms %8s\n' "$name" "$opt_ms" "$jit_ms" "$dbg_ms" "$speedup"
+    printf '%-38s %9sms %9sms %7s %11sms %8s\n' "$name" "$opt_ms" "$jit_ms" "$jit_x" "$dbg_ms" "$speedup"
 done
 
 # --- cell-model differential ------------------------------------------------

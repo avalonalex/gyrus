@@ -111,8 +111,8 @@ gyrus program.bf --verbose --max-steps 100000 --timeout 10000
 | `-v, --verbose` | Show detailed execution information and statistics | false |
 | `-q, --quiet` | Suppress runtime warnings and non-program output | false |
 | `--debug` | Enable debug symbols for source location tracking (slower) | false |
-| `--jit` | Compile with Cranelift and run natively: same output and errors, several times faster, and errors carry source locations. See [execution models](execution-models.md#the-jit) | false |
-| `--max-steps <N>` | Maximum number of execution steps (0 = unlimited) | 0 |
+| `--jit` | Compile with Cranelift and run natively: same output and errors, with source locations. Faster on programs that run longer than its compile time (tens of milliseconds; mandelbrot 3×), slower on ones that don't. See [execution models](execution-models.md#the-jit) | false |
+| `--max-steps <N>` | Maximum number of execution steps (0 = unlimited). Under `--jit` a step is a loop iteration | 0 |
 | `--timeout <MS>` | Execution timeout in milliseconds (0 = unlimited) | 0 |
 | `--memory-size <BYTES>` | Memory size in bytes (for fixed model) | 30000 |
 | `--memory-model <MODEL>` | Memory model: fixed or unbounded | fixed |

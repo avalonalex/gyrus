@@ -1,4 +1,4 @@
-//! Cranelift JIT for gyrus's optimized IR. See `PRD/cranelift-jit.md`.
+//! Cranelift JIT for gyrus's optimized IR: `gyrus --jit`.
 //!
 //! The generated function has the signature `fn(rt: *mut Runtime) -> i32`. It
 //! reads the tape's base and length from the runtime on entry, and again after
@@ -498,6 +498,15 @@ pub fn run_with(
             ),
         });
     }
+    // Hooks are the tree-walker's: generated code calls nothing back per
+    // instruction. Refusing is better than running them silently unheard.
+    if config.has_hooks() {
+        return Err(BfError::ConfigurationError {
+            message: "the JIT does not run execution hooks; use the tree-walking \
+                      interpreter (--debug) for hooks, breakpoints and tracing"
+                .to_string(),
+        });
+    }
     let memory_model = *config.memory_model();
     let limits = Limits {
         max_steps: config.max_steps(),
@@ -542,7 +551,9 @@ pub fn run_with(
     // Calling the pointer is safe Rust; what made it sound is the transmute
     // in `compile`, and the runtime outliving the call.
     let status = entry(&mut rt as *mut Runtime<'_> as *mut c_void);
-    rt.output.flush().ok();
+    // The tree-walker reports a failed final flush as an I/O error; so does
+    // this, unless the run already failed, whose error comes first.
+    let flushed = rt.output.flush();
 
     if status != 0 {
         let site = sites[(status - 1) as usize];
@@ -581,6 +592,14 @@ pub fn run_with(
                 .error
                 .take()
                 .expect("bf_slow reported failure without an error"),
+        });
+    }
+
+    if let Err(source) = flushed {
+        return Err(BfError::IoError {
+            operation: "flushing output".to_string(),
+            instruction_index: None,
+            source,
         });
     }
 
@@ -1372,6 +1391,12 @@ impl<'p> Translator<'_, 'p> {
         self.b.switch_to_block(body_block);
         self.body_entry(index);
         self.block(body, self.options.stats && !balanced);
+        if self.options.stats && !balanced {
+            // The header reads the cell the body ends on, wherever that is
+            // this time round; a balanced body's is covered by the note below.
+            let c = self.b.use_var(self.vars.cursor);
+            self.note_peak(c, 0);
+        }
         self.b.ins().jump(header, &[]);
         self.b.switch_to_block(after);
         if let Some((furthest, entered_at)) = note {

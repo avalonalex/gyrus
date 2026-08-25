@@ -1,10 +1,12 @@
 //! The program corpus, under the JIT, against `programs/test_manifest.toml`:
-//! the same expectations `program_corpus.rs` holds the tree-walker to, and
-//! the optimized interpreter beside it for the byte-for-byte comparison.
+//! the same expectations `program_corpus.rs` holds the tree-walker to, the
+//! manifest's own configuration, and the optimized interpreter beside the
+//! JIT for the byte-for-byte comparison -- under both cell models.
 
 use gyrus::io::StringIo;
 use gyrus::{
-    BfError, EofBehavior, ExecutionConfigBuilder, interpret_optimized_with_io, optimize, parse,
+    BfError, EofBehavior, ExecutionConfig, ExecutionConfigBuilder, interpret_optimized_with_io,
+    optimize_with_cell_model, parse,
 };
 use std::path::Path;
 
@@ -13,67 +15,118 @@ struct Case {
     name: String,
     file: String,
     input: String,
-    expected_output: Option<String>,
+    expected_output: Option<Vec<u8>>,
     expected_exit: String,
     expected_error_type: Option<String>,
     memory_size: Option<usize>,
     max_steps: Option<u64>,
-    eof_behavior: Option<String>,
+    timeout_ms: Option<u64>,
+    eof_behavior: Option<EofBehavior>,
 }
 
-/// Just enough TOML for the manifest: `[[test]]` blocks of `key = "string"`.
+/// A line of the manifest without its trailing comment. A `#` inside a
+/// quoted string is not a comment.
+fn uncommented(line: &str) -> &str {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            '\\' if quoted => escaped = !escaped,
+            '"' if !escaped => quoted = !quoted,
+            '#' if !quoted => return line[..i].trim(),
+            _ => escaped = false,
+        }
+    }
+    line.trim()
+}
+
+/// Just enough TOML for the manifest: `[[test]]` blocks of `key = value`,
+/// where a value is a basic string, an integer, an array (ignored), or the
+/// inline table `config = { ... }` of integers and strings. Anything this
+/// does not understand is an error, not a silently dropped expectation.
 fn manifest(text: &str) -> Vec<Case> {
     let mut cases = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
+    for (number, raw) in text.lines().enumerate() {
+        let line = uncommented(raw);
+        if line.is_empty() {
+            continue;
+        }
         if line == "[[test]]" {
             cases.push(Case::default());
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let Some(case) = cases.last_mut() else {
-            continue;
-        };
-        let value = value.trim();
-        // `config = { memory_size = 100 }`, `{ max_steps = 1000 }`,
-        // `{ eof_behavior = "zero" }`: the inline table the manifest uses.
-        if key.trim() == "config" {
-            let inner = value.trim_start_matches('{').trim_end_matches('}');
-            for pair in inner.split(',') {
-                let Some((k, v)) = pair.split_once('=') else {
-                    continue;
-                };
-                let v = v.trim().trim_matches('"');
+        let (key, value) = line
+            .split_once('=')
+            .unwrap_or_else(|| panic!("manifest line {}: not `key = value`: {raw}", number + 1));
+        let case = cases
+            .last_mut()
+            .unwrap_or_else(|| panic!("manifest line {}: before any [[test]]", number + 1));
+        let (key, value) = (key.trim(), value.trim());
+        if key == "config" {
+            let inner = value
+                .strip_prefix('{')
+                .and_then(|v| v.strip_suffix('}'))
+                .unwrap_or_else(|| panic!("manifest line {}: config is not a table", number + 1));
+            for pair in inner.split(',').filter(|p| !p.trim().is_empty()) {
+                let (k, v) = pair
+                    .split_once('=')
+                    .unwrap_or_else(|| panic!("manifest line {}: bad pair {pair:?}", number + 1));
+                let v = v.trim();
                 match k.trim() {
-                    "memory_size" => case.memory_size = v.parse().ok(),
-                    "max_steps" => case.max_steps = v.parse().ok(),
-                    "eof_behavior" => case.eof_behavior = Some(v.to_string()),
-                    _ => {}
+                    "memory_size" => case.memory_size = Some(integer(v)),
+                    "max_steps" => case.max_steps = Some(integer(v)),
+                    "timeout_ms" => case.timeout_ms = Some(integer(v)),
+                    "eof_behavior" => {
+                        let spelling = string(v);
+                        case.eof_behavior = Some(spelling.parse().unwrap_or_else(|()| {
+                            panic!(
+                                "manifest line {}: unknown eof_behavior {spelling:?}",
+                                number + 1
+                            )
+                        }));
+                    }
+                    other => panic!("manifest line {}: unknown config key {other}", number + 1),
                 }
             }
             continue;
         }
-        let Some(value) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
-            continue;
-        };
-        let value = unescape(value);
-        match key.trim() {
-            "name" => case.name = value,
-            "file" => case.file = value,
-            "input" => case.input = value,
-            "expected_output" => case.expected_output = Some(value),
-            "expected_exit" => case.expected_exit = value,
-            "expected_error_type" => case.expected_error_type = Some(value),
-            _ => {}
+        match key {
+            "name" => case.name = string(value),
+            "file" => case.file = string(value),
+            "input" => case.input = string(value),
+            // Expected bytes: the manifest writes them as a string, and a
+            // character up to U+00FF is one byte of output.
+            "expected_output" => {
+                case.expected_output = Some(string(value).chars().map(|c| c as u32 as u8).collect())
+            }
+            "expected_exit" => case.expected_exit = string(value),
+            "expected_error_type" => case.expected_error_type = Some(string(value)),
+            "timeout_ms" => case.timeout_ms = Some(integer(value)),
+            // The quine: its output is its own source, which this test does
+            // not know how to compare, so no expectation is taken.
+            "skip_output_check" => {}
+            "description" | "tags" | "expected_warnings" => {}
+            other => panic!("manifest line {}: unknown key {other}", number + 1),
         }
     }
     cases
 }
 
-/// TOML basic-string escapes the manifest uses: `\n`, `\t`, `\"`, `\uXXXX`.
-fn unescape(raw: &str) -> String {
+fn integer<T: std::str::FromStr>(v: &str) -> T
+where
+    T::Err: std::fmt::Debug,
+{
+    v.replace('_', "")
+        .parse()
+        .unwrap_or_else(|e| panic!("bad integer {v:?}: {e:?}"))
+}
+
+/// A TOML basic string: quotes stripped, `\n`, `\t`, `\"`, `\\`, `\uXXXX`.
+fn string(v: &str) -> String {
+    let raw = v
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("not a quoted string: {v}"));
     let mut out = String::new();
     let mut chars = raw.chars();
     while let Some(c) = chars.next() {
@@ -99,6 +152,42 @@ fn unescape(raw: &str) -> String {
     out
 }
 
+/// A run that never returns is a failure with a name, not a hung suite:
+/// every case runs under a step budget and a timeout, the manifest's or
+/// this default.
+const DEFAULT_MAX_STEPS: u64 = 10_000_000;
+const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+fn config(case: &Case, checked: bool) -> ExecutionConfig {
+    let b = ExecutionConfigBuilder::new().with_memory_size(case.memory_size.unwrap_or(30_000));
+    let b = if checked { b.with_checked_cells() } else { b };
+    let b = b
+        .with_max_steps(case.max_steps.unwrap_or(DEFAULT_MAX_STEPS))
+        .with_timeout_ms(case.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
+    match case.eof_behavior {
+        Some(eof) => b.with_eof_behavior(eof).build(),
+        None => b.build(),
+    }
+}
+
+/// Both engines' (result, output) on the case.
+fn both(
+    case: &Case,
+    program: &gyrus::optimizer::OptimizedProgram,
+    checked: bool,
+) -> [(Result<(), BfError>, Vec<u8>); 2] {
+    let run = |jit: bool| {
+        let (mut i, mut o) = (StringIo::new(&case.input), StringIo::empty());
+        let r = if jit {
+            gyrus_jit::run(program, &config(case, checked), &mut i, &mut o, None)
+        } else {
+            interpret_optimized_with_io(program, config(case, checked), &mut i, &mut o)
+        };
+        (r.map(|_| ()), o.output_bytes().to_vec())
+    };
+    [run(false), run(true)]
+}
+
 #[test]
 fn the_corpus_behaves_the_same_under_the_jit() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -113,76 +202,65 @@ fn the_corpus_behaves_the_same_under_the_jit() {
         "manifest parsed to only {} cases",
         cases.len()
     );
-    for case in cases {
-        let source = std::fs::read_to_string(root.join("programs").join(&case.file)).unwrap();
-        let build = || {
-            let b =
-                ExecutionConfigBuilder::new().with_memory_size(case.memory_size.unwrap_or(30_000));
-            // Under the JIT a step is a loop iteration, so the manifest's
-            // budget stops the looping-forever cases just as surely.
-            let b = match case.max_steps {
-                Some(max) => b.with_max_steps(max),
-                None => b,
-            };
-            let b = match case.eof_behavior.as_deref() {
-                Some("no_change") => b.with_eof_behavior(EofBehavior::NoChange),
-                Some("negone") | Some("neg_one") => b.with_eof_behavior(EofBehavior::SetNegOne),
-                Some("error") => b.with_eof_behavior(EofBehavior::Error),
-                _ => b,
-            };
-            b.build()
-        };
+    for case in &cases {
+        let source = std::fs::read_to_string(root.join("programs").join(&case.file))
+            .unwrap_or_else(|e| panic!("{}: {e}", case.name));
         let parsed = parse(&source);
         if case.expected_error_type.as_deref() == Some("parse") {
             assert!(parsed.is_err(), "{}: expected a parse error", case.name);
             continue;
         }
-        let program = optimize(&parsed.unwrap());
-        let run = |jit: bool| {
-            let (mut i, mut o) = (StringIo::new(&case.input), StringIo::empty());
-            let r = if jit {
-                gyrus_jit::run(&program, &build(), &mut i, &mut o, None)
-            } else {
-                interpret_optimized_with_io(&program, build(), &mut i, &mut o)
-            };
-            r.map(|_| o.output_bytes().to_vec())
-        };
-        let (interp, jit) = (run(false), run(true));
-        match (case.expected_exit.as_str(), &jit) {
-            ("success", Ok(out)) => {
-                if let Some(expected) = &case.expected_output {
-                    assert_eq!(out, expected.as_bytes(), "{}: output", case.name);
-                }
-                assert_eq!(
-                    out,
-                    interp.as_ref().unwrap(),
-                    "{}: interpreter and JIT differ",
-                    case.name
-                );
+        let instructions = parsed.unwrap_or_else(|e| panic!("{}: {e}", case.name));
+        for checked in [false, true] {
+            let what = format!(
+                "{} ({})",
+                case.name,
+                if checked { "checked" } else { "wrapping" }
+            );
+            let program =
+                optimize_with_cell_model(&instructions, *config(case, checked).cell_model());
+            let [(interp, out_i), (jit, out_j)] = both(case, &program, checked);
+            // Whatever happened, the bytes emitted before it are the same.
+            assert_eq!(out_j, out_i, "{what}: output differs between engines");
+            match (&interp, &jit) {
+                (Ok(()), Ok(())) => {}
+                (Err(a), Err(b)) => assert_eq!(
+                    std::mem::discriminant(a),
+                    std::mem::discriminant(b),
+                    "{what}: {a:?} vs {b:?}"
+                ),
+                (a, b) => panic!("{what}: interpreter {a:?}, jit {b:?}"),
             }
-            ("error", Err(e)) => {
-                let interp_err = interp.expect_err("interpreter should fail too");
-                assert_eq!(
-                    std::mem::discriminant(e),
-                    std::mem::discriminant(&interp_err),
-                    "{}: {e:?} vs {interp_err:?}",
-                    case.name
-                );
-                match case.expected_error_type.as_deref() {
+            // The manifest's expectations are for the model it was written
+            // for, the default; under checked cells a program may fail where
+            // it did not, and then only the agreement above is required.
+            if checked {
+                continue;
+            }
+            match (case.expected_exit.as_str(), &jit) {
+                ("success", Ok(())) => {
+                    if let Some(expected) = &case.expected_output {
+                        assert_eq!(&out_j, expected, "{what}: output");
+                    }
+                }
+                ("error", Err(e)) => match case.expected_error_type.as_deref() {
                     Some("limit") => assert!(
-                        matches!(e, BfError::StepLimitExceeded { .. }),
-                        "{}: {e:?}",
-                        case.name
+                        matches!(
+                            e,
+                            BfError::StepLimitExceeded { .. } | BfError::ExecutionTimeout { .. }
+                        ),
+                        "{what}: {e:?}"
                     ),
-                    Some("runtime") => assert!(
-                        matches!(e, BfError::MemoryOutOfBounds { .. }),
-                        "{}: {e:?}",
-                        case.name
-                    ),
+                    Some("runtime") => {
+                        assert!(
+                            matches!(e, BfError::MemoryOutOfBounds { .. }),
+                            "{what}: {e:?}"
+                        )
+                    }
                     _ => {}
-                }
+                },
+                (want, got) => panic!("{what}: expected {want}, got {got:?}"),
             }
-            (want, got) => panic!("{}: expected {want}, got {got:?}", case.name),
         }
     }
 }

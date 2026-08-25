@@ -345,7 +345,9 @@ proptest! {
 
 **Priority**: MEDIUM (reduce test duplication)
 
-**Current**: `test_manifest.toml` exists but not actively used
+**Current**: `test_manifest.toml` drives the JIT's corpus test
+(`crates/gyrus-jit/tests/corpus.rs`); the tree-walker's corpus test still
+hand-codes its cases
 
 **Proposed**:
 

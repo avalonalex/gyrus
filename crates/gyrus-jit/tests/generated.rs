@@ -176,6 +176,31 @@ fn compare_all(programs: &[String]) -> (usize, usize) {
                 skipped += 1;
                 continue;
             }
+            // The tree-walker runs the unoptimized program, so it is the one
+            // engine that can catch an optimizer fold that does not hold --
+            // the two below both run the folded one. Its step budget is in
+            // its own units; a program it cannot finish is skipped too.
+            let (mut i, mut o) = (StringIo::new("hello, world"), StringIo::empty());
+            let reference = outcome(
+                gyrus::interpret_with_io(
+                    &instructions,
+                    build(INTERPRETER_STEPS * 64),
+                    &mut i,
+                    &mut o,
+                    None,
+                )
+                .map(|_| ()),
+                o.output_bytes().to_vec(),
+            );
+            if reference == Outcome::Limit {
+                skipped += 1;
+                continue;
+            }
+            if reference != interp {
+                disagreements.push(format!(
+                    "program {seed} {name}: {source:?}\n   tree-walker {reference:?}\n   interpreter {interp:?}"
+                ));
+            }
             let (mut i, mut o) = (StringIo::new("hello, world"), StringIo::empty());
             // Both statistics modes generate different code; alternate.
             let statistics = if seed % 2 == 0 {

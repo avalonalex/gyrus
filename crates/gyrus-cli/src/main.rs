@@ -20,7 +20,8 @@ struct Cli {
     #[arg(value_name = "FILE")]
     file: PathBuf,
 
-    /// Maximum number of execution steps (0 = unlimited)
+    /// Maximum number of execution steps (0 = unlimited). Under --jit a step
+    /// is a loop iteration, so the same number is a looser bound there.
     #[arg(long, default_value = "0")]
     max_steps: u64,
 
@@ -71,8 +72,9 @@ struct Cli {
     trace: bool,
 
     /// Compile to native code with Cranelift and run that. Same output, same
-    /// errors, several times faster; and, because it knows which instruction
-    /// each error belongs to, errors carry source locations without --debug.
+    /// errors, with source locations and no --debug slowdown. Pays tens of
+    /// milliseconds to compile, so it wins on programs that run longer than
+    /// that (mandelbrot: 3x) and loses on ones that finish sooner.
     #[cfg(feature = "jit")]
     #[arg(long, conflicts_with_all = ["debug", "trace"])]
     jit: bool,
@@ -176,15 +178,12 @@ fn run() -> Result<(), BfError> {
     let builder = builder.with_cell_model(cell_model);
 
     // Set EOF behavior
+    // The spellings live with the type (`impl FromStr for EofBehavior`), as
+    // the cell model's do, so the CLI, the test manifest and any other reader
+    // accept the same ones.
     let eof_behavior = parse_or_exit(
         &cli.eof_behavior,
-        |s| match s.to_lowercase().as_str() {
-            "zero" => Some(EofBehavior::SetZero),
-            "neg-one" | "negone" | "-1" | "255" => Some(EofBehavior::SetNegOne),
-            "no-change" | "nochange" | "unchanged" => Some(EofBehavior::NoChange),
-            "error" => Some(EofBehavior::Error),
-            _ => None,
-        },
+        |s| s.parse::<EofBehavior>().ok(),
         "EOF behavior",
         "zero, neg-one, no-change, error",
     );
@@ -263,10 +262,10 @@ fn run() -> Result<(), BfError> {
     // Execute the program
     let mut input = StdInput;
     let mut output = StdOutput;
-    let stats = if use_optimized {
-        // OPTIMIZED MODE (default): Fast execution, no tracking
+    // The optimized interpreter and the JIT run the same optimized program;
+    // it is built once, and reported once, for both.
+    let optimized = if use_optimized || use_jit {
         let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
-
         if cli.verbose && !cli.quiet {
             eprintln!("=== Optimization Results ===");
             eprintln!("Original instructions: {}", optimized.original_count);
@@ -274,13 +273,20 @@ fn run() -> Result<(), BfError> {
             eprintln!("Compression ratio: {:.2}×", optimized.compression_ratio());
             eprintln!();
         }
+        Some(optimized)
+    } else {
+        None
+    };
 
-        match interpret_optimized_with_io(&optimized, config, &mut input, &mut output) {
+    let stats = if use_optimized {
+        // OPTIMIZED MODE (default): Fast execution, no tracking
+        let optimized = optimized.as_ref().expect("built above");
+        match interpret_optimized_with_io(optimized, config, &mut input, &mut output) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Error: {}", e.format_detailed());
                 eprintln!(
-                    "\nHint: Use --debug for source location tracking and better error messages"
+                    "\nHint: Use --jit or --debug for source location tracking and better error messages"
                 );
                 std::process::exit(1);
             }
@@ -288,7 +294,7 @@ fn run() -> Result<(), BfError> {
     } else if use_jit {
         #[cfg(feature = "jit")]
         {
-            let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
+            let optimized = optimized.as_ref().expect("built above");
             // Counting costs; --verbose is the only thing that reads the counts.
             let statistics = if cli.verbose {
                 gyrus_jit::Statistics::Full
@@ -296,7 +302,7 @@ fn run() -> Result<(), BfError> {
                 gyrus_jit::Statistics::Cheap
             };
             match gyrus_jit::run_with(
-                &optimized,
+                optimized,
                 &config,
                 &mut input,
                 &mut output,
