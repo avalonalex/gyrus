@@ -785,9 +785,22 @@ fn compile<'p>(program: &'p OptimizedProgram, options: Options) -> Result<Compil
         (t.sites, t.guarded)
     };
 
+    // `GYRUS_JIT_DISASM=1` prints the machine code Cranelift emitted, which is
+    // the only way to see what a fold actually costs. Off by default and read
+    // once per compile, so it costs nothing when unset.
+    let want_disasm = std::env::var_os("GYRUS_JIT_DISASM").is_some();
+    ctx.set_disasm(want_disasm);
+
     module
         .define_function(main_id, &mut ctx)
         .map_err(|e| cranelift(&e))?;
+    if want_disasm {
+        if let Some(code) = ctx.compiled_code() {
+            if let Some(text) = code.vcode.as_ref() {
+                eprintln!("{text}");
+            }
+        }
+    }
     module.clear_context(&mut ctx);
     module.finalize_definitions().map_err(|e| cranelift(&e))?;
     let code = module.get_finalized_function(main_id);
@@ -1047,15 +1060,38 @@ impl<'p> Translator<'_, 'p> {
 
     /// Emit the body of every exit block. `position` was defined in the
     /// block that branches here, its only predecessor, so it dominates.
+    ///
+    /// Every site jumps to one shared epilogue rather than returning where it
+    /// stands. A `return_` carries the whole frame teardown with it -- six
+    /// register-pair restores and the authenticated return -- and mandelbrot
+    /// has 1,088 failure sites, so returning at each one made **half** the
+    /// emitted function frame teardown, interleaved with the loops that do the
+    /// work. Sharing it costs each site two instructions (the site id, and a
+    /// branch) and hurts nothing: these blocks are cold, and the epilogue was
+    /// never on a path that runs.
     fn fill_exits(&mut self) {
-        for (block, position, id) in std::mem::take(&mut self.exits) {
+        let exits = std::mem::take(&mut self.exits);
+        if exits.is_empty() {
+            return;
+        }
+        let shared = self.b.create_block();
+        let position = self.b.append_block_param(shared, types::I64);
+        let id = self.b.append_block_param(shared, types::I32);
+        self.b.set_cold_block(shared);
+
+        for (block, site_position, site_id) in exits {
             self.b.switch_to_block(block);
+            let site_id = self.b.ins().iconst(types::I32, site_id);
             self.b
                 .ins()
-                .store(access_flags(), position, self.rt, OFF_CURSOR);
-            let id = self.b.ins().iconst(types::I32, id);
-            self.b.ins().return_(&[id]);
+                .jump(shared, &[site_position.into(), site_id.into()]);
         }
+
+        self.b.switch_to_block(shared);
+        self.b
+            .ins()
+            .store(access_flags(), position, self.rt, OFF_CURSOR);
+        self.b.ins().return_(&[id]);
     }
 
     /// The tape contract: `cursor as usize < len`, else the site's exit --
