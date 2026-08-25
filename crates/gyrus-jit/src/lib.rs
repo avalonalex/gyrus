@@ -1728,7 +1728,13 @@ impl<'p> Translator<'_, 'p> {
             I::MultiplyAdd(targets, _) => {
                 let c = self.b.use_var(self.vars.cursor);
                 let addr = self.checked_addr(c, index);
-                let src = self.load(addr);
+                // Widened at the load, for the same reason `loop_test` does it:
+                // an `I8` in the IR makes `brif` emit a mask, because Cranelift
+                // cannot assume its high bits are clear. Loading into an `I32`
+                // costs nothing extra -- `ldrb` zero-extends anyway -- removes
+                // the mask, and this value is wanted widened regardless, since
+                // the multiply is done in 32 bits.
+                let src = self.b.ins().uload8(types::I32, access_flags(), addr, 0);
                 let work = self.b.create_block();
                 let after = self.b.create_block();
                 self.b.ins().brif(src, work, &[], after, &[]);
@@ -1740,7 +1746,7 @@ impl<'p> Translator<'_, 'p> {
                 {
                     self.note_peak(c, furthest);
                 }
-                let src32 = self.b.ins().uextend(types::I32, src);
+                let src32 = src;
                 for (offset, multiplier) in targets {
                     let tc = self.b.ins().iadd_imm_s(c, *offset as i64);
                     let taddr = self.checked_addr(tc, index);
