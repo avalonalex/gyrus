@@ -13,7 +13,8 @@ This document tracks optimization patterns that are currently missed by the gyru
 - ✅ `<<<` → `Left(3)` - Combine pointer movements
 
 **Loop Pattern Recognition:**
-- ✅ `[-]` or `[+]` → `Zero` - Clear current cell
+- ✅ `[-]` → `Zero` - Clear current cell (not `[+]`: it reaches zero only by
+  wrapping, which checked cells reject)
 - ✅ `[>]` → `SeekRight` - Find next zero cell
 - ✅ `[<]` → `SeekLeft` - Find previous zero cell
 - ✅ `[->+<]` → `MultiplyAdd([(1, 1)])` - Move value to next cell
@@ -75,6 +76,16 @@ Both patterns are **mathematically equivalent**:
 
 **Problem:**
 Currently we only recognize `[>]` and `[<]` for scanning by 1 cell. Many programs scan by N cells (e.g., for packed data structures).
+
+**Evidence (2026-08-24):** this is the one item with a measured target behind
+it. `mandelbrot.bf` works in 9-cell records, and 124 of its 478 innermost
+loops are nothing but `[>>>>>>>>>]` or `[<<<<<<<<<]`. Each iteration of one
+is a recursive `execute_block` call for a single fused `Right(9)` -- and the
+profile in the "Tried and failed" section below puts that call's
+prologue/epilogue at ~20% of run time. Mandelbrot's loops average 3.3
+instructions per iteration; these are the shortest of them. A strided
+`SeekRight(9)` makes each such loop one instruction, the same way `[>]`
+already is.
 
 **Examples:**
 
@@ -294,16 +305,16 @@ Inline simple loop bodies when beneficial.
 ## Implementation Priority
 
 **Phase 1 - High Value, Low Complexity:**
-1. Loop rotation for MultiplyAdd recognition ⭐
-   - High impact on compression ratio
-   - Medium complexity
-   - Fixes common real-world pattern
+1. Scan by N cells (SeekRight/Left with step size) ⭐
+   - Low complexity
+   - The only item with a measured hot spot behind it: 124 such loops in
+     mandelbrot, each iteration a block call (see "Evidence" under item 2)
 
 **Phase 2 - Medium Value:**
-2. Scan by N cells (SeekRight/Left with step size)
-   - Medium impact
-   - Low complexity
-   - Useful for data structure manipulation
+2. Loop rotation for MultiplyAdd recognition
+   - Medium complexity
+   - Less than it looks on the benchmark corpus: of mandelbrot's 345 balanced
+     innermost loops, 334 already start with `-`/`+` and fold; 11 do not
 
 3. Set value pattern (Zero + Add fusion)
    - Medium impact
@@ -329,6 +340,80 @@ Inline simple loop bodies when beneficial.
 
 ---
 
+## Tried and failed
+
+Kept so that nobody measures these again. Each has a branch or PR with the
+code; the numbers are what decided it.
+
+### Offset addressing (lazy pointer motion) — 2026-08-24, negative
+
+**The idea:** give cell operations an offset from the pointer, so a
+straight-line run stops moving the pointer and does its work in place.
+`Right(3) Add(1) Left(3) Right(5) Sub(2) Left(5)` becomes
+`Add(1)@+3 Sub(2)@+5` — six instructions and four moves become two and none.
+Runs end at loops, seeks and `MultiplyAdd`. Its prerequisite, the tape
+contract (access outside the tape is an error, movement is not), shipped in
+#4 and stands on its own at 8–11%.
+
+**Code:** PR #5 (branch `experiment/offset-addressing`), kept open and not
+merged. It carries a `GYRUS_NO_FOLD=1` toggle that disables the pass at
+optimize time, which is how the fold's effect was separated from the
+interpreter-side cost.
+
+**Result.** Interleaved min-of-N runs, alternating binaries. A control build
+of `main` with two match arms swapped — a layout-only change — measured 0.0%
+from `main`, so these differences are real:
+
+| | `main` | fold off | fold on | vs `main` | fold's own effect |
+|---|---:|---:|---:|---:|---:|
+| hanoi | 223 ms | 250 ms | 172 ms | **+23%** | +31% |
+| mandelbrot | 4.69 s | 5.33 s | 5.16 s | **−10%** | +3% |
+
+"Fold off" runs `main`'s exact instruction stream through the changed
+interpreter, so that column is the interpreter-side cost alone. The transform
+does what it says where runs are long — hanoi dispatches 28% fewer
+instructions (154.5M → 111.1M) — and fails the PRD's own criterion of ≥15% on
+*both* programs.
+
+**Why it fails on mandelbrot.** Its 754M loop iterations execute 2.5G
+instructions: 3.3 per iteration. Its moves are 67% of what it executes, but
+they are the whole bodies of `[>>>>>>>>>]` scans, not moves between
+operations, so there is no run to fold. The pass removes 5.6% of its dynamic
+instructions against a 17% static estimate. The static count weighted moves by
+nesting depth; what mattered was whether a hot loop body contained a run with
+more than one move in it.
+
+**Why the interpreter side costs 9–18% whatever you do.** A `samply` profile
+of `execute_block` on hanoi, on `main`:
+
+| share | what |
+|---:|---|
+| ~32% | the `step_count` load/add/store — a store-to-load hop per instruction |
+| ~26% | the jump-table dispatch |
+| ~20% | `execute_block`'s prologue/epilogue, once per loop *iteration* |
+| ~5% | the cursor load; the move arms themselves are noise |
+
+The loop runs at the latency of one store-to-load forward, ~5 cycles per
+instruction, so anything added per instruction is a large fraction of that.
+Three variants were measured, and the cause was different each time: an
+offset field on every operation puts one dependent add on the cursor chain
+(−13%); separate `AddAt`-style twins keep the plain arms' code but LLVM
+tail-merges each twin with its plain arm, which costs the plain arm a taken
+branch (−18%); hoisting cursor and step count into block-locals removes both
+chains from the profile and replaces them with a store/reload pair around
+every block call, which on 3-instruction blocks is no better (−12%).
+
+**What it says to do instead.** The recursion is the cost, not the moves: a
+loop iteration is a call that saves twelve registers, and blocks are 3–5
+instructions long. The structural fix is a flat instruction array with jump
+targets — one loop, registers live for the whole run — which is the IR the
+compilation-backend PRD wants anyway. Short of that, the item on this list
+with a measured target is scan by N (item 2 above). And any future change to
+the `execute_instruction` match should be measured with the pass it enables
+switched *off*, against `main`, before the pass is judged.
+
+---
+
 ## Testing Strategy
 
 For each new optimization:
@@ -346,8 +431,8 @@ For each new optimization:
 ## Related Files
 
 - **Optimizer implementation:** `crates/gyrus/src/optimizer.rs`
-- **Optimized interpreter:** `crates/gyrus/src/optimized_interpreter.rs`
-- **Optimizer tests:** `crates/gyrus/src/optimizer.rs:484-653`
+- **Optimized interpreter:** `crates/gyrus/src/interpreter/optimized.rs`
+- **Optimizer tests:** the `tests` module at the end of `crates/gyrus/src/optimizer.rs`
 - **Optimizer example:** `crates/gyrus/examples/optimizer.rs`
 - **CLI integration:** `crates/gyrus-cli/src/main.rs`
 - **Tool visualization:** `crates/gyrus-tool/src/main.rs` (optimize subcommand)
@@ -366,3 +451,4 @@ For each new optimization:
 ## Revision History
 
 - 2025-11-02: Initial document with 6 optimization opportunities identified
+- 2026-08-24: Offset addressing tried and recorded as a negative result; scan by N promoted on its evidence
