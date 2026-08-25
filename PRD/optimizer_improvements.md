@@ -23,11 +23,18 @@ This document tracks optimization patterns that are currently missed by the gyru
 
 ## Missed Optimization Opportunities
 
-### 1. Loop Rotation/Normalization for MultiplyAdd
+### 1. Loop Rotation/Normalization for MultiplyAdd — ✅ shipped
 
 **Priority:** High
 **Complexity:** Medium
 **Impact:** Common pattern in real BrainFuck programs
+
+**Shipped 2026-08-24**, as option B: `recognize_multiply_loop` accepts the
+source's single `-`/`+` anywhere in the body. Measured share of executed
+instructions inside such loops: squares 56%, triangle 32%, 99beer 22%,
+bf2c 11%, mandelbrot 1%. Optimized steps: squares 959K → 267K, 99beer
+339K → 137K, triangle 44K → 20K. Wall clock on those is process startup,
+so the step counts are the honest number; hanoi and mandelbrot unchanged.
 
 **Problem:**
 The MultiplyAdd pattern matcher requires the loop to start with `-` or `+`, but BrainFuck loops are circular - the starting position doesn't matter semantically.
@@ -119,11 +126,18 @@ already is.
 
 ---
 
-### 3. Set Value Pattern
+### 3. Set Value Pattern — ✅ shipped
 
 **Priority:** Medium
 **Complexity:** Medium
 **Impact:** Common in initialization code
+
+**Shipped 2026-08-24**, as the post-optimization pass: `Zero Add(n)` →
+`Set(n)` under any cell model, `Zero Sub(n)` → `Set(256 − n)` under wrapping
+only, and a `Set` absorbs further arithmetic. It was not premature: hanoi
+executes **46%** of its instructions inside `[-]+++` patterns (324 sites),
+and fusing them is hanoi 226 ms → 192 ms (**+15%**), steps 154M → 133M.
+squares 267K → 255K steps; mandelbrot unchanged.
 
 **Problem:**
 Setting a cell to a specific value currently requires separate Zero + Add instructions. We could fuse these into a single Set instruction.
@@ -160,11 +174,16 @@ Setting a cell to a specific value currently requires separate Zero + Add instru
 
 ---
 
-### 4. Addition/Subtraction Cancellation
+### 4. Addition/Subtraction Cancellation — measured, not worth doing
 
 **Priority:** Low
 **Complexity:** Low
 **Impact:** Mostly benefits obfuscated code
+
+**Measured 2026-08-24:** 0.0% of executed instructions on every benchmark
+program (hanoi has 10 static sites, the rest none). The only program in
+`programs/` with any number of them is oobrain (328, generated code), which
+is not benchmarked. Not done; revisit only with a program that has them.
 
 **Problem:**
 Consecutive Add/Sub operations can partially or fully cancel out.
@@ -197,11 +216,14 @@ Consecutive Add/Sub operations can partially or fully cancel out.
 
 ---
 
-### 5. Dead Code Elimination
+### 5. Dead Code Elimination — measured, not worth doing
 
 **Priority:** Medium
 **Complexity:** Medium
 **Impact:** Helps with generated code and initialization
+
+**Measured 2026-08-24:** the `+++[-]` shape occurs 1 time in hanoi, 2 in
+mandelbrot, 1 in life, and nowhere else in `programs/`. Not done.
 
 **Problem:**
 Operations at the start of a program that are overwritten before being read are unnecessary.
@@ -314,26 +336,17 @@ Inline simple loop bodies when beneficial.
    "Evidence" under item 2)
 
 **Phase 2 - Medium Value:**
-2. Loop rotation for MultiplyAdd recognition
-   - Medium complexity
-   - Less than it looks on the benchmark corpus: of mandelbrot's 345 balanced
-     innermost loops, 334 already start with `-`/`+` and fold; 11 do not
+2. ✅ Loop rotation for MultiplyAdd recognition — shipped. Little for
+   mandelbrot (334 of its 345 balanced loops already folded), but the
+   dominant pattern in squares, triangle and 99beer; see item 1
 
-3. Set value pattern (Zero + Add fusion)
-   - Medium impact
-   - Medium complexity
-   - Consider if benefit justifies complexity
+3. ✅ Set value pattern (Zero + Add fusion) — shipped, +15% on hanoi; see
+   item 3
 
-**Phase 3 - Nice to Have:**
-4. Addition/subtraction cancellation
-   - Low impact (rare in practice)
-   - Low complexity
-   - Easy win for generated code
-
-5. Dead code elimination
-   - Medium impact
-   - Medium-high complexity
-   - Better suited for JIT/AOT stage
+**Phase 3 - measured and declined (2026-08-24):**
+4. Addition/subtraction cancellation — 0% of executed instructions on the
+   benchmark set; see item 4
+5. Dead code elimination — four static sites in the whole corpus; see item 5
 
 **Defer to JIT/AOT:**
 - Constant folding
@@ -416,6 +429,17 @@ the `execute_instruction` match should be measured with the pass it enables
 switched *off*, against `main`, before the pass is judged.
 
 ---
+
+## How the priorities were measured
+
+Static counts of a pattern say little: hanoi's 324 `[-]+++` sites could have
+been cold. What decided the order above was the share of *executed*
+instructions each pattern covers, from a throwaway tool: a hook that counts
+`before_instruction` per instruction index on the debug interpreter, dumped
+per source offset of the minified program, then summed over each pattern's
+span. It is ~40 lines against the library and takes seconds on everything
+but mandelbrot (minutes) and hanoi (~10 minutes). Worth rebuilding before
+picking the next item.
 
 ## Testing Strategy
 
