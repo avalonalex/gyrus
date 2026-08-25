@@ -3,6 +3,7 @@ members = [
     "crates/gyrus",
     "crates/gyrus-cli",
     "crates/gyrus-tool",
+    "crates/gyrus-jit",
 ]
 resolver = "2"
 
@@ -18,14 +19,13 @@ repository = "https://github.com/avalonalex/gyrus"
 # running it.
 publish = false
 
-# Minimum supported Rust version, verified rather than assumed: 1.85 (the
-# edition-2024 floor) does NOT build this workspace — `src/interpreter/mod.rs`
-# and four other files use let-chains in 12 places, and those stabilized in
-# 1.88. On 1.88 the whole workspace compiles (including tests, benches, and
-# examples) and all 302 tests pass; on 1.85 it fails with 12 x E0658.
-#
-# Re-verify with: cargo +1.88 test --workspace
-rust-version = "1.88"
+# Minimum supported Rust version: Cranelift's, which is "stable minus two"
+# and moves about every six weeks. The library alone needs only 1.88 (it uses
+# let-chains, stabilized there; 1.85, the edition-2024 floor, does not build
+# it), but one MSRV for the workspace beats two, and the pinned toolchain in
+# rust-toolchain.toml is what anyone here actually compiles with. Bumping
+# Cranelift may mean bumping this; `scripts/check-msrv.sh` is the check.
+rust-version = "1.95"
 
 # Shared dependencies across the workspace
 #
@@ -58,6 +58,14 @@ rand = "0.9"
 
 # JSON output for `gyrus-tool debug-info`
 serde_json = "1"
+
+# Cranelift, for the JIT (`crates/gyrus-jit` only). Its MSRV is the
+# workspace's; see `rust-version` above.
+cranelift-codegen = "0.135"
+cranelift-frontend = "0.135"
+cranelift-module = "0.135"
+cranelift-jit = "0.135"
+cranelift-native = "0.135"
 
 # Property-based testing
 proptest = "1"
