@@ -56,7 +56,7 @@ input = ""
 expected_exit = "success"
 description = "Self-replicating program (outputs its own source)"
 tags = ["advanced", "quine", "self-referential"]
-skip_output_check = true  # Special handling required
+output_is_source = true  # Special handling required
 
 [[test]]
 name = "factor"
@@ -103,6 +103,8 @@ config = { eof_behavior = "no_change" }
 name = "warnings_only"
 file = "tests/warnings_only.bf"
 input = ""
+# Produces nothing: these exist to trigger static warnings, not output.
+expected_output = ""
 expected_exit = "success"
 expected_warnings = 2
 description = "Program with validation warnings but no errors"
@@ -112,6 +114,8 @@ tags = ["validation", "warnings"]
 name = "warnings_test"
 file = "tests/warnings_test.bf"
 input = ""
+# Produces nothing: these exist to trigger static warnings, not output.
+expected_output = ""
 expected_exit = "success"
 expected_warnings = 1
 description = "Mixed program with warnings"
@@ -158,6 +162,8 @@ config = { max_steps = 1000 }
 name = "deep_nesting"
 file = "tests/deep_nesting.bf"
 input = ""
+# Produces nothing: these exist to trigger static warnings, not output.
+expected_output = ""
 expected_exit = "success"
 expected_warnings = 1  # Extreme nesting warning
 description = "Deeply nested loops (11 levels)"
@@ -324,6 +330,8 @@ tags = ["utility", "output"]
 name = "eof_neg_one"
 file = "tests/test_eof.bf"
 input = ""
+# The byte is the whole point of the case: SetNegOne must leave 255, not 0.
+expected_output = "\u00FF"
 expected_exit = "success"
 description = "EOF leaves the cell at 255 (-1)"
 tags = ["eof", "config"]

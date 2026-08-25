@@ -51,17 +51,25 @@ fn the_corpus_behaves_the_same_under_the_jit() {
 
             // For a run that ends on its own, the bytes emitted are the same.
             //
-            // For one the step limit stops, they are not, and cannot be:
-            // `max_steps` counts optimized instructions in the interpreter and
-            // loop iterations in the JIT, so the two engines stop at different
-            // points in a program that emits forever. rot13 under a 100k budget
-            // gives 32,897 trailing NULs on one side and 3,146 on the other,
-            // both after the same correct output. What is comparable there is
-            // the prefix, which the manifest states and both engines are held
-            // to below -- the same reason `generated.rs` skips a comparison the
-            // interpreter could not finish.
-            let limited = case.expected_error_type.as_deref() == Some("limit");
-            if !limited {
+            // For one a limit stopped, they are not, and cannot be: `max_steps`
+            // counts optimized instructions in the interpreter and loop
+            // iterations in the JIT, so the two stop at different points in a
+            // program that emits forever. rot13 under a 100k budget gives
+            // 32,897 trailing NULs on one side and 3,146 on the other, after
+            // the same correct output. The prefix is what is comparable, and
+            // `Case::check` holds both engines to it below.
+            //
+            // Read off what actually happened rather than off the manifest: a
+            // case tagged `limit` that stopped failing would otherwise have its
+            // byte comparison suppressed for good, and a real divergence with
+            // it.
+            let stopped = |r: &Result<(), BfError>| {
+                matches!(
+                    r,
+                    Err(BfError::StepLimitExceeded { .. } | BfError::ExecutionTimeout { .. })
+                )
+            };
+            if !stopped(&interp) && !stopped(&jit) {
                 assert_eq!(out_j, out_i, "{what}: output differs between engines");
             }
             match (&interp, &jit) {
@@ -74,48 +82,18 @@ fn the_corpus_behaves_the_same_under_the_jit() {
                 (a, b) => panic!("{what}: interpreter {a:?}, jit {b:?}"),
             }
             // The manifest's expectations are for the model it was written
-            // for, the default; under checked cells a program may fail where
-            // it did not, and then only the agreement above is required.
+            // for, the default; under checked cells a program may fail where it
+            // did not, and then only the agreement above is required.
             if checked {
                 continue;
             }
-            match (case.expected_exit.as_str(), &jit) {
-                ("success", Ok(())) => {
-                    if let Some(expected) = &case.expected_output {
-                        assert_eq!(&out_j, expected, "{what}: output");
-                    }
-                }
-                ("error", Err(e)) => match case.expected_error_type.as_deref() {
-                    Some("limit") => assert!(
-                        matches!(
-                            e,
-                            BfError::StepLimitExceeded { .. } | BfError::ExecutionTimeout { .. }
-                        ),
-                        "{what}: {e:?}"
-                    ),
-                    Some("runtime") => {
-                        assert!(
-                            matches!(e, BfError::MemoryOutOfBounds { .. }),
-                            "{what}: {e:?}"
-                        )
-                    }
-                    _ => {}
-                },
-                (want, got) => panic!("{what}: expected {want}, got {got:?}"),
-            }
-            // Checked whatever the exit was: a program the step limit stopped
-            // still has to have emitted the right bytes first. That is the
-            // only thing worth asserting about the interactive ones.
-            if let Some(prefix) = &case.expected_output_prefix {
-                for (engine, out) in [("interpreter", &out_i), ("jit", &out_j)] {
-                    assert!(
-                        out.starts_with(prefix),
-                        "{what}: {engine} output does not start with the expected prefix\n  expected: {:?}\n  got:      {:?}",
-                        String::from_utf8_lossy(prefix),
-                        String::from_utf8_lossy(&out[..out.len().min(prefix.len() + 16)]),
-                    );
-                }
-            }
+            // Both engines against the manifest, through the same assertions
+            // the tree-walker's suite uses -- these used to be written out
+            // separately here and had already diverged: `expected_output` was
+            // only checked on the success path, so a case declaring an error
+            // and an output went unchecked.
+            case.check("interpreter", &interp, &out_i);
+            case.check("jit", &jit, &out_j);
         }
     }
 }

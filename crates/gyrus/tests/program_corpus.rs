@@ -52,65 +52,7 @@ fn every_manifest_case_behaves_as_declared() {
         }
 
         let (result, output) = run(case);
-        let name = &case.name;
-
-        match (case.expected_exit.as_str(), &result) {
-            ("success", Ok(())) => {}
-            ("error", Err(e)) => match case.expected_error_type.as_deref() {
-                Some("limit") => assert!(
-                    matches!(
-                        e,
-                        BfError::StepLimitExceeded { .. } | BfError::ExecutionTimeout { .. }
-                    ),
-                    "{name}: expected a limit, got {e:?}"
-                ),
-                Some("runtime") => assert!(
-                    matches!(e, BfError::MemoryOutOfBounds { .. }),
-                    "{name}: expected a runtime error, got {e:?}"
-                ),
-                _ => {}
-            },
-            (want, got) => panic!("{name}: manifest expects {want}, got {got:?}"),
-        }
-
-        // Output is checked whatever the exit was: a program stopped by its
-        // step limit still has to have emitted the right bytes first, which is
-        // the whole point of testing the interactive ones this way.
-        if let Some(expected) = &case.expected_output {
-            assert_eq!(
-                Bytes(&output),
-                Bytes(expected),
-                "{name}: output differs from the manifest"
-            );
-        }
-        if let Some(prefix) = &case.expected_output_prefix {
-            assert!(
-                output.starts_with(prefix),
-                "{name}: output does not start with the expected prefix\n  expected: {:?}\n  got:      {:?}",
-                Bytes(prefix),
-                Bytes(&output[..output.len().min(prefix.len() + 16)]),
-            );
-        }
-    }
-}
-
-/// Bytes that print as text when they can, so a failed comparison is readable
-/// rather than a wall of integers.
-struct Bytes<'a>(&'a [u8]);
-
-impl PartialEq for Bytes<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl std::fmt::Debug for Bytes<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", String::from_utf8_lossy(self.0))?;
-        if self.0.len() > 40 {
-            write!(f, " ({} bytes)", self.0.len())?;
-        }
-        Ok(())
+        case.check("tree-walker", &result, &output);
     }
 }
 
@@ -131,6 +73,9 @@ fn the_corpus_directories_are_populated() {
         ("warnings", 3),
         ("third-party/advanced", 10),
         ("third-party/utilities", 5),
+        // Referenced by no manifest case and no other test, so this is the
+        // only thing standing between it and quietly emptying out.
+        ("debug", 1),
     ];
 
     for (dir, least) in expected {
@@ -148,9 +93,49 @@ fn the_corpus_directories_are_populated() {
     }
 }
 
-/// Debug symbols against real programs rather than fragments: whatever the
-/// run does -- finish, hit a limit, fail -- the mapping back to source has to
-/// survive it.
+/// A run stopped part-way still knows where it was.
+///
+/// This is the assertion that matters about debug symbols, and it needs a
+/// program that actually fails: an earlier version of this test ran four
+/// programs that finish in under a thousand steps against a five-thousand-step
+/// budget, so its error arm was unreachable and the only live assertion
+/// followed from parsing having succeeded. It would have passed with the
+/// source-location lookup returning `None` for every error.
+#[test]
+fn a_failed_run_reports_where_it_was() {
+    let root = gyrus_corpus::workspace_root();
+    // Each of these fails a different way, and each must still name a line.
+    for (program, steps) in [
+        ("errors/infinite_loop.bf", 500),
+        ("tests/deep_nesting.bf", 20),
+    ] {
+        let source = fs::read_to_string(root.join("programs").join(program)).unwrap();
+        let (instructions, debug_info) = parse_with_debug(&source).unwrap();
+        let (mut i, mut o) = (DebugIo::new(), DebugIo::new());
+        let result = interpret_with_io(
+            &instructions,
+            ExecutionConfigBuilder::new()
+                .with_memory_size(30_000)
+                .with_max_steps(steps)
+                .build(),
+            &mut i,
+            &mut o,
+            Some(&debug_info),
+        );
+        match result {
+            Err(BfError::StepLimitExceeded {
+                source_location, ..
+            }) => assert!(
+                source_location.is_some(),
+                "{program}: stopped by the step limit without a source location"
+            ),
+            other => panic!("{program}: expected the step limit to stop it, got {other:?}"),
+        }
+    }
+}
+
+/// Debug symbols against real programs rather than fragments: parsing with
+/// debug info and running to completion keeps the table consistent.
 #[test]
 fn debug_symbols_survive_real_programs() {
     let root = gyrus_corpus::workspace_root();

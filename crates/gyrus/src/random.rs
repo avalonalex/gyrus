@@ -226,25 +226,29 @@ impl<R: Rng> Idioms<'_, R> {
                 let n = self.rng.random_range(1..=5);
                 self.repeat('-', n);
             }
-            // A constant near the top of the cell, and sometimes a second run
-            // that carries it past 255.
+            // A constant that reaches, and often crosses, the top of a cell.
             //
-            // This shape exists because a fold once got it wrong: `[-]` then
-            // `+` runs fuses to a single `Set`, and folding the second run in
-            // is only valid while the sum stays under 256 -- past that, under
-            // checked cells, the overflow is the thing the program was
-            // supposed to report. Without a fragment that reaches the
-            // boundary, no amount of seeds can falsify that guard: every other
-            // fragment here writes single-digit values, so the whole harness
-            // ran hundreds of programs that never came near a cell limit. The
-            // bug was found by review instead, which is the wrong way round.
+            // Crossing is the point. Run fusion caps an `Add` at 255, so a
+            // source run longer than that becomes `Add(255)` then `Add(rest)`,
+            // and after the clear that is `Set(255)` followed by `Add(rest)` --
+            // exactly the pair whose fold is valid only while the sum stays
+            // under 256. Past it, under checked cells, the overflow is the
+            // thing the program existed to report, and folding it away hides
+            // that.
+            //
+            // The range spans the boundary rather than stopping at it because
+            // a run of 255 or fewer fuses to a single `Add` and never forms the
+            // pair. This emits one contiguous run: the second `Add` comes from
+            // fusion, not from a second `repeat`.
+            //
+            // Without a fragment that gets here, no number of seeds can falsify
+            // that guard -- every other fragment writes single-digit values, so
+            // the harness ran hundreds of programs that never came near a cell
+            // limit, and the bug was found by review instead, which is the
+            // wrong way round.
             2 => {
-                let n = self.rng.random_range(200..=255);
+                let n = self.rng.random_range(200..=315);
                 self.repeat('+', n);
-                if self.rng.random_bool(0.5) {
-                    let carry = self.rng.random_range(1..=60);
-                    self.repeat('+', carry);
-                }
             }
             _ => {
                 let n = self.rng.random_range(1..=12);

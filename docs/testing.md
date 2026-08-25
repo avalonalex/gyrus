@@ -17,7 +17,7 @@ file used to open with "136 total tests" long after there were far more. Run
 | `crates/gyrus/src/**` | Unit tests beside the code they test, including `interpreter/tests.rs` |
 | `crates/gyrus/src/test_utils.rs` | Helpers shared by those tests — `#[cfg(test)]` and private, so it is not API |
 | `crates/gyrus/tests/program_corpus.rs` | The manifest's cases, run end to end through the tree-walker |
-| `crates/gyrus/tests/generated_differential.rs` | Optimizer against the tree-walker on generated programs |
+| `crates/gyrus/tests/generated_differential.rs` | Optimizer against the tree-walker on generated programs, and compiled strings against their known output |
 | `crates/gyrus/tests/property_debug_symbols.rs` | Proptest over debug-symbol invariants |
 | `crates/gyrus-corpus/` | The manifest, parsed once and shared by both corpus suites |
 | `crates/gyrus-jit/tests/corpus.rs` | The same corpus under the JIT, driven from the manifest |
@@ -88,11 +88,15 @@ Two things the manifest cannot express as a plain expected output:
   on one side and 3,146 on the other, after identical real output. The prefix is
   what is comparable, and both engines are held to it.
 
-Programs that never terminate on purpose (rot13, fibonacci) are tested by
-giving them a step limit and asserting on a prefix of the output — the limit
-stands in for the Ctrl-C a human would type. Programs with binary output are
-compared as raw bytes. Everything runs through `StringIo` rather than real
-stdin/stdout, so the suite is fast and deterministic.
+Programs with binary output are compared as raw bytes. Everything runs through
+`StringIo` rather than real stdin/stdout, so the suite is fast and
+deterministic, and a program's input is just a string in the manifest.
+
+A success case must say what it produces — `expected_output`,
+`expected_output_prefix`, or `output_is_source` for the quine, whose output is
+its own source. A case that only asserts it exited cleanly is a program nobody
+is checking, which is what `factor` and `collatz` were: both ran, neither had
+its answer looked at.
 
 ## Property-based tests
 
@@ -130,16 +134,40 @@ patterns (clear loops, copies, multiplies, scans), which are good at finding
 optimizer bugs because they contain the shapes the optimizer rewrites.
 
 **A generator can only falsify what it can express.** The idiomatic mode emits
-values near the top of a cell — a clear followed by a run of 200-255 `+`, and
-sometimes a second run carrying it past 255 — for one specific reason. Folding
-`[-]` and a following `+` run into a single `Set` is valid only while the sum
-stays under 256; past that, under checked cells, the overflow is exactly what
-the program was supposed to report. That guard was once wrong, and no number of
-seeds could catch it, because every other fragment writes single-digit values
-and no generated program ever came near a cell boundary. A review found it
-instead. With the boundary fragment, reintroducing the same bug fails the suite
-at the third seed. Worth remembering when adding a fold: ask whether the
-generator can produce the shape that would prove it wrong.
+a clear followed by a run of 200-315 `+`, for one specific reason. Run fusion
+caps an `Add` at 255, so a longer run becomes `Add(255)` then `Add(rest)` —
+after the clear, `Set(255)` followed by `Add(rest)`. Folding those two together
+is valid only while the sum stays under 256; past that, under checked cells,
+the overflow is the thing the program existed to report. That guard was once
+wrong, and no number of seeds could catch it, because every other fragment
+writes single-digit values and no generated program ever came near a cell
+boundary. A review found it instead. With the boundary fragment, reintroducing
+the same bug fails the suite in under two seconds.
+
+Worth remembering when adding a fold: ask whether the generator can produce the
+shape that would prove it wrong.
+
+## An oracle, not just agreement
+
+Every differential above proves the engines *agree*. Agreement is not
+correctness — a fold wrong in the same way on both sides passes all of them.
+
+`compile_string` closes that gap. It turns a string into a BrainFuck program
+that prints it, so the right answer is known by construction rather than by
+asking another engine, and
+`compiled_programs_print_the_string_they_were_built_from` checks it. The
+compiled programs are worth running for their shape too: codegen builds values
+with multiply loops and clears, exactly what the optimizer folds.
+
+Two properties of codegen the test has to respect, both real rather than
+workarounds:
+
+- **It targets wrapping cells.** Its table reaches 255 by decrementing a zero
+  cell, so a compiled program raises a checked-cell underflow at its first
+  instruction. The oracle runs under wrapping only.
+- **It walks rightwards** as it builds, so it needs a realistic tape rather
+  than the deliberately tiny one the differentials use to provoke boundary
+  errors.
 
 ## Benchmarks
 
