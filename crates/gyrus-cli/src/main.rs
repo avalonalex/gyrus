@@ -69,6 +69,13 @@ struct Cli {
     /// (implies --debug, shows hot code regions and loop performance)
     #[arg(long)]
     trace: bool,
+
+    /// Compile to native code with Cranelift and run that. Same output, same
+    /// errors, several times faster; and, because it knows which instruction
+    /// each error belongs to, errors carry source locations without --debug.
+    #[cfg(feature = "jit")]
+    #[arg(long, conflicts_with_all = ["debug", "trace"])]
+    jit: bool,
 }
 
 fn main() {
@@ -99,7 +106,11 @@ fn run() -> Result<(), BfError> {
     // Default: Optimized interpreter (fast, no tracking)
     // --debug: Standard interpreter with debug symbols
     // --trace: Standard interpreter with debug symbols + profiling
-    let use_optimized = !cli.debug && !cli.trace;
+    #[cfg(feature = "jit")]
+    let use_jit = cli.jit;
+    #[cfg(not(feature = "jit"))]
+    let use_jit = false;
+    let use_optimized = !cli.debug && !cli.trace && !use_jit;
     let enable_profiling = cli.trace;
 
     // Read the source file
@@ -116,7 +127,9 @@ fn run() -> Result<(), BfError> {
     // Parse the program
     // - Optimized mode: parse without debug symbols (fast)
     // - Debug/trace mode: parse with debug symbols for source tracking
-    let (instructions, debug_info) = if cli.debug || cli.trace {
+    // - JIT: with debug symbols too. The JIT maps every failure site to its
+    //   instruction, so the symbols buy located errors at no run-time cost.
+    let (instructions, debug_info) = if cli.debug || cli.trace || use_jit {
         // Debug mode: parse with debug symbols for source location tracking
         // MultipleBracketErrors now carries every error and formats them all,
         // so it needs no special case here.
@@ -222,6 +235,8 @@ fn run() -> Result<(), BfError> {
             "  Execution mode: {}",
             if use_optimized {
                 "Optimized (default)"
+            } else if use_jit {
+                "JIT (Cranelift)"
             } else if enable_profiling {
                 "Trace (profiling + debug)"
             } else {
@@ -270,6 +285,26 @@ fn run() -> Result<(), BfError> {
                 std::process::exit(1);
             }
         }
+    } else if use_jit {
+        #[cfg(feature = "jit")]
+        {
+            let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
+            match gyrus_jit::run(
+                &optimized,
+                &config,
+                &mut input,
+                &mut output,
+                debug_info.as_ref(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{}", e.format_with_source(&source));
+                    std::process::exit(1);
+                }
+            }
+        }
+        #[cfg(not(feature = "jit"))]
+        unreachable!("--jit is not a flag without the jit feature")
     } else {
         // DEBUG/TRACE MODE: Standard interpreter with debug symbols
         match interpret_with_io(
@@ -299,7 +334,15 @@ fn run() -> Result<(), BfError> {
     // Display statistics in verbose mode (unless --quiet)
     if cli.verbose && !cli.quiet {
         eprintln!("=== Execution Statistics ===");
-        eprintln!("Total steps executed: {}", stats.total_steps);
+        if use_jit {
+            // The JIT counts loop iterations, nothing finer; see docs/execution-models.md.
+            eprintln!(
+                "Total steps executed: {} (loop iterations)",
+                stats.total_steps
+            );
+        } else {
+            eprintln!("Total steps executed: {}", stats.total_steps);
+        }
         eprintln!("Loop iterations: {}", stats.loop_iterations);
         eprintln!("Peak memory used: {} cells", stats.peak_memory_used);
         eprintln!("Memory allocated: {} bytes", stats.memory_allocated);

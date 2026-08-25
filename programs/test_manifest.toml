@@ -76,7 +76,9 @@ timeout_ms = 60000  # May take a while
 name = "eof_zero"
 file = "tests/test_eof.bf"
 input = ""
-expected_output = "EOF: 0\n"
+# One NUL byte: the cell EOF set to zero, printed. (This said "EOF: 0\n",
+# which is what the program is *about*, not what it prints.)
+expected_output = "\u0000"
 expected_exit = "success"
 description = "Tests EOF behavior: set to zero (default)"
 tags = ["eof", "config"]
@@ -86,6 +88,8 @@ config = { eof_behavior = "zero" }
 name = "eof_nochange"
 file = "tests/test_eof_nochange.bf"
 input = ""
+# The +++++ before the read, untouched by EOF: one byte, 5.
+expected_output = "\u0005"
 expected_exit = "success"
 description = "Tests EOF behavior: no change"
 tags = ["eof", "config"]

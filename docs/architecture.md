@@ -31,6 +31,7 @@ crates/
 │   ├── error.rs             # Rich error types with source locations
 │   └── ...
 ├── gyrus-cli/      # CLI binary
+├── gyrus-jit/      # Cranelift JIT for the optimized IR (`gyrus --jit`)
 └── gyrus-tool/     # Development tools
 ```
 

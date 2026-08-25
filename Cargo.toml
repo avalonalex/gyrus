@@ -43,6 +43,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 # Internal
 gyrus = { path = "crates/gyrus" }
+gyrus-jit = { path = "crates/gyrus-jit" }
 
 # Error handling
 thiserror = "2"
