@@ -1,12 +1,13 @@
 # gyrus Architecture
 
-This document describes the current architecture of gyrus and provides design notes for future development.
+How the pieces fit together: what each crate is responsible for, how the four
+execution paths relate, and why the boundaries fall where they do.
 
-**Last updated**: 2025-10-30 (after hook system refactoring)
+Back to the [README](../README.md).
 
 ---
 
-## Current Architecture (v0.3.0)
+## Architecture
 
 ### Core Design Principles
 
@@ -15,25 +16,17 @@ This document describes the current architecture of gyrus and provides design no
 3. **Extensibility via Hooks**: All instrumentation goes through the hook system
 4. **Type Safety**: Rust's type system enforces correctness (no pointer arithmetic bugs)
 
-### Module Structure
+### The crates
 
-```
-crates/
-├── gyrus/          # Core library
-│   ├── parser.rs            # Source → AST (tree structure)
-│   ├── interpreter.rs       # AST → Execution (tree-walking)
-│   ├── hooks/               # Hook system for instrumentation
-│   │   ├── mod.rs           # Hook traits and context
-│   │   └── builtin.rs       # Built-in hooks (stats, limits, debug)
-│   ├── config/              # Execution configuration
-│   │   ├── memory_model.rs  # Fixed/Unbounded memory behaviors
-│   │   └── cell_model.rs    # Wrapping/Checked cell behaviors
-│   ├── error.rs             # Rich error types with source locations
-│   └── ...
-├── gyrus-cli/      # CLI binary
-├── gyrus-jit/      # Cranelift JIT for the optimized IR (`gyrus --jit`)
-└── gyrus-tool/     # Development tools
-```
+| Crate | Responsibility |
+|---|---|
+| `gyrus` | The library: parser, optimizer, both interpreters, hooks, diagnostics |
+| `gyrus-cli` | The `gyrus` binary — run a program, in any of the four modes |
+| `gyrus-tool` | The `gyrus-tool` binary — minify, validate, view, inspect, generate |
+| `gyrus-jit` | Cranelift JIT over the optimized IR, behind `gyrus --jit` |
+
+The file-by-file layout is in [Project Structure](#project-structure) below;
+this section covers the parts whose design is worth explaining.
 
 ### The Hook System
 
@@ -110,272 +103,41 @@ cannot fail.
 
 ---
 
-## Future: Interactive Debugger
+## Where a debugger will attach
 
-### Requirements
+The hook system was built for this and needs no API change to support it.
+`before_instruction` gives breakpoints, matching on step count or source
+location. `HookDecision::Break` pauses execution with
+`BfError::ExecutionPaused`. `after_instruction` gives watchpoints. A hook that
+captures state snapshots gives time-travel.
 
-An interactive debugger needs:
-1. **Breakpoints**: Pause at specific instructions
-2. **Step execution**: Execute one instruction at a time
-3. **State inspection**: View memory, pointer, loop stack
-4. **Reverse execution**: Step backwards (time-travel debugging)
-5. **Watchpoints**: Break when memory/pointer changes
-6. **Expression evaluation**: Check conditions during execution
+The one extension a full debugger would want is a `HookDecision` variant that
+replaces an instruction, for evaluating expressions in a paused context.
 
-### Proposed Design: DebuggerHook
-
-**Concept**: Implement debugger as a special hook with bidirectional communication.
-
-```rust
-pub struct DebuggerHook {
-    /// Breakpoints (instruction indices)
-    breakpoints: HashSet<usize>,
-
-    /// Watchpoints (memory addresses)
-    watchpoints: HashSet<usize>,
-
-    /// Command channel from debugger UI
-    commands: Receiver<DebugCommand>,
-
-    /// State snapshots for time-travel
-    history: VecDeque<StateSnapshot>,
-    history_limit: usize,
-
-    /// Current execution mode
-    mode: DebugMode,
-}
-
-pub enum DebugMode {
-    Running,           // Execute normally
-    StepInto,          // Pause after each instruction
-    StepOver,          // Pause after current loop completes
-    StepOut,           // Pause after exiting current loop
-    Paused,            // Waiting for user command
-}
-
-pub enum DebugCommand {
-    Continue,
-    StepInto,
-    StepOver,
-    StepOut,
-    SetBreakpoint(usize),
-    ClearBreakpoint(usize),
-    SetWatchpoint(usize),
-    Inspect,           // Dump current state
-    Reverse(usize),    // Go back N steps
-}
-```
-
-**Hook Implementation**:
-
-```rust
-impl ExecutionHook for DebuggerHook {
-    fn before_instruction(
-        &mut self,
-        instruction: &Instruction,
-        context: &HookContext,
-    ) -> HookDecision {
-        // Save state snapshot for time-travel
-        if self.mode != DebugMode::Running {
-            self.history.push_back(StateSnapshot::from(context));
-            if self.history.len() > self.history_limit {
-                self.history.pop_front();
-            }
-        }
-
-        // Check breakpoints
-        if self.breakpoints.contains(&context.instruction_index()) {
-            self.mode = DebugMode::Paused;
-        }
-
-        // Check watchpoints
-        for &addr in &self.watchpoints {
-            if context.pointer().get() == addr {
-                self.mode = DebugMode::Paused;
-            }
-        }
-
-        // Check execution mode
-        match self.mode {
-            DebugMode::Running => HookDecision::Continue,
-            DebugMode::Paused => {
-                // Wait for user command
-                self.wait_for_command(context)
-            }
-            DebugMode::StepInto => {
-                self.mode = DebugMode::Paused;
-                HookDecision::Continue  // Will pause before next instruction
-            }
-            // ... other modes
-        }
-    }
-}
-```
-
-**UI Integration**:
-
-The debugger hook communicates with a TUI/GUI via channels:
-- Hook → UI: State snapshots, pause events
-- UI → Hook: User commands
-
-**Time-Travel Debugging**:
-
-Store `StateSnapshot` at each step:
-```rust
-struct StateSnapshot {
-    memory: Vec<u8>,          // Full memory copy
-    pointer: MemoryAddress,
-    step_count: StepCount,
-    loop_stack: Vec<LoopContext>,
-}
-```
-
-For efficiency, use **copy-on-write** or **delta encoding**:
-- Only store memory diffs between steps
-- Limit history size (e.g., last 1000 steps)
-
-**Challenges**:
-
-1. **Performance**: Copying memory at every step is expensive
-   - Solution: Only enable time-travel when explicitly requested
-   - Solution: Use CoW (copy-on-write) for memory snapshots
-
-2. **I/O side effects**: Can't truly reverse I/O operations
-   - Solution: Mark I/O operations as "irreversible boundaries"
-   - Solution: Buffer I/O and only commit on user confirmation
-
-3. **Hook limitations**: Hooks can't modify execution flow arbitrarily
-   - Current design: Hooks return `HookDecision::{Continue, Break, Skip}`
-   - May need to extend with `HookDecision::Inject(Instruction)` for expression evaluation
-
-### API Changes Needed
-
-**None!** The current hook system supports debuggers without API changes. Just implement `DebuggerHook` and register it.
-
-**Optional enhancement**:
-```rust
-// Allow hooks to modify state (carefully!)
-pub enum HookDecision {
-    Continue,
-    Break,
-    Skip,
-    ReplaceInstruction(Instruction),  // NEW: For expression evaluation
-}
-```
+The interface, the layout, and the tutorial that goes with it are designed in
+[`PRD/tui_debugger_and_tutorial.md`](../PRD/tui_debugger_and_tutorial.md).
+Design documents live there rather than here, because this file describes what
+exists.
 
 ---
 
-## Future: Optimized Interpreter
+## The optimized interpreter
 
-### Goals
+`Source → AST → OptimizedProgram → execution` is the default path. `--debug`
+keeps the AST and walks it directly, trading speed for a source location on
+every instruction.
 
-1. **Instruction fusion**: `+++` → `IncrementValue(3)`
-2. **Loop optimization**: Recognize common patterns (e.g., `[-]` = clear cell)
-3. **JIT compilation**: Compile hot loops to native code
+`optimizer.rs` fuses runs of identical instructions into single operations
+(`Add`, `Sub`, `Right`, `Left`) and recognizes loop idioms: clear loops
+(`Zero`), scan loops (`SeekRight`/`SeekLeft`), and multiply loops
+(`MultiplyAdd`). The Optimizer Design section below covers what it recognizes
+and why; [`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md)
+covers what it does not, including the folds that were tried and measured as
+losses.
 
-### Proposed Design: IR Layer
-
-**Concept**: Add an intermediate representation (IR) between AST and execution.
-
-```
-Source → AST → IR → Execution
-              ↓
-              JIT (optional)
-```
-
-**IR Design**:
-
-```rust
-pub enum IrInstruction {
-    // Fused operations
-    IncrementPointer(usize),     // > repeated N times
-    DecrementPointer(usize),     // < repeated N times
-    IncrementValue(u8),          // + repeated N times (wrapping)
-    DecrementValue(u8),          // - repeated N times (wrapping)
-
-    // Optimized patterns
-    ClearCell,                   // [-] or [+] → *ptr = 0
-    MoveValue { offset: isize }, // [->+<] → ptr[offset] += ptr[0]; ptr[0] = 0
-    ScanRight,                   // [>] → while *ptr != 0 { ptr++; }
-    ScanLeft,                    // [<] → while *ptr != 0 { ptr--; }
-
-    // Unoptimized
-    Input,
-    Output,
-    Loop(Vec<IrInstruction>),
-}
-```
-
-**Optimization Pass**:
-
-```rust
-pub fn optimize(ast: &[Instruction]) -> Vec<IrInstruction> {
-    let mut ir = Vec::new();
-    let mut i = 0;
-
-    while i < ast.len() {
-        match &ast[i..] {
-            // Pattern: Multiple increments
-            [Instruction::IncrementValue, ..] => {
-                let count = count_consecutive(ast, i, |inst| {
-                    matches!(inst, Instruction::IncrementValue)
-                });
-                ir.push(IrInstruction::IncrementValue(count as u8));
-                i += count;
-            }
-
-            // Pattern: Clear cell loop
-            [Instruction::Loop(body), ..] if is_clear_loop(body) => {
-                ir.push(IrInstruction::ClearCell);
-                i += 1;
-            }
-
-            // Pattern: Move value loop
-            [Instruction::Loop(body), ..] if let Some(offset) = is_move_loop(body) => {
-                ir.push(IrInstruction::MoveValue { offset });
-                i += 1;
-            }
-
-            // Default: No optimization
-            _ => {
-                ir.push(translate_single(&ast[i]));
-                i += 1;
-            }
-        }
-    }
-
-    ir
-}
-```
-
-**Execution**:
-
-```rust
-// IR interpreter (similar to current execute_block)
-fn execute_ir(ir: &[IrInstruction], state: &mut VmState, ...) -> Result<()> {
-    for instruction in ir {
-        match instruction {
-            IrInstruction::IncrementValue(n) => {
-                // Every access goes through `cell`/`cell_at`: the cursor is
-                // signed and may sit off the tape, so this is the one place
-                // that can fail. Never index `state.memory` by the cursor.
-                let cell = state.cell(None, 0)?;
-                *cell = cell.wrapping_add(*n);
-            }
-            IrInstruction::ClearCell => {
-                *state.cell(None, 0)? = 0;
-            }
-            // ... other optimized ops
-        }
-    }
-}
-```
-
-**Benchmarks** (estimated improvements):
-
-- `+++` (3 ops) → `IncrementValue(3)` (1 op): **3x faster**
-- `[-]` (256 loop iterations) → `ClearCell` (1 op): **256x faster**
-- `[->+<]` (N loop iterations) → `MoveValue` (1 op): **Nx faster**
+`OptimizedProgram` is the interface between the optimizer and both fast
+engines. The optimized interpreter (`interpreter/optimized.rs`) and the JIT
+consume the same structure, so every fold the optimizer learns serves both.
 
 ### The JIT (`crates/gyrus-jit`)
 
@@ -398,149 +160,56 @@ points that matter to the rest of the architecture:
   statistics are counted only on request (`--verbose`), because counting
   costs; `--max-steps` counts loop iterations.
 
-The sketch below is what this section said before the JIT existed, kept for
-the record of what changed: hot-loop compilation became whole-program
-compilation, DWARF became per-site instruction indices, and the hook
-callbacks were declined.
-
-**Original concept**: For hot loops, compile IR to native code using `cranelift`.
-
-```rust
-pub struct JitCompiler {
-    builder: FunctionBuilder,
-    module: JITModule,
-}
-
-impl JitCompiler {
-    pub fn compile_loop(&mut self, ir: &[IrInstruction]) -> *const u8 {
-        // Generate machine code for IR
-        // ...
-    }
-}
-```
-
-**Execution Strategy**:
-1. Start with interpreter
-2. Track loop execution counts
-3. When loop is "hot" (e.g., >1000 iterations), compile it
-4. Replace interpreted loop with JIT-compiled version
-
-**Challenges**:
-- Safety: Must validate JIT-compiled code doesn't violate memory safety
-- Debugging: JIT code can't have source locations (unless we emit DWARF) --
-  as built, every failure site carries its instruction index instead
-- Hooks: JIT code needs to call back to hooks at appropriate points -- as
-  built, it does not, and says so
-
-### API Changes Needed
-
-**Optional optimization flag**:
-
-```rust
-pub struct ExecutionConfigBuilder {
-    // ... existing fields
-    optimization_level: OptLevel,
-    jit_enabled: bool,
-}
-
-pub enum OptLevel {
-    None,         // Direct AST interpretation (current)
-    Basic,        // Instruction fusion only
-    Aggressive,   // Pattern recognition + fusion
-}
-```
-
-**Backward compatible**: Default is `OptLevel::None`, maintaining current behavior.
+This section used to sketch a different JIT: hot loops detected at runtime and
+compiled individually, source locations via DWARF, and hook callbacks from
+compiled code. All three were dropped. Compilation became whole-program,
+locations became a per-site instruction index, and hooks were declined outright
+rather than half-supported. Git history has the sketch if the reasoning is ever
+wanted.
 
 ---
 
-## Performance Considerations
+## Performance
 
-### Current Performance (v0.3.0)
+Ratios rather than absolute times, because absolute times belong to whichever
+laptop measured them. `scripts/benchmark.sh` re-measures everything, and
+verifies the output while it does.
 
-**Characteristics**:
-- Tree-walking interpreter: ~10-50x slower than native
-- Hook overhead: <5% when hooks are enabled
-- Memory allocation: One allocation per unbounded memory expansion
+- **The optimizer is worth more than the JIT.** Fusing runs and folding loop
+  idioms is the single largest win. By the time compilation shipped, most of
+  the speedup the original plan attributed to it had already been taken by the
+  optimizer.
+- **The JIT is roughly 3x over the optimized interpreter on mandelbrot and
+  1.5x on hanoi**, and *loses* on programs that finish in a few milliseconds,
+  because compile time is part of the run — tens of milliseconds for the
+  largest programs in the corpus.
+- **The JIT is within about 1.6x of native** on mandelbrot. That gap is codegen
+  quality, not bounds checking: removing every bounds check was measured at
+  4.5%, which is why the next round is aimed at the generated code rather than
+  at the guards.
+- **Tree-walking (`--debug`) is the slow path on purpose.** It keeps the AST
+  and a source location for every instruction, which is exactly what makes its
+  errors precise.
 
-**Bottlenecks**:
-1. Indirect calls through trait objects (cell/memory models)
-2. Loop depth tracking and hook calls
-3. Bounds checking on every memory access
+Not bottlenecks: parsing, which is a fast one-time cost, and error
+construction, which is a cold path.
 
-**Not a bottleneck**:
-- Parsing is fast (one-time cost)
-- Error handling is zero-cost (cold path)
-
-### Optimization Strategy
-
-**Phase 1: Instruction Fusion** (10-100x improvement)
-- Implement IR layer with basic fusion
-- No JIT, still safe Rust
-- **Estimated effort**: 2-3 weeks
-
-**Phase 2: Pattern Recognition** (additional 10-100x for specific patterns)
-- Recognize common idioms (`[-]`, `[->+<]`, etc.)
-- Replace with optimized operations
-- **Estimated effort**: 1-2 weeks
-
-**Phase 3: JIT Compilation** -- done (`gyrus --jit`). The 10-100x this
-phase was supposed to bring had mostly been taken by phases 1 and 2 by the
-time it shipped; measured, it is 3x on mandelbrot over the optimized
-interpreter and 1.6x from native.
-
-**Total potential speedup**: 1000-100,000x (approaching native speed for optimizable code)
+[`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md) catalogues
+what is left, including the experiments that were tried and measured as losses.
 
 ---
 
-## Testing Strategy
+## Testing
 
-### Current Test Coverage
+[Testing](testing.md) describes the suite itself. The architectural point is
+that four execution paths have to agree, so the primary defense is differential
+rather than example-based: the JIT is held to the optimized interpreter, which
+is held to the tree-walker, across both the bundled corpus and generated
+programs under every memory and cell model combination.
 
-- **Parser**: 22 tests covering all syntax, errors, source locations
-- **Interpreter**: 77 tests covering execution, hooks, limits, errors
-- **Property tests**: 6 tests using proptest for fuzzing
-- **Integration tests**: CLI and tool tests
-
-**Coverage**: ~95% of core functionality
-
-### Future Test Needs
-
-**For Debugger**:
-- Breakpoint accuracy
-- State snapshot correctness
-- Time-travel consistency
-- Watchpoint triggering
-
-**For Optimizations**:
-- Semantic equivalence: `optimize(ast)` must produce same output as `ast`
-- Performance regression tests
-- Edge cases: What if optimized pattern appears in comments?
-
-**Strategy**:
-- Property-based testing: `forall ast. execute(ast) == execute(optimize(ast))`
-- Benchmark suite: Track performance across versions
-- Fuzzing: Use `cargo-fuzz` to find optimization bugs
-
----
-
-## Conclusion
-
-The current architecture (post-hook refactoring) provides excellent foundations for future development:
-
-1. **✅ Clean separation of concerns**: Parser, interpreter, instrumentation
-2. **✅ Extensible hook system**: Debuggers can be implemented as hooks
-3. **✅ Type-safe abstractions**: Memory/cell models via traits
-4. **✅ Rich error handling**: Source locations, loop call stacks
-5. **✅ Comprehensive tests**: 179 passing tests
-
-**Next steps**:
-1. Implement interactive debugger hook (no API changes needed)
-2. Add IR layer with instruction fusion (backward compatible)
-3. ~~JIT compilation for hot loops (optional feature flag)~~ shipped, as
-   whole-program compilation behind the `jit` feature
-
-The architecture is production-ready and future-proof.
+An optimizer that is subtly wrong still produces plausible output, which is why
+agreement between engines carries more weight here than any hand-written
+expectation.
 
 ## Project Structure
 
@@ -569,9 +238,12 @@ gyrus/
 │   │   │   ├── location.rs      # Source position tracking
 │   │   │   ├── types.rs         # Type-safe wrappers
 │   │   │   └── stats.rs         # Execution statistics
+│   │   ├── tests/
+│   │   │   ├── program_corpus.rs        # Real programs, end to end
+│   │   │   └── property_debug_symbols.rs # Proptest over debug symbols
 │   │   ├── benches/
-│   │   │   ├── interpreter.rs   # Interpreter benchmarks (5 benchmarks)
-│   │   │   └── parser.rs        # Parser benchmarks (5 benchmarks)
+│   │   │   ├── interpreter.rs   # Interpreter benchmarks (criterion)
+│   │   │   └── parser.rs        # Parser benchmarks (criterion)
 │   │   └── examples/            # Rust library usage examples
 │   │       ├── README.md        # Library examples documentation
 │   │       ├── basic_usage.rs   # Basic parsing & execution
@@ -579,10 +251,13 @@ gyrus/
 │   │       ├── memory_models.rs # Memory model configuration
 │   │       ├── validation.rs    # Program validation
 │   │       └── minify.rs        # Code minification
-│   └── gyrus-cli/  # CLI binary crate
-│       ├── Cargo.toml
-│       └── src/
-│           └── main.rs      # CLI interface and entry point
+│   ├── gyrus-cli/  # `gyrus` binary — program execution
+│   │   └── src/main.rs      # CLI interface and entry point
+│   ├── gyrus-tool/ # `gyrus-tool` binary — development workflows
+│   │   └── src/main.rs      # Subcommands: minify, validate, view, ...
+│   └── gyrus-jit/  # Cranelift JIT over OptimizedProgram
+│       ├── src/             # Translator, runtime, slow-path interpreter
+│       └── tests/           # Corpus, differential, and generated-program tests
 ├── programs/                # BrainFuck programs for testing
 │   ├── README.md            # Programs documentation
 │   ├── basic/               # Simple demonstration programs
@@ -603,9 +278,12 @@ gyrus/
 │       ├── CREDITS.md       # Per-file attribution and licenses
 │       ├── advanced/        # Complex programs (quine, factor, mandelbrot, ...)
 │       └── utilities/       # Small utilities from Cristofani's collection
+├── benchmarks/expected/     # Golden outputs, diffed by scripts/benchmark.sh
+├── scripts/                 # Gates: MSRV, doc links, examples, tape access, benchmarks
 ├── PRD/                     # Designs for things not yet built
 ├── docs/                    # User-facing documentation (this file lives here)
 ├── Cargo.toml               # Workspace root
+├── rust-toolchain.toml      # The pinned development compiler
 └── README.md
 ```
 
@@ -670,10 +348,11 @@ pub enum OptimizedInstruction {
 
     // Loop patterns
     Zero(SourceRange),              // [-]
+    Set(u8, SourceRange),           // [-]+++ → Set(3)
     SeekRight(usize, SourceRange),  // [>], [>>], ... (stride)
     SeekLeft(usize, SourceRange),   // [<], [<<], ...
-    MoveRight(usize, SourceRange),  // [->+<] move value N cells right
-    MoveLeft(usize, SourceRange),   // [-<+>] move value N cells left
+    // [->+++>+<<] → cell[ptr+offset] += cell[ptr] * mul, then cell[ptr] = 0
+    MultiplyAdd(Vec<(isize, u8)>, SourceRange),
 
     // General loops (recursively optimized body)
     Loop(Vec<OptimizedInstruction>, SourceRange),
@@ -684,19 +363,30 @@ pub struct OptimizedProgram {
     pub instructions: Vec<OptimizedInstruction>,
     pub original_count: usize,
     pub optimized_count: usize,
+    /// Not every fold is valid under every cell model, so a program is only
+    /// meaningful under the one it was built for. `interpret_optimized`
+    /// rejects a mismatch rather than running folds that do not hold.
+    pub cell_model: CellModel,
 }
 ```
 
 **API:**
 
 ```rust
-/// Main entry point: optimize BF AST to IR
+/// Optimize for the default cell model (u8 wrapping)
 pub fn optimize(instructions: &[Instruction]) -> OptimizedProgram
+
+/// Optimize for a specific cell model; checked cells disable the folds
+/// that would swallow an overflow the program should have reported
+pub fn optimize_with_cell_model(
+    instructions: &[Instruction],
+    cell_model: CellModel,
+) -> OptimizedProgram
 ```
 
 ### Implemented Optimizations
 
-### 1. Instruction Fusion
+#### 1. Instruction Fusion
 
 Combines sequential operations of the same type:
 
@@ -711,7 +401,7 @@ Combines sequential operations of the same type:
 
 **Saturation:** Counts saturate at 255 for Add/Sub (u8 limit), unlimited for Right/Left (usize).
 
-### 2. Loop Pattern Recognition
+#### 2. Loop Pattern Recognition
 
 Detects common idioms and converts to single operations:
 
@@ -721,14 +411,15 @@ Detects common idioms and converts to single operations:
 | Set | `[-]+++` | `Set(3)` | Clear, then store a constant |
 | Seek right | `[>]`, `[>>]`, ... | `SeekRight(stride)` | Find next zero cell (right), `stride` cells at a time |
 | Seek left | `[<]`, `[<<]`, ... | `SeekLeft(stride)` | Find previous zero cell (left), `stride` cells at a time |
-| Move right | `[->+<]` | `MoveRight(1)` | Move value 1 cell right, zero source |
-| Move left | `[-<+>]` | `MoveLeft(1)` | Move value 1 cell left, zero source |
+| Move | `[->+<]` | `MultiplyAdd([(1, 1)])` | Add to offset 1, zero source |
+| Copy | `[->+>+<<]` | `MultiplyAdd([(1, 1), (2, 1)])` | Add to two offsets, zero source |
+| Multiply | `[->+++<]` | `MultiplyAdd([(1, 3)])` | Add 3x to offset 1, zero source |
 
 **Implementation:** `recognize_loop_pattern()` function pattern-matches on loop body.
 
 **Filter:** LoopCheck instructions are filtered out before pattern matching.
 
-### 3. Source Location Tracking
+#### 3. Source Location Tracking
 
 Every optimized instruction tracks its origin:
 
@@ -746,7 +437,7 @@ Every optimized instruction tracks its origin:
 - Profiler can attribute time to original instructions
 - Debugger can set breakpoints on original code
 
-### 4. Recursive Loop Optimization
+#### 4. Recursive Loop Optimization
 
 Nested loops are optimized recursively:
 
@@ -768,43 +459,35 @@ Loop([
 
 
 
-### Future Optimizations (Not Implemented Yet)
+### Not implemented
 
-### Copy Patterns
-- `[->+>+<<]` → `CopyRight([1, 2])` - Copy value to multiple offsets
-- Preserves source cell value
+- **Dead code elimination** — unreachable code after an infinite loop, no-op
+  sequences.
+- **Constant propagation** — track known cell values, drop the operations that
+  are then redundant.
 
-### Multi-cell Moves
-- `[->>+<<]` → `MoveRight(2)` - Move value N cells (N > 1)
-- Currently only N=1 is implemented
+Copy, multi-cell move, and multiplication patterns used to be listed here. They
+are all `MultiplyAdd` now: it takes a list of `(offset, multiplier)` pairs, so
+one variant covers all three.
 
-### Multiplication Patterns
-- `[->+++<]` → `MultiplyAdd(1, 3)` - Multiply current cell by 3, add to offset 1
-- Common in arithmetic-heavy programs
-
-### Dead Code Elimination
-- Remove unreachable code after infinite loops
-- Remove no-op sequences
-
-### Constant Propagation
-- Track known cell values through execution
-- Eliminate redundant operations
+[`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md) is the live
+catalogue — what is missing, what was tried, and what was measured as a loss.
 
 ### Integration Points
 
-### Parser Integration
+#### Parser Integration
 ```rust
 let instructions = parse(source)?;
 let optimized = optimize(&instructions);
 ```
 
-### Interpreter Integration (TODO)
+#### Interpreter Integration
 ```rust
-// New optimized interpreter (to be implemented)
-interpret_optimized(&optimized.instructions, config)?;
+let optimized = optimize(&instructions);
+interpret_optimized(&optimized, config, debug_info.as_ref())?;
 ```
 
-### Profiler Integration
+#### Profiler Integration
 ```rust
 // Map profiling data back to original source using SourceRange
 for inst in &optimized.instructions {
@@ -813,7 +496,7 @@ for inst in &optimized.instructions {
 }
 ```
 
-### Debugger Integration (Future)
+#### Debugger Integration (Future)
 ```rust
 // Set breakpoints on original source locations
 // Optimized interpreter respects SourceRange for debugging
@@ -853,31 +536,19 @@ for inst in &optimized.instructions {
 
 ### Performance Characteristics
 
-### Optimization Pass
+#### Optimization Pass
 - **Time Complexity:** O(n) where n = instruction count
 - **Space Complexity:** O(n) for optimized program
 - **Fast enough to run on every execution**
 
-### Expected Runtime Speedup
-- Simple arithmetic: **5-10×** (heavy fusion)
-- Pointer movement: **10-20×** (pointer fusion)
-- Loop-heavy: **2-5×** (pattern recognition + fusion)
-- I/O-heavy: **1.5-2×** (less opportunity for fusion)
+#### Runtime speedup
 
-### Next Steps
-
-1. ✅ Design OptimizedInstruction IR with SourceRange
-2. ✅ Implement instruction fusion
-3. ✅ Implement loop pattern recognition
-4. ✅ Add unit tests (7 tests)
-5. ⏳ Implement optimized interpreter
-6. ⏳ Add benchmarks comparing optimized vs unoptimized
-7. ⏳ Integrate with CLI (--optimize flag)
-8. ⏳ Profile hanoi.bf and mandelbrot.bf with optimizations
+Measured rather than estimated: see the [Performance](#performance) section
+above, and re-measure with `scripts/benchmark.sh`.
 
 ### References
 
 - Original AST: `src/instruction.rs`
 - Parser: `src/parser.rs`
-- Interpreter: `src/interpreter.rs`
+- Interpreter: `src/interpreter/`
 - Benchmarks: `scripts/benchmark.sh`, golden outputs in `benchmarks/expected/`

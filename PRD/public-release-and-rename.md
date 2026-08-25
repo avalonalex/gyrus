@@ -1,8 +1,8 @@
 # PRD: Public Release — Rename to `gyrus` and Repository Hygiene
 
-**Status**: In Progress — Phases 1-4 complete except CI (deferred to Phase 5,
-see S3); Phase 5 (release) remaining
-**Last Updated**: 2026-08-23
+**Status**: In Progress — Phases 0-4 complete; Phase 5 (release) remaining:
+CHANGELOG, tag, flip to public, then CI
+**Last Updated**: 2026-08-25
 **Priority**: High (blocks first public push)
 
 ## Summary
@@ -212,8 +212,12 @@ subdirectories. `README.md:986-987` still lists "Performance optimizations" and
 "JIT/AOT compiler backend" as unchecked roadmap items while an optimizer and an
 optimized interpreter exist. Newcomers judge the project by exactly these files.
 
-**S5 — Overclaiming.** ✅ Resolved in the README, both crate descriptions, the
-programs docs, and the GitHub repo description. Original finding follows. "An industry-strength BrainFuck interpreter/compiler"
+**S5 — Overclaiming.** ✅ Resolved in the README, both crate descriptions, and
+the programs docs. The GitHub repo description was listed as done here but was
+not — it still read "production strength tooling for the BrainFuck programming
+language" on 2026-08-25, which is the README's joke with the punchline missing.
+Fixed then, to the full line. A claim recorded as resolved in a status document
+is not a resolved claim; this is the third instance in this file alone. Original finding follows. "An industry-strength BrainFuck interpreter/compiler"
 (`README.md:3`) and "production-grade" (library crate description) invite
 eye-rolls. The `azores` README is the model to copy: state plainly what it is,
 that it's a learning-driven project, and that it was written with AI assistance.
@@ -279,7 +283,15 @@ documentation, archive, or delete.
   *strongest* ones to redistribute, while the unlicensed bylined programs are
   the weakest. Purging would have cost the benchmark corpus for no legal gain.
 - `benchmarks/mandelbrot`: **untracked going forward**, blob left in history.
-- Commit email: still open.
+- **Commit email: rewritten.** Resolved 2026-08-25. All 160 commits moved from
+  `yuhanhao@gmail.com` to `1143520+avalonalex@users.noreply.github.com` with
+  `git filter-repo`, trees verified byte-identical, force-pushed to `main`.
+  Known limit, accepted deliberately: GitHub keeps every PR's commits at
+  `refs/pull/N/head` regardless of what `main` says, so PRs #1-#19 still carry
+  the old address for anyone who fetches those refs. Scrubbing that too would
+  mean deleting and recreating the repository, which costs all 19 PRs and their
+  discussion — where a good deal of this project's reasoning lives, the
+  negative results especially. Not worth it.
 - **crates.io: not publishing.** Decided 2026-08-23. This is a learning
   project, not a dependency anyone should take on, and a registry name is a
   commitment to maintain. `publish = false` in `[workspace.package]` makes
@@ -349,9 +361,16 @@ states what it depends on.
 
 1. Tag `v0.3.0`, write a short `CHANGELOG.md` covering 0.1 → 0.3.
 2. Flip the repository to public.
-3. **Add CI** once public (Actions is free for public repositories). The
-   workflow below was written and its every gate verified locally under the
-   pinned toolchain; commit it verbatim as `.github/workflows/ci.yml`.
+3. **Add CI** once public (Actions is free for public repositories). Commit the
+   workflow below verbatim as `.github/workflows/ci.yml`.
+
+   Refreshed 2026-08-25, because the version parked here in August had already
+   rotted: it predated the `gyrus-jit` crate and three of the five check
+   scripts, and its smoke test never exercised the JIT. Every gate below was
+   re-verified locally on that date under the pinned toolchain — 383 tests
+   passing, fmt clean, `clippy --all-targets --all-features -D warnings` exit 0,
+   `check-msrv.sh` green on 1.95 including `gyrus-jit`, and the three Python
+   checks passing.
 
 ```yaml
 name: CI
@@ -394,6 +413,9 @@ jobs:
     - name: Smoke test the CLI
       run: |
         test "$(./target/release/gyrus programs/basic/hello_world.bf)" = "Hello World!"
+        # The JIT is a separate engine reached only through this flag; a unit
+        # test cannot catch the CLI failing to wire it up.
+        test "$(./target/release/gyrus --jit programs/basic/hello_world.bf)" = "Hello World!"
         ./target/release/gyrus-tool minify programs/basic/hello_world.bf > /dev/null
 
   # Reads rust-version from Cargo.toml and installs that toolchain itself, so
@@ -409,10 +431,11 @@ jobs:
     - run: scripts/check-msrv.sh
 
   # The README documented `gyrus --validate` and `gyrus --minify` for months
-  # after both moved to gyrus-tool subcommands. This job makes that class of
-  # rot fail the build instead of waiting for a reader to hit it.
+  # after both moved to gyrus-tool subcommands. These jobs make that class of
+  # rot fail the build instead of waiting for a reader to hit it. Each script
+  # exists because the claim it checks was wrong at least once.
   docs:
-    name: Documented commands exist
+    name: Documented claims hold
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -421,6 +444,11 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - run: cargo build --release --workspace
     - run: scripts/check-readme-commands.py
+    - run: scripts/check-doc-links.py
+    - run: scripts/check-tape-access.py
+    # Runs each example rather than only building it: clippy already builds
+    # them, and building was not enough when MemoryAddress became signed.
+    - run: scripts/check-examples.sh
 
   fmt:
     name: Rustfmt

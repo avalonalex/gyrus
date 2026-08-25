@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-gyrus is a BrainFuck interpreter, optimizer, and debugger written in Rust,
-built as a learning project. Rust edition 2024, MSRV 1.95 (Cranelift's floor;
+gyrus is a BrainFuck interpreter, optimizer, and JIT written in Rust, built as
+a learning project. (A debugger is designed but not built -- see `PRD/`. Do not
+describe one as existing.) Rust edition 2024, MSRV 1.95 (Cranelift's floor;
 the library alone would need 1.88 for let-chains); `rust-toolchain.toml` pins
 the development compiler.
 
@@ -292,8 +293,10 @@ ExecutionConfig::builder()
 - Mix with any MemoryModel for your specific needs
 
 **For contributors**:
-- Cell arithmetic delegation is in `interpreter.rs:205-214`
-- CellModel trait and implementations are in `config.rs`
+- Cell arithmetic delegation is in `interpreter/execution.rs` (tree-walker) and
+  `interpreter/optimized.rs` (optimized path), both calling `try_increment` /
+  `try_decrement`
+- CellModel trait and implementations are in `config/cell_model.rs`
 - Cell-model-aware validation is in `validator.rs`
 - Trait-based design allows easy extension (I8Wrapping, U16Wrapping, etc.)
 
@@ -356,14 +359,10 @@ This is a Cargo workspace with the following crates:
   - Subcommand-based CLI (minify, validate, debug-info)
   - Binary name: `gyrus-tool`
 
-**Benefits of workspace structure**:
-- ✅ Clear separation between library, execution CLI, and development tools
-- ✅ Easy to add new binaries (debugger, REPL, JIT compiler)
-- ✅ Library is usable on its own as a path or git dependency
-- ✅ Each crate can have its own version
-- ✅ Faster incremental compilation
-- ✅ Clean module boundaries prevent coupling
-- ✅ Tool features don't clutter the execution CLI
+**Why the workspace split**: the library is usable on its own as a path or git
+dependency; development tooling does not clutter the execution CLI; module
+boundaries stay honest because crossing one requires a manifest edit; and a new
+binary (debugger, REPL) is a new crate rather than another flag.
 
 ## Common Commands
 
@@ -535,10 +534,11 @@ Warnings detected:
 
 Note: Common patterns like `[>]`, `[<]`, and `[-]` are NOT flagged as they're standard BF idioms.
 
-CLI integration:
-- `--validate`: Show warnings and exit (does not execute)
-- Validation always assumes u8 wrapping (production/JIT target)
-- Independent of runtime cell model
+CLI integration (`gyrus-tool validate FILE`, not a `gyrus` flag):
+- `--cell-model`: model to assume while validating (default: wrapping)
+- `--strict`: exit non-zero if any warning is found, for CI
+- `--verbose`: extra validation context
+- Independent of the runtime cell model used to execute
 
 ## Minification System
 
@@ -548,13 +548,14 @@ Converts parsed instructions back to minimal BrainFuck source:
 - **minify_instructions()**: Recursive conversion of AST to BF code
 - Strips all comments (line and implicit)
 - Removes all whitespace and formatting
-- Typical size reduction: 95%+
+- Size reduction depends entirely on how commented the source is: 94.9% on
+  `programs/basic/line_comments.bf` (514 bytes to 26), 49.6% on the dense
+  `life.bf` (1,479 to 745). Do not quote a single headline number
 - Round-trip property: parse → minify → parse yields identical AST
 
-CLI integration:
-- `--minify`: Output minified code
+CLI integration (`gyrus-tool minify FILE`, not a `gyrus` flag):
 - `-o/--output FILE`: Write to file instead of stdout
-- `--verbose` with minify: Show compression stats
+- `-v/--verbose`: Show compression stats
 
 ## Testing
 
@@ -591,91 +592,31 @@ To add new tests:
 7. For runtime errors, test both with and without debug info
 8. For error formatting, use `format!("{}", error)` to get full output
 
-## Future Architecture Notes
+## What exists, and what does not
 
-The roadmap includes:
-- **Debugger**: ✅ Hook infrastructure complete! Build on top of `ExecutionHook` trait
-  - Breakpoints: Use `before_instruction` hook with step count or source location matching
-  - Step execution: Return `HookDecision::Break` to pause, resume by calling interpret again
-  - Watchpoints: Use `after_instruction` hook to monitor memory changes
-  - Time-travel debugging: Capture state snapshots in hooks, allow forward/backward navigation
-- **Compiler**: Planned JIT/AOT backend - consider IR layer between parser and execution
-- **Optimizations**: Instruction fusion (e.g., `+++` → IncrementValue(3)) will require AST transformation pass
-- **Validation pass**: ✅ Complete - static analysis for warnings (dead loops, suspicious patterns)
+The ✅/⏳ status tables that used to end this file are gone. They were a
+snapshot, they were wrong (they still listed the JIT as unbuilt after it
+shipped), and the repository has a rule against exactly that kind of record.
+What follows is the shape of the thing, which changes far more slowly.
 
-**Hook System Integration (Complete):**
-- `HookContext` provides full state access: memory, pointer, step count, source location, loop depth
-- `HookDecision::Break` pauses execution with `BfError::ExecutionPaused`
-- `HookDecision::Skip` allows instruction filtering/modification
-- Zero overhead when hooks not used (`Option<HookManager>`)
+**Built and shipped**: the parser with full source locations, four execution
+paths (tree-walking, optimized, JIT, tracing), the optimizer, the hook system
+with its built-in hooks, static validation, minification, syntax highlighting,
+debug symbols, the string-to-BrainFuck compiler, the program generator, and the
+`gyrus-tool` subcommands.
 
-## Implementation Status
+**Not built**: a TUI debugger, a REPL, an AOT backend on the JIT's translator,
+and a macro preprocessor. Each has a design in `PRD/`; none has code.
 
-**Completed (Phase 1, 2.1, 2.2, 3.1, 3.2, 4.1 from PRD + Community features)**:
-- ✅ Source location tracking (Phase 1)
-  - Parse errors include line/column
-  - Runtime errors include source location via debug symbols
-  - Runtime warnings include source location
-- ✅ Rich error messages with context (Phase 1)
-  - **Syntax-highlighted error and warning messages** (NEW)
-  - ANSI 24-bit RGB color support
-  - Color-coded BrainFuck commands by type
-  - Red caret pointing at exact instruction
-  - Line numbers and loop nesting visualization
-- ✅ Execution limits (step count, timeout) (Phase 3.1)
-- ✅ Configurable memory size (Phase 3.1)
-- ✅ Verbose mode (Phase 1)
-- ✅ Comprehensive test suite (unit, integration, property, and doc tests)
-  - Added 8 comprehensive tests for error formatting and source location tracking
-  - Added 8 tests for hook infrastructure (context creation, manager dispatch, early exit)
-  - Tests cover single-char programs, multiline, nested loops, comments, hooks
-- ✅ Validation pass with warnings (Phase 2.1)
-- ✅ Line comments using `*` (Community feature)
-- ✅ Code minification (Phase 4.1)
-- ✅ Better bracket matching - multiple errors (Phase 2.2)
-- ✅ Multiple memory models (Phase 3.2)
-  - Fixed and Unbounded models (aligned with JIT/AOT goals)
-  - CLI flags for model selection
-  - Comprehensive testing
-- ✅ Execution statistics tracking (Community feature)
-  - Steps, loop iterations, memory usage
-  - I/O tracking
-  - Stats and warnings shown with `--verbose` flag
-- ✅ Advanced I/O error handling (Phase 3.3)
-  - EOF behavior configuration (SetZero, SetNegOne, NoChange, Error)
-  - `--eof-behavior` CLI flag
-  - Graceful EOF handling in Input instruction
-- ✅ Configurable cell arithmetic (CellModel)
-  - U8Wrapping: Standard BrainFuck (production, aligns with JIT/AOT)
-  - U8Checked: Strict debugging mode (catches overflow/underflow bugs)
-  - Cell-model-aware validation
-  - `--cell-model` CLI flag
-  - Fully orthogonal with MemoryModel (any combination supported)
-- ✅ Runtime warnings with source location
-  - MemoryExpanded: Shows unbounded memory growth with syntax highlighting
-  - **Display behavior**: Only shown with `--verbose` flag
-  - **Note**: Cell overflow/underflow warnings removed - wrapping is standard BF behavior
-- ✅ **Plugin/Hook Architecture** (Foundation for debugger, profiler, tracer)
-  - Complete hook system with 5 hook points: before/after instruction, loop enter/exit, completion
-  - `ExecutionHook` trait for custom execution observers
-  - `HookManager` for efficient hook dispatch
-  - `HookContext` provides immutable state snapshots (memory, pointer, step count, source location, loop depth)
-  - `HookDecision` enum for execution control (Continue, Break, Skip)
-  - Zero-cost abstraction when hooks disabled (Option<HookManager>)
-  - Builder pattern integration: `with_hook()`, `with_hooks_enabled()`
-  - 8 unit tests for hook infrastructure
-  - All tests passing
-  - **Enables**: Interactive debuggers, profilers, execution tracers, time-travel debugging
+**The hook system is the debugger's foundation** and needs no API change to
+support one:
+- `HookContext` gives memory, pointer, step count, source location, loop depth
+- `before_instruction` + step-count or location matching gives breakpoints
+- `HookDecision::Break` pauses with `BfError::ExecutionPaused`
+- `after_instruction` gives watchpoints; state snapshots give time-travel
+- `Option<HookManager>` means zero overhead when nothing is registered
+- The JIT declines hooks outright rather than half-supporting them: a
+  configuration carrying hooks is refused
 
-**Remaining (from PRD)**:
-- ⏳ Built-in hooks (StepBreakpoint, InstructionCounter, MemoryWatcher)
-- ⏳ Hook usage examples and documentation
-- ⏳ Debug symbols and runtime diagnostics (Phase 4.2) - partially complete with Phase 2
-- ⏳ Visual TUI debugger (foundation ready via hooks)
-- ⏳ Performance optimizations (instruction fusion, I/O buffering)
-- ⏳ JIT/AOT compiler backend
-
-**Project Structure Improvements**:
-- ✅ Workspace migration (v0.2.0)
-  - Separated core library from CLI binary
-  - Foundation for future crates (debugger, REPL, JIT)
+For anything more specific than this, read the code or `docs/`. For why a
+decision was made, read git history.
