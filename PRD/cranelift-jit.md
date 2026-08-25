@@ -129,7 +129,10 @@ counter is never emitted, as `CHECK_LIMITS = false` deletes the check today.
 conditional move); `cells_modified` by scanning the tape at exit;
 `memory_allocated` the tape length. `warnings` empty. Every statistic both
 engines define alike is equal by test; `total_steps` is the one in different
-units (optimized instructions there, loop iterations here).
+units (optimized instructions there, loop iterations here). Tracked only on
+request (`Statistics::Full`, which `--verbose` selects): the peak notes and
+the counter cost 8% of mandelbrot and 20% of hanoi, and nothing but
+`--verbose` reads them.
 
 ### Translation
 

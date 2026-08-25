@@ -232,13 +232,43 @@ enum Site {
 
 type Entry = extern "C" fn(*mut c_void) -> i32;
 
-/// Compile `program` and run it on `config`'s tape with the given I/O.
+/// How much of `ExecutionStats` to track.
+///
+/// Every counter the JIT keeps costs something on the paths it runs on:
+/// the peak-cell notes and the iteration counter together were 8% of
+/// mandelbrot and 20% of hanoi, and `--verbose` is their only reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Statistics {
+    /// Track nothing that costs a register or an instruction. What is free
+    /// is still reported -- bytes in and out, tape length, cells modified --
+    /// and `total_steps`, `loop_iterations` and `peak_memory_used` read as
+    /// zero, because they were not counted.
+    Cheap,
+    /// Track everything, exactly as the interpreter does; the statistics
+    /// both engines define alike are then equal.
+    Full,
+}
+
+/// Compile `program` and run it on `config`'s tape with the given I/O,
+/// tracking full statistics. See [`run_with`].
 pub fn run(
     program: &OptimizedProgram,
     config: &ExecutionConfig,
     input: &mut dyn BfInput,
     output: &mut dyn BfOutput,
     debug_info: Option<&DebugInfo>,
+) -> Result<ExecutionStats> {
+    run_with(program, config, input, output, debug_info, Statistics::Full)
+}
+
+/// Compile `program` and run it on `config`'s tape with the given I/O.
+pub fn run_with(
+    program: &OptimizedProgram,
+    config: &ExecutionConfig,
+    input: &mut dyn BfInput,
+    output: &mut dyn BfOutput,
+    debug_info: Option<&DebugInfo>,
+    statistics: Statistics,
 ) -> Result<ExecutionStats> {
     // A program is only meaningful under the cell model it was optimized
     // for; the interpreter refuses the mismatch for the same reason.
@@ -263,6 +293,7 @@ pub fn run(
         grows: matches!(memory_model, MemoryModel::Unbounded(_)),
         limited: limits.armed(),
         initial_countdown: limits.countdown(0),
+        stats: statistics == Statistics::Full,
     };
     let (entry, sites, _module) = compile(program, options)?;
 
@@ -333,7 +364,10 @@ pub fn run(
         loop_iterations: rt.iterations,
         // The `+ 1` that turns a highest index into a count, as
         // `VmState::peak_cells_used` does.
-        peak_memory_used: MemorySize::new(rt.peak as usize + 1),
+        peak_memory_used: match statistics {
+            Statistics::Full => MemorySize::new(rt.peak as usize + 1),
+            Statistics::Cheap => MemorySize::new(0),
+        },
         cells_modified: rt.tape.iter().filter(|&&c| c != 0).count(),
         bytes_read: rt.bytes_read,
         bytes_written: rt.bytes_written,
@@ -385,6 +419,8 @@ struct Options {
     /// Limits armed: loop iterations count down to a `bf_tick`.
     limited: bool,
     initial_countdown: u64,
+    /// Full statistics: note the peak cell and count iterations.
+    stats: bool,
 }
 
 /// Translate and compile. The module is returned so the code stays mapped.
@@ -484,7 +520,7 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
         if options.grows {
             t.load_tape();
         }
-        t.block(&program.instructions, true);
+        t.block(&program.instructions, options.stats);
         t.store_counters();
         let ok = t.b.ins().iconst(types::I32, 0);
         t.b.ins().return_(&[ok]);
@@ -745,6 +781,9 @@ impl Translator<'_> {
     /// is done once per loop execution where the body is balanced (see
     /// `Loop`) and once per run elsewhere (see `block`).
     fn note_peak(&mut self, cursor: Value, offset: i64) {
+        if !self.options.stats {
+            return;
+        }
         let position = self.b.ins().iadd_imm_s(cursor, offset);
         let peak = self.b.use_var(self.vars.peak);
         let peak = self.b.ins().umax(peak, position);
@@ -871,6 +910,11 @@ impl Translator<'_> {
             self.b.def_var(self.vars.countdown, next);
             self.b.ins().jump(go, &[]);
             self.b.switch_to_block(go);
+        }
+        // The counter is a statistic, and the tick's input: with neither
+        // wanted it is not kept.
+        if !self.options.stats && !self.options.limited {
+            return;
         }
         let iterations = self.b.ins().iadd_imm_s(completed, 1);
         self.b.def_var(self.vars.iterations, iterations);
@@ -1035,8 +1079,8 @@ impl Translator<'_> {
                 // on the iteration path, where a note cost 9% of mandelbrot.
                 let (net, furthest) = extent(body);
                 let balanced = net == Some(0);
-                let note = match (balanced, furthest) {
-                    (true, Some(furthest)) => {
+                let note = match (self.options.stats, balanced, furthest) {
+                    (true, true, Some(furthest)) => {
                         Some((furthest, self.b.use_var(self.vars.iterations)))
                     }
                     _ => None,
@@ -1049,7 +1093,7 @@ impl Translator<'_> {
                 self.loop_test(index, body_block, after);
                 self.b.switch_to_block(body_block);
                 self.body_entry(index);
-                self.block(body, !balanced);
+                self.block(body, self.options.stats && !balanced);
                 self.b.ins().jump(header, &[]);
                 self.b.switch_to_block(after);
                 if let Some((furthest, entered_at)) = note {

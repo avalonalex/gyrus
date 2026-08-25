@@ -64,6 +64,10 @@ Where it differs, on purpose:
   A loop that ends exactly at its budget completes, as in the interpreter.
 - **Compile time is part of the run.** Tens of milliseconds for the largest
   programs in the corpus; a program too short to loop is faster interpreted.
+- **Statistics are counted only when asked for.** Keeping the counters costs
+  up to a fifth of the run, so the JIT keeps them only under `--verbose`,
+  which is the only thing that prints them. With `--verbose` every statistic
+  both engines define alike is equal.
 
 Everything else -- memory models, growth on access under `--memory-model
 unbounded`, cell models, EOF behaviour, the timeout, and every statistic both

@@ -15,7 +15,14 @@ fn main() {
     let config = ExecutionConfig::default();
     let mut input = StdInput;
     let mut output = StdOutput;
-    match gyrus_jit::run(&program, &config, &mut input, &mut output, None) {
+    match gyrus_jit::run_with(
+        &program,
+        &config,
+        &mut input,
+        &mut output,
+        None,
+        gyrus_jit::Statistics::Cheap,
+    ) {
         Ok(_) => {}
         Err(e) => {
             eprintln!("Error: {e}");

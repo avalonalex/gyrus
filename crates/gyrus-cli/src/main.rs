@@ -289,12 +289,19 @@ fn run() -> Result<(), BfError> {
         #[cfg(feature = "jit")]
         {
             let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
-            match gyrus_jit::run(
+            // Counting costs; --verbose is the only thing that reads the counts.
+            let statistics = if cli.verbose {
+                gyrus_jit::Statistics::Full
+            } else {
+                gyrus_jit::Statistics::Cheap
+            };
+            match gyrus_jit::run_with(
                 &optimized,
                 &config,
                 &mut input,
                 &mut output,
                 debug_info.as_ref(),
+                statistics,
             ) {
                 Ok(s) => s,
                 Err(e) => {

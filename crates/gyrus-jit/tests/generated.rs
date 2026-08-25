@@ -141,8 +141,22 @@ fn generated_programs_agree_under_every_configuration() {
                 continue;
             }
             let (mut i, mut o) = (StringIo::new("hello, world"), StringIo::empty());
+            // Both statistics modes generate different code; alternate.
+            let statistics = if seed % 2 == 0 {
+                gyrus_jit::Statistics::Cheap
+            } else {
+                gyrus_jit::Statistics::Full
+            };
             let jit = outcome(
-                gyrus_jit::run(&program, &build(JIT_STEPS), &mut i, &mut o, None).map(|_| ()),
+                gyrus_jit::run_with(
+                    &program,
+                    &build(JIT_STEPS),
+                    &mut i,
+                    &mut o,
+                    None,
+                    statistics,
+                )
+                .map(|_| ()),
                 o.output_bytes().to_vec(),
             );
             compared += 1;
