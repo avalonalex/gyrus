@@ -17,15 +17,8 @@ grows on demand, and the three semantic knobs — memory model, cell model, EOF
 behaviour — are fully independent, so you can match whatever dialect your
 program was written against instead of arguing with the interpreter.
 
-The language deserves none of this. That is the fun.
-
-What it is being asked to support: BrainFuck has eight instructions, no
-variables, no functions, no types, and no error messages. It was built in 1993
-to see how small a compiler could get, and it succeeded so completely that
-writing anything in it is closer to a dare than to programming.
-
 A *gyrus* is a fold of the cerebral cortex. The word also reads as *gyre* — a
-loop, a spiral — which is most of what a BrainFuck program is.
+loop, a spiral.
 
 > **Note**: written with AI assistance (Claude), as a project for learning how
 > interpreters, optimizers, and debuggers fit together. Built in earnest, which
@@ -33,9 +26,8 @@ loop, a spiral — which is most of what a BrainFuck program is.
 
 ## What a real error message looks like
 
-Here is what BrainFuck traditionally tells you when your brackets do not
-balance: nothing. The program runs until it does something unforgivable, and
-you find out by watching the memory fill with garbage.
+Most implementations say nothing when your brackets do not balance. The
+program runs, does the wrong thing, and you work backwards from the output.
 
 Here is what gyrus says instead — with syntax highlighting, in a real
 terminal:
@@ -50,9 +42,8 @@ Error: Unmatched '[' at line 12, column 1
    13 |             * This will cause a parse error
 ```
 
-Every bracket error is reported in one pass, not one per run, because finding
-your mistakes one at a time is a punishment the language already inflicts
-enough of. Runtime errors carry the same context under `--debug`: the parser
+Every bracket error is reported in one pass, not one per run. Runtime errors
+carry the same context under `--debug`: the parser
 keeps a source location for every single instruction, so "cell overflow at
 instruction 5042" becomes a line, a column, and a caret.
 
@@ -74,8 +65,6 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 1.88, where let-chains stabilized.
 
 ## Features
-
-The unreasonable part is that all of this actually works.
 
 **Execution**
 - Four execution modes: an optimized interpreter (default), a Cranelift JIT
@@ -137,9 +126,7 @@ mandelbrot -- and slower on programs that finish before it has finished
 compiling. See [execution models](docs/execution-models.md#the-jit).
 
 **Planned**: a TUI debugger with breakpoints and memory visualization, a REPL,
-and an AOT build on the JIT's translator — because if you are going to
-over-engineer a BrainFuck implementation, you may as well. Designs live in
-[`PRD/`](PRD/).
+and an AOT build on the JIT's translator. Designs live in [`PRD/`](PRD/).
 
 ## Development
 
@@ -176,6 +163,3 @@ This is a personal learning project, so there is no roadmap to sign up for. Bug
 reports and corrections are welcome all the same — particularly if you wrote
 one of the programs under `programs/third-party/` and want it credited
 differently or removed.
-
-If you found a genuine bug in a BrainFuck interpreter, you have my sincere
-respect for how you spent your afternoon.
