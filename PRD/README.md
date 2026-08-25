@@ -11,8 +11,8 @@ in August 2026, and it is the rule that keeps it readable.
 
 | Document | Status | Priority |
 |---|---|---|
-| [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | Medium |
-| [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design complete, unimplemented | Low |
+| [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | **High — the next thing to build** |
+| [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design reviewed and scoped 2026-08-25, unimplemented | Low — after the debugger |
 
 ## Writing one
 

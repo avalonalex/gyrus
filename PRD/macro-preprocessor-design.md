@@ -1,4 +1,50 @@
-# BrainFuck Macro Preprocessor Design
+# PRD: BrainFuck Macro Preprocessor
+
+**Status**: Not started — design predates the rest of this directory's
+conventions and was reviewed 2026-08-25; see Decisions below
+**Last Updated**: 2026-08-25
+**Priority**: Low — behind the TUI debugger, which is the next thing to build
+
+## Decisions taken on review, 2026-08-25
+
+The design below is kept, with four changes. Where it and this section
+disagree, this section is what was decided.
+
+**Source mapping moves to the first phase.** The plan has it in phase 4, weeks
+7-8, after variables, macros and parameters -- while phase 1's own success
+criteria claim "good error messages". Those cannot both be true: a macro that
+expands to four thousand characters of BrainFuck and then reports a cell
+overflow at column 3,847 of the *expanded* output is precisely the experience
+gyrus exists to replace. Located errors are the project's identity, not a
+finishing touch, and retrofitting a mapping through an expander that was not
+built to carry one is the kind of work that does not get done. It is the
+hardest part of the feature and it goes first.
+
+**The language stops at phase 1.** Constants, `+{N}` repetition, named
+variables with pointer tracking, and `@macro` with parameters. Conditionals,
+includes, a standard library, and the assembly-like BFASM syntax of language
+phase 3 are out of scope until the first slice exists and has been used to
+write something real. The pointer tracking is the part that earns the feature:
+manual pointer arithmetic is what makes hand-written BrainFuck unmaintainable
+past a few dozen cells, and it is the one abstraction the expander can provide
+that a comment cannot.
+
+**Why it is worth building, stated honestly.** Not "more test programs" -- the
+engines are already covered by the manifest corpus and the three-engine
+differential, and a preprocessor emits ordinary BrainFuck that tests them no
+differently. The real argument is that it is an *oracle generator*. The most
+valuable test added to this repository recently is the one that compiles a
+known string, runs it, and asserts the program prints that string: it proves
+correctness rather than agreement between engines, which can be wrong together.
+A macro system generalises that to arbitrary programs whose answer is known by
+construction. Worth naming the other side too: the expander is a new surface
+that needs its own tests, so on the first day it is a thing to test rather than
+a way to test.
+
+**A fifth crate, `gyrus-macro`, is right.** It is a front end and shares
+nothing with execution; the workspace boundary is what keeps it that way. It
+depends on `gyrus` for `SourceLocation` and the error formatting, not the other
+way round.
 
 ## Overview
 
@@ -521,6 +567,11 @@ Expands and executes correctly
 
 ### Phase 4: Source Mapping (Week 7-8)
 
+> **Superseded.** This moves to the first phase; see Decisions at the top of
+> this document. It is kept here because the deliverables are still the right
+> ones, only in the wrong order.
+
+
 **Deliverables**:
 - ✅ Source map generation
 - ✅ Runtime error mapping
@@ -894,25 +945,52 @@ clap = { version = "4.5", features = ["derive"] }  # If adding CLI tools
 
 ## Success Criteria
 
+Revised on review. The originals are below for the record; they mixed things
+that can be checked with things that cannot, and a coverage percentage is a
+number this repository deliberately does not keep.
+
+**The first slice is done when:**
+
+- `@define`, `+{N}`, `@var`/`@to` with pointer tracking, and `@macro` with
+  parameters all expand correctly, with unit tests on the expander.
+- A runtime error in an expanded program reports the line and column in the
+  `.bfm` source, not in the expansion. This is the criterion that matters: it
+  is what distinguishes this from a shell script that repeats characters.
+- A macro error -- undefined name, wrong arity, a `@to` that would move the
+  pointer negative -- is reported with the same quality of context as a parse
+  error: source line, caret, and a hint.
+- Something real is written in it. A program from `programs/` rewritten as
+  `.bfm` and expanded, whose output matches the original byte for byte, is
+  both the proof and the first regression test.
+
+**Deliberately not criteria:** a coverage percentage, a standard library,
+multi-file projects, IDE integration, or adoption by anyone. Those are either
+unmeasurable here or a different project.
+
+<details>
+<summary>Original success criteria, superseded</summary>
+
 ### Phase 1 (MVP)
-- ✅ Constants expand correctly
-- ✅ Variables track memory locations
-- ✅ Basic macros work
-- ✅ Good error messages
-- ✅ 90% test coverage
+- Constants expand correctly
+- Variables track memory locations
+- Basic macros work
+- Good error messages
+- 90% test coverage
 
 ### Phase 2 (Production Ready)
-- ✅ Source mapping accurate
-- ✅ All edge cases handled
-- ✅ Standard library comprehensive
-- ✅ Documentation complete
-- ✅ Performance targets met
+- Source mapping accurate
+- All edge cases handled
+- Standard library comprehensive
+- Documentation complete
+- Performance targets met
 
 ### Phase 3 (Advanced)
-- ✅ Multi-file projects work seamlessly
-- ✅ BFASM syntax available
-- ✅ IDE integration possible
-- ✅ Community adoption
+- Multi-file projects work seamlessly
+- BFASM syntax available
+- IDE integration possible
+- Community adoption
+
+</details>
 
 ## Future Extensions
 
