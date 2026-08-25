@@ -5,15 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 gyrus is a BrainFuck interpreter, optimizer, and debugger written in Rust,
-built as a learning project. Rust edition 2024, MSRV 1.88 (the code uses
-let-chains); `rust-toolchain.toml` pins the development compiler.
+built as a learning project. Rust edition 2024, MSRV 1.95 (Cranelift's floor;
+the library alone would need 1.88 for let-chains); `rust-toolchain.toml` pins
+the development compiler.
 
 **Project Structure**: Cargo workspace with multiple crates
 
 - **gyrus** (`crates/gyrus/`): Core library crate
 - **gyrus-cli** (`crates/gyrus-cli/`): `gyrus` binary — program execution
 - **gyrus-tool** (`crates/gyrus-tool/`): `gyrus-tool` binary — development tools
-- Future: TUI debugger, REPL, JIT compiler as separate crates
+- **gyrus-jit** (`crates/gyrus-jit/`): Cranelift JIT for the optimized IR;
+  see `PRD/cranelift-jit.md`
+- Future: TUI debugger, REPL as separate crates
 
 ## Documentation Organization
 

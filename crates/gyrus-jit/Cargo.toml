@@ -1,0 +1,17 @@
+[package]
+name = "gyrus-jit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Cranelift JIT for gyrus's optimized BrainFuck IR"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+gyrus.workspace = true
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-module.workspace = true
+cranelift-jit.workspace = true
+cranelift-native.workspace = true

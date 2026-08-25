@@ -1,6 +1,6 @@
 # PRD: Cranelift JIT
 
-**Status**: Not started — design current as of the optimizer work in #8–#11
+**Status**: Step 1 (the spike) done and measured; steps 2–6 remain
 **Last Updated**: 2026-08-24
 **Priority**: High — the largest remaining win, and the interpreter is close to done
 
@@ -62,7 +62,7 @@ distance has been covered by the optimizer since it was written.
 
 - ≥ 2.5× over the optimized interpreter on mandelbrot; no program slower than
   it, compile time included.
-- The `gyrus` library crate stays dependency-free and keeps its MSRV.
+- The `gyrus` library crate stays dependency-free.
 - No `unsafe` beyond what calling JIT-generated code and its callbacks
   requires, each site with a comment saying what invariant makes it sound.
 
@@ -70,15 +70,16 @@ distance has been covered by the optimizer since it was written.
 
 ### Decisions
 
-**One new crate, `gyrus-jit`, with its own MSRV.** Cranelift's MSRV is
-"stable minus two", 1.95 today, moving every six weeks; the workspace promises
-1.88 for the library. So `gyrus-jit` declares Cranelift's floor, the pinned
-toolchain (1.97.1) already satisfies it, and `scripts/check-msrv.sh` excludes
-it (`--workspace --exclude gyrus-jit`, and `gyrus-cli --no-default-features`)
-so the library's promise is still checked. The CLI grows a `jit` cargo feature,
-on by default, that adds the dependency and the `--jit` flag. Not two crates:
-the translation and the runtime are one thing, and AOT, if it comes, shares
-the translator by being a second entry point in the same crate.
+**One new crate, `gyrus-jit`; the workspace MSRV becomes Cranelift's.**
+Cranelift's MSRV is "stable minus two", 1.95 today, moving every six weeks.
+The library alone needs 1.88, but one MSRV for the workspace beats two --
+decided 2026-08-24 -- so `rust-version` is 1.95 everywhere, the pinned
+toolchain (1.97.1) satisfies it, and `check-msrv.sh` keeps checking the
+whole workspace. Bumping Cranelift may mean bumping the floor. The CLI grows
+a `jit` cargo feature, on by default, that adds the dependency and the
+`--jit` flag. Not two crates: the translation and the runtime are one thing,
+and AOT, if it comes, shares the translator by being a second entry point in
+the same crate.
 
 **Checks are on access, not movement.** The tape contract (#4): moving the
 cursor anywhere is legal; reading or writing outside the tape is the error.
@@ -179,17 +180,28 @@ Held here so the next person does not learn them from a 2022 blog post:
 
 ## Implementation plan
 
-1. **Spike.** Wrapping cells, fixed memory, no limits, errors as exit codes
-   without messages. Run mandelbrot and hanoi through `benchmark.sh`'s
-   differential. The number to beat is 2.8 s; if the spike is not under
-   ~1.5 s, stop and profile before building anything else -- the interpreter
-   work taught that an estimate is not a measurement.
+1. **Spike.** Done: `crates/gyrus-jit`, wrapping cells, fixed memory, no
+   limits, out-of-tape and I/O errors reported through the exit-block side
+   table. All seven benchmark programs byte-identical to their golden files.
+
+   | | interpreter | JIT run | JIT compile | native |
+   |---|---:|---:|---:|---:|
+   | mandelbrot | 2.8 s | **0.91 s** | 30 ms | 0.57 s |
+   | hanoi | 190 ms | **50 ms** | 108 ms | ~0 |
+
+   Two things learned. Failure sites need their *own* cold exit blocks: one
+   shared exit block fed by 5,462 sites through block parameters cost 180 ms
+   of register allocation on hanoi and, by not being cold, 50% of
+   mandelbrot's run time. And compile time is IR size, not the optimizer
+   (`opt_level=none` saves a quarter; `single_pass` regalloc runs 4× slower)
+   -- the per-run guard below is also the compile-time fix, since it removes
+   most of the ~4 blocks each check costs.
 2. Errors: the side table and `BfError` reconstruction, checked against the
    interpreter's messages on `programs/errors/` and the boundary tests in
    `optimized.rs`.
 3. Cell and memory models, EOF behaviours, limits, statistics.
-4. `gyrus --jit`; `benchmark.sh` column and differential; `check-msrv.sh`
-   exclusion; `check-readme-commands.py` will demand the flag be documented.
+4. `gyrus --jit`; `benchmark.sh` column and differential;
+   `check-readme-commands.py` will demand the flag be documented.
 5. Corpus tests under `--jit`: a test in `gyrus-jit/tests` driven by
    `programs/test_manifest.toml`, same expectations as `program_corpus.rs`.
 6. Docs: `docs/execution-models.md` gains the mode and its named divergences;
@@ -202,12 +214,13 @@ Held here so the next person does not learn them from a 2022 blog post:
 - mandelbrot ≤ 1.2 s; nothing slower than the interpreter.
 - Every runtime error the interpreter can raise is raised under `--jit` with
   the same message, checked by test.
-- `check-msrv.sh` still passes on 1.88 for everything but `gyrus-jit`.
+- `check-msrv.sh` passes on the declared MSRV for the whole workspace.
 
 ## Risks
 
-- **Cranelift's moving MSRV** will one day exceed the pinned toolchain; the
-  fix is a toolchain bump, which the pin's comment already describes.
+- **Cranelift's moving MSRV** is now the workspace's; a Cranelift bump may
+  need a `rust-version` bump and a toolchain bump, which the pin's comment
+  already describes.
 - **`unsafe`.** Calling generated code and handing it a `*mut Runtime` is
   inherent. Keep it to the entry call and the two callbacks, with the
   invariants written down; everything the generated code touches is inside
