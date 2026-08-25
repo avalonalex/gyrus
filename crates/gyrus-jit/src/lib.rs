@@ -1239,6 +1239,33 @@ impl<'p> Translator<'_, 'p> {
     /// to the cursor: the fast path is `translate` with every check off, the
     /// slow path a call into the runtime's interpreter for the region, after
     /// which the cursor and the counters are taken back from the runtime.
+    /// Branch to `on_tape` when every cell from `cursor + lowest` to
+    /// `cursor + highest` is on the tape, and to `off_tape` otherwise.
+    ///
+    /// Two comparisons and two branches rather than combining the results and
+    /// branching once. `band` of two `icmp`s produces an `I8`, and Cranelift
+    /// cannot assume an `I8` has clear high bits, so branching on it costs an
+    /// `ands wzr, w, #255` mask -- the same one `loop_test` avoids. Branching
+    /// twice is both shorter and mask-free, and the second compare is skipped
+    /// outright when the first fails.
+    ///
+    /// Unsigned throughout, so a negative cursor compares as enormous and
+    /// fails, which is what makes one comparison enough at each end.
+    fn branch_if_on_tape(&mut self, lowest: i64, highest: i64, on_tape: Block, off_tape: Block) {
+        let c = self.b.use_var(self.vars.cursor);
+        let len = self.tape_len();
+        let lo = self.b.ins().iadd_imm_s(c, lowest);
+        let lo_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, lo, len);
+        let check_hi = self.b.create_block();
+        self.b.ins().brif(lo_ok, check_hi, &[], off_tape, &[]);
+
+        self.b.switch_to_block(check_hi);
+        let c = self.b.use_var(self.vars.cursor);
+        let hi = self.b.ins().iadd_imm_s(c, highest);
+        let hi_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, hi, len);
+        self.b.ins().brif(hi_ok, on_tape, &[], off_tape, &[]);
+    }
+
     fn guard(
         &mut self,
         lowest: i64,
@@ -1246,18 +1273,11 @@ impl<'p> Translator<'_, 'p> {
         region: Guarded<'p>,
         translate: impl FnOnce(&mut Self),
     ) {
-        let c = self.b.use_var(self.vars.cursor);
-        let len = self.tape_len();
-        let lo = self.b.ins().iadd_imm_s(c, lowest);
-        let hi = self.b.ins().iadd_imm_s(c, highest);
-        let lo_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, lo, len);
-        let hi_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, hi, len);
-        let ok = self.b.ins().band(lo_ok, hi_ok);
         let fast = self.b.create_block();
         let slow = self.b.create_block();
         self.b.set_cold_block(slow);
         let join = self.b.create_block();
-        self.b.ins().brif(ok, fast, &[], slow, &[]);
+        self.branch_if_on_tape(lowest, highest, fast, slow);
 
         self.b.switch_to_block(fast);
         let was = std::mem::replace(&mut self.unchecked, true);
@@ -1271,6 +1291,10 @@ impl<'p> Translator<'_, 'p> {
             .b
             .ins()
             .iconst(types::I32, (self.guarded.len() - 1) as i64);
+        // Read here rather than before the branch: the cursor is a variable,
+        // so this is the same value, and taking it inside the cold block keeps
+        // it off the fast path.
+        let c = self.b.use_var(self.vars.cursor);
         self.b.ins().store(access_flags(), c, self.rt, OFF_CURSOR);
         let iterations = self.b.use_var(self.vars.iterations);
         self.b
@@ -1361,6 +1385,128 @@ impl<'p> Translator<'_, 'p> {
         self.b.switch_to_block(ok);
         let result = self.b.ins().ireduce(types::I8, result);
         self.store(result, addr);
+    }
+
+    /// How many cells a seek examines per unrolled step.
+    ///
+    /// Measured on mandelbrot, where seeks are 49% of the run: 4 and 8 are
+    /// indistinguishable (-15.7% and -14.8% against `main`, and +0.1% against
+    /// each other over nine interleaved rounds), while 16 gives back a third of
+    /// the win at -9.8%. Four is chosen over eight for being the same speed in
+    /// less code, with a narrower guarded span, so more seeks take the wide
+    /// path near the tape's ends.
+    ///
+    /// An earlier version of this measurement had 8 clearly ahead of 4. That
+    /// was an artifact: the eight loaded cells were reduced by a left-to-right
+    /// chain of `umin`s, so the reduction's latency grew with the width and
+    /// penalised 8 and 16 rather than the guard doing it. With the balanced
+    /// tree below, the curve is flat from 4 to 8.
+    const SEEK_UNROLL: i64 = 4;
+
+    /// A seek: step by `delta` until the cell under the cursor is zero.
+    ///
+    /// Written to keep several loads in flight. The one-cell-at-a-time loop
+    /// this replaces was measured at 49% of mandelbrot's runtime and did not
+    /// get faster when an instruction was removed from it, because its branch
+    /// depends on its load and only one load is ever outstanding: it runs at
+    /// load-to-branch latency whatever surrounds it. So this reads
+    /// `SEEK_UNROLL` cells at once, combines them with `umin` -- zero if any of
+    /// them is zero -- and branches once. The loads have no dependency on each
+    /// other and issue together.
+    ///
+    /// Reading ahead is only safe where the cells are on the tape, so the
+    /// unrolled step sits behind a range guard covering the whole span. When it
+    /// does not hold -- near either end of the tape, or for a stride wide
+    /// enough that a whole step leaves it -- the one-at-a-time loop runs
+    /// instead,
+    /// and that is what makes this exact rather than approximate: a seek that
+    /// runs off the tape still fails at the read that does it, and never at a
+    /// speculative one.
+    fn seek(&mut self, index: usize, delta: i64, after: Block) {
+        // Not `span`: that is a free function here, for what a block reaches.
+        let reach = delta * (Self::SEEK_UNROLL - 1);
+        let (lowest, highest) = if delta > 0 { (0, reach) } else { (reach, 0) };
+
+        let choose = self.b.create_block();
+        let wide = self.b.create_block();
+        let step = self.b.create_block();
+        let narrow = self.b.create_block();
+        let narrow_step = self.b.create_block();
+        self.b.ins().jump(choose, &[]);
+
+        // Is the whole unrolled span on the tape?
+        self.b.switch_to_block(choose);
+        self.branch_if_on_tape(lowest, highest, wide, narrow);
+
+        // `SEEK_UNROLL` cells, that many loads, one branch.
+        self.b.switch_to_block(wide);
+        let base = self.tape_base();
+        let c = self.b.use_var(self.vars.cursor);
+        let addr = self.b.ins().iadd(base, c);
+        let mut values = Vec::with_capacity(Self::SEEK_UNROLL as usize);
+        for n in 0..Self::SEEK_UNROLL {
+            let offset = delta * n;
+            // The guard above is the only thing keeping these reads on the
+            // tape, and the loads are `notrap`, so a guard that does not cover
+            // one of them reads past the tape quietly rather than failing --
+            // and no black-box test can see it, because a speculative read
+            // never decides the answer on its own: the one-at-a-time path
+            // re-checks every cell it actually stops on. Tying the two together
+            // here is what catches a future edit that changes the reads or the
+            // reach and not the other.
+            debug_assert!(
+                (lowest..=highest).contains(&offset),
+                "seek reads cursor{offset:+} but only guards cursor{lowest:+}..=cursor{highest:+}"
+            );
+            let at = self.b.ins().iadd_imm_s(addr, offset);
+            values.push(self.b.ins().uload8(types::I32, access_flags(), at, 0));
+        }
+        // Reduce as a balanced tree, not a chain. `umin` is two instructions
+        // on this target (`subs` then `csel`), so folding left to right puts
+        // SEEK_UNROLL-1 of those back to back between the loads and the
+        // branch -- fourteen cycles of serial ALU latency for eight cells,
+        // which is most of what the loads were parallelised to avoid. Halving
+        // pairwise makes the depth log2(SEEK_UNROLL) instead: three levels for
+        // eight, and it is the same number of `umin`s either way.
+        let mut level = values;
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut pairs = level.chunks_exact(2);
+            for pair in &mut pairs {
+                next.push(self.b.ins().umin(pair[0], pair[1]));
+            }
+            next.extend_from_slice(pairs.remainder());
+            level = next;
+        }
+        let combined = level[0];
+        // Every cell non-zero: take the whole step and go round again.
+        self.b.ins().brif(combined, step, &[], narrow, &[]);
+
+        self.b.switch_to_block(step);
+        let c = self.b.use_var(self.vars.cursor);
+        let c = self.b.ins().iadd_imm_s(c, delta * Self::SEEK_UNROLL);
+        self.b.def_var(self.vars.cursor, c);
+        self.b.ins().jump(choose, &[]);
+
+        // One cell at a time: the tape's ends, and the last few cells of a
+        // seek that found its zero inside an unrolled span. The read is inside
+        // the loop, so a seek that runs off the tape fails at the read, as the
+        // interpreter's does.
+        //
+        // The back edge goes to `narrow`, not `choose`: once a seek is here it
+        // stays here. Under the fixed model that is free -- arriving here means
+        // either the zero is within a step, or the tape's end is, so the seek
+        // ends within `SEEK_UNROLL` cells either way. Under the unbounded model
+        // a seek that crosses the growing frontier walks the rest one cell at a
+        // time even after the tape has grown past it; re-testing the guard per
+        // cell to avoid that would cost more than it saves on every other seek.
+        self.b.switch_to_block(narrow);
+        self.loop_test(index, narrow_step, after);
+        self.b.switch_to_block(narrow_step);
+        let c = self.b.use_var(self.vars.cursor);
+        let c = self.b.ins().iadd_imm_s(c, delta);
+        self.b.def_var(self.vars.cursor, c);
+        self.b.ins().jump(narrow, &[]);
     }
 
     /// The start of a loop body, after the condition has passed: with limits
@@ -1559,23 +1705,21 @@ impl<'p> Translator<'_, 'p> {
                 } else {
                     -(*stride as i64)
                 };
-                let header = self.b.create_block();
-                let body = self.b.create_block();
                 let after = self.b.create_block();
-                self.b.ins().jump(header, &[]);
-                self.b.switch_to_block(header);
-                // The read is inside the loop, so a seek that runs off the
-                // tape fails at the read, as the interpreter's does.
-                self.loop_test(index, body, after);
-                self.b.switch_to_block(body);
-                let c = self.b.use_var(self.vars.cursor);
-                let c = self.b.ins().iadd_imm_s(c, delta);
-                self.b.def_var(self.vars.cursor, c);
-                self.b.ins().jump(header, &[]);
+                self.seek(index, delta, after);
                 self.b.switch_to_block(after);
-                // The cell a right seek stopped on is the furthest it read; a
-                // left seek's furthest is where it started, which whatever
+                // The cell a right seek stopped on is the furthest it *reached*;
+                // a left seek's furthest is where it started, which whatever
                 // came before it has noted.
+                //
+                // Not the furthest it read: the unrolled step reads up to
+                // `SEEK_UNROLL - 1` strides beyond the cell the seek stops on.
+                // Those reads are deliberately not noted. They are speculative,
+                // the guard keeps every one of them on the tape, and the
+                // interpreter -- which reads one cell at a time -- would not
+                // have reached them. Noting them would make `peak` a fact about
+                // this translation rather than about the program, and the
+                // statistic would stop matching the interpreter's.
                 if delta > 0 {
                     let c = self.b.use_var(self.vars.cursor);
                     self.note_peak(c, 0);

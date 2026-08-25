@@ -69,8 +69,8 @@ Where it differs, on purpose:
   A loop that ends exactly at its budget completes, as in the interpreter.
 - **Compile time is part of the run.** Tens of milliseconds for the largest
   programs in the corpus, so a program that finishes sooner than that is
-  faster interpreted: on the benchmark corpus the JIT wins on mandelbrot (3×)
-  and hanoi and loses on the five that run in a few milliseconds.
+  faster interpreted: on the benchmark corpus the JIT wins on mandelbrot (3.5×)
+  and hanoi (1.4×) and loses on the five that run in a few milliseconds.
 - **No hooks, no runtime warnings.** Generated code calls nothing back per
   instruction; a configuration carrying hooks is refused with a
   `ConfigurationError`, and `--jit --verbose` prints no `MemoryExpanded`

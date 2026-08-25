@@ -456,12 +456,71 @@ no matter how few instructions surround it. That also explains the earlier
 constraint either.
 
 **So the next thing to try is memory-level parallelism, not fewer
-instructions.** Unroll the seek to test several strided cells per iteration, so
-independent loads are in flight together, and only then branch on the combined
-result. For stride 1 the same idea is a NEON compare across 16 bytes. Both are
-real work and both must respect the tape contract at the far end of the
-unrolled step; neither is worth attempting without re-measuring against this
-table.
+instructions.** — and it was, and it worked. See below.
+
+### Unrolling the seek — 2026-08-25, **-17.6%**
+
+Acting on the finding above: the seek now reads `SEEK_UNROLL` cells per step
+instead of one. The loads have no dependency on each other and issue together;
+`umin` folds them, which is zero exactly when one of the cells is zero; and a
+single branch decides whether to take the whole step.
+
+Reading ahead is only sound where the cells are on the tape, so the unrolled
+step sits behind a range guard over the whole span, and the one-at-a-time loop
+still runs at the tape's ends and for the last few cells of a seek whose zero
+falls inside a span. That is what keeps it exact: a seek that runs off the tape
+fails at the read that does it, never at a speculative one, and all three
+engines report the same cell.
+
+**The first version of this was measured wrong, and the write-up said the wrong
+thing about why.** The `umin`s were folded left to right, so the reduction was a
+dependent chain -- seven `subs`/`csel` pairs, about fourteen cycles of serial
+ALU latency, sitting between the loads and the branch in the loop the whole
+change exists to de-latency. Because the chain grows with the width, it
+penalised the wider settings, and the tuning curve that produced looked like a
+guard-width effect:
+
+| unroll | chain reduction | balanced tree |
+|---|---|---|
+| 2 | -10.2% | — |
+| 4 | -13.2% | **-15.7%** |
+| 8 | -14.7% | -14.8% |
+| 16 | -8.1% | -9.8% |
+
+With the tree, 4 and 8 are the same speed: +0.1% between them over nine
+interleaved rounds, which is inside the run-to-run spread. Four is chosen for
+being that speed in less code, with a narrower guarded span, so more seeks take
+the wide path near the tape's ends. 16 is still clearly worse, and *now* the
+guard-width explanation is the one left standing.
+
+Two other things the review of the first version found, both in the hot path:
+the range guard combined its two comparisons with `band` and branched once,
+which costs the `ands wzr, w, #255` mask that `loop_test` had been changed to
+avoid a commit earlier; branching twice instead is shorter and mask-free. And
+the guard is now one shared helper rather than a copy in `guard()` and another
+in `seek()`.
+
+Final, interleaved min-of-7 against a `main` worktree binary: mandelbrot
+-17.6% and -17.4%; hanoi -1.2%; 99beer -2.1%. The JIT is 3.5x the optimized
+interpreter on mandelbrot, from 3x.
+
+Which mechanism dominates -- load latency now overlapped, or four times fewer
+branches -- is not separated here; that wants CPU performance counters rather
+than a stopwatch.
+
+**Not done, and the next thing to try here.** The range check is re-derived on
+every wide step. For a given cursor, tape length and stride, the number of
+steps that stay on the tape is computable once at seek entry, which would make
+the inner loop a counted loop with no bounds comparison at all and leave the
+tail to the one-at-a-time path exactly as now.
+
+**A note on what the tests can and cannot pin.** A guard that is one stride too
+generous is invisible to a black-box test: a speculative read never decides the
+answer by itself, because the one-at-a-time path re-checks every cell the seek
+actually stops on, so the over-read only changes behaviour if the byte past the
+tape happens to be non-zero. Verified: loosening the guard by one stride fails
+no test. The reads and the guarded reach are therefore tied together by a
+`debug_assert!` in the translator, which does catch it.
 
 ### One shared exit epilogue in the JIT — 2026-08-25, negative
 
@@ -639,3 +698,4 @@ For each new optimization:
 - 2026-08-24: Offset addressing tried and recorded as a negative result; scan by N promoted on its evidence
 - 2026-08-25: JIT shared exit epilogue tried and recorded as a negative result; `GYRUS_JIT_DISASM=1` added to make emitted code inspectable
 - 2026-08-25: profiled the JIT by construct (`GYRUS_JIT_DUMP` + srcloc); seeks are 49% of mandelbrot and the loop is latency-bound, so instruction count is the wrong target
+- 2026-08-25: seek unrolled on that evidence, -17.6% on mandelbrot; the first tuning curve was an artifact of a chained `umin` reduction and was redone

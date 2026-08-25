@@ -128,6 +128,68 @@ fn eof_behaviours_agree() {
 
 /// The tape contract: moving off the tape is fine, touching it is the error,
 /// reported with the cursor that did it.
+/// The unrolled seek's transition from its wide step to the one-at-a-time
+/// tail, at the tape's edge.
+///
+/// `out_of_tape_access_is_the_same_error` cannot reach this: its five-cell tape
+/// is narrower than the guarded span, so every seek there falls straight to the
+/// one-at-a-time path and would pass with the unrolling removed entirely. These
+/// tapes are wide enough that the wide step runs first and then has to hand over
+/// at exactly the right cell -- and since the loads are `notrap`, a guard one
+/// cell too generous reads past the tape and returns a wrong answer rather than
+/// failing.
+#[test]
+fn a_seek_hands_over_to_the_narrow_path_at_the_tape_edge() {
+    /// `n` cells set to 1, leaving the cursor on the last of them.
+    fn fill(n: usize) -> String {
+        format!("+{}", ">+".repeat(n - 1))
+    }
+
+    for (cells, src, attempted) in [
+        // The whole tape non-zero: the seek crosses it under the wide step and
+        // must fail on the first cell past the end, not before it and not after.
+        (
+            16usize,
+            format!("{}{}[>]", fill(16), "<".repeat(15)),
+            Some(16isize),
+        ),
+        (20, format!("{}{}[>]", fill(20), "<".repeat(19)), Some(20)),
+        // Strided, so a step spans four times as far.
+        (
+            16,
+            format!("{}{}[>>>>]", fill(16), "<".repeat(15)),
+            Some(16),
+        ),
+        // Leftwards, off the near end.
+        (16, format!("{}[<]", fill(16)), Some(-1)),
+        // A zero inside a span: the seek must stop on it. Twelve cells filled
+        // of sixteen, so the wide step runs and the zero is found inside one.
+        (16, format!("{}{}[>]+.", fill(12), "<".repeat(11)), None),
+    ] {
+        let build = move || {
+            ExecutionConfigBuilder::new()
+                .with_memory_size(cells)
+                .build()
+        };
+        let (interp, jit) = both(&src, "", build);
+        match (&interp, &jit) {
+            (Ok(a), Ok(b)) => {
+                assert!(attempted.is_none(), "{src} ({cells}): expected an error");
+                assert_eq!(a, b, "{src} ({cells})");
+            }
+            (
+                Err(BfError::MemoryOutOfBounds { attempted: a, .. }),
+                Err(BfError::MemoryOutOfBounds { attempted: b, .. }),
+            ) => {
+                let want = attempted.expect("expected success");
+                assert_eq!(*a, want, "{src} ({cells}): interpreter");
+                assert_eq!(*b, want, "{src} ({cells}): jit");
+            }
+            (a, b) => panic!("{src} ({cells}): interpreter {a:?}, jit {b:?}"),
+        }
+    }
+}
+
 #[test]
 fn out_of_tape_access_is_the_same_error() {
     let build = || ExecutionConfigBuilder::new().with_memory_size(5).build();
