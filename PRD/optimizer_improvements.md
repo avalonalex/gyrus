@@ -451,12 +451,61 @@ moved, -3.7%, and that is a 10 ms program where the win is compile time.
 from half the runtime changed nothing, so the seek loop is not
 instruction-throughput-bound. Its branch depends on its load, and there is
 exactly one load in flight at a time: the loop runs at load-to-branch latency
-no matter how few instructions surround it. That also explains the earlier
-4.5% ceiling for removing every bounds check -- the checks were never the
-constraint either.
+no matter how few instructions surround it. That also explained the then-current
+4.5% ceiling for removing every bounds check -- the checks were not the
+constraint either. (That figure has since moved: see the re-measurement below.)
 
 **So the next thing to try is memory-level parallelism, not fewer
 instructions.** — and it was, and it worked. See below.
+
+### Re-profiled after the unrolling, and the bounds-check ceiling with it — 2026-08-25
+
+Two numbers this document relies on were measured against a program that no
+longer exists, the seek unrolling having taken 17.6% out of it. Both were
+re-taken.
+
+**Where the time goes now** (samply at 20 kHz, mapped through the srcloc table):
+
+| construct | before | now |
+|---|---|---|
+| `Loop` (the header test) | 24.6% | **29.6%** |
+| `SeekRight` | 30.3% | 25.4% |
+| `SeekLeft` | 18.4% | 12.1% |
+| `MultiplyAdd` | 9.5% | 12.3% |
+| `Sub` | 5.0% | 6.9% |
+
+Seeks fell from 48.7% to 37.5% and `Loop` is now the largest single construct.
+Read as absolute time rather than share -- the run is 17% shorter -- every
+untouched construct held its cost exactly: `Loop` was about 234 ms before and
+234 ms after. That the shares moved *only* where work was removed is the
+check that the profile is measuring what it claims to.
+
+The hot sites cluster: twelve of them are 35% of attributed time, and they pair
+up, each hot `Loop` sitting nineteen AST indices after a hot `SeekRight`. One
+idiom, five times over.
+
+**The bounds-check ceiling is 7.5%, not 4.5%.** Measured with a same-binary
+toggle that compiles every access without its check -- unsound, so it was
+reverted rather than merged, and it is worth rebuilding behind a cargo feature
+rather than an environment variable if it is wanted again, so no runtime path
+can reach it. mandelbrot 7.7% and 7.5% over two rounds of nine interleaved
+pairs; hanoi 9.0%. Output stayed byte-identical to the golden file in both
+modes, which is what makes the comparison meaningful rather than merely fast.
+
+The checks did not get more expensive; the run got shorter around them, so
+their share roughly doubled. That is worth knowing precisely because the old
+4.5% has been cited here as a reason not to pursue check elimination, and at
+7.5-9% it is a different proposition.
+
+**What that suggests, and what it does not.** A loop containing a seek can
+never be guarded -- `span()` returns `None` on a seek, because the reach
+depends on the data -- so those loops pay a bounds check on every iteration,
+and every one of mandelbrot's hot loops contains a seek. The narrow idea that
+fits: when a loop body *ends* in a seek, the back edge arrives with the cursor
+on a cell the seek has just read successfully, so the header's re-check is
+redundant on that edge though not on entry. That is a fraction of the 7.5%, not
+all of it, and it needs the argument made carefully for the unbounded model,
+where growth moves the tape underneath exactly that reasoning.
 
 ### Unrolling the seek — 2026-08-25, **-17.6%**
 
@@ -699,3 +748,4 @@ For each new optimization:
 - 2026-08-25: JIT shared exit epilogue tried and recorded as a negative result; `GYRUS_JIT_DISASM=1` added to make emitted code inspectable
 - 2026-08-25: profiled the JIT by construct (`GYRUS_JIT_DUMP` + srcloc); seeks are 49% of mandelbrot and the loop is latency-bound, so instruction count is the wrong target
 - 2026-08-25: seek unrolled on that evidence, -17.6% on mandelbrot; the first tuning curve was an artifact of a chained `umin` reduction and was redone
+- 2026-08-25: re-profiled after that change -- `Loop` is now the largest construct at 29.6%, and the bounds-check ceiling is 7.5%, not the 4.5% quoted before
