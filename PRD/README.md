@@ -11,7 +11,6 @@ in August 2026, and it is the rule that keeps it readable.
 
 | Document | Status | Priority |
 |---|---|---|
-| [optimizer-hook-integration.md](optimizer-hook-integration.md) | Design complete, unimplemented | High — blocks aggressive optimization |
 | [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | Medium |
 | [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design complete, unimplemented | Low |
 
@@ -35,5 +34,9 @@ in August 2026, and it is the rule that keeps it readable.
 
 Prefer one focused document over a section inside a large one. The umbrella PRD
 this directory used to have grew to 2,500 lines by restating four other
-documents, and the only part unique to it was the hook-integration design now
-in `optimizer-hook-integration.md`.
+documents, and the only part unique to it was a design for keeping hooks
+meaningful under optimization -- which was extracted into its own file, and
+then deleted a year later, because it planned work that had since shipped
+differently and rested on an assumption the code never adopted. Both halves of
+that are the lesson: extract the part that exists nowhere else, and be willing
+to delete it when the code has moved past it.

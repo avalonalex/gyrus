@@ -617,7 +617,8 @@ debug symbols, the string-to-BrainFuck compiler, the program generator, and the
 `gyrus-tool` subcommands.
 
 **Not built**: a TUI debugger, a REPL, an AOT backend on the JIT's translator,
-and a macro preprocessor. Each has a design in `PRD/`; none has code.
+and a macro preprocessor. The debugger and the preprocessor have designs in
+`PRD/`; the REPL and the AOT backend have only the idea. None has code.
 
 **The hook system is the debugger's foundation** and needs no API change to
 support one:
