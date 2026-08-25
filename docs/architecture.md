@@ -47,8 +47,11 @@ after_instruction(&mut self, instruction: &Instruction, context: &HookContext)
 on_loop_enter(&mut self, context: &HookContext, loop_info: Option<&LoopInfo>)
 on_loop_exit(&mut self, context: &HookContext)
 on_complete(&mut self, context: &HookContext)
-on_error(&mut self, error: &BfError, context: &HookContext)
 ```
+
+There are five, not six: an `on_error` point is a reasonable thing to want and
+does not exist. This list said otherwise for a year, which is the hazard of
+writing a trait's shape in prose beside the trait.
 
 **HookContext**: Immutable snapshot of interpreter state
 - Memory snapshot (`&[u8]`)

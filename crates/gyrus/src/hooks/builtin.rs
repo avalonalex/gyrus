@@ -131,12 +131,10 @@ use termcolor::{Ansi, Color, ColorSpec, WriteColor};
 /// Typically you don't need to use this directly - the interpreter
 /// automatically uses it when stats tracking is enabled (default).
 ///
-/// To disable automatic stats tracking:
-/// ```rust,ignore
-/// let config = ExecutionConfigBuilder::new()
-///     .with_stats_tracking(false)  // Disable default stats
-///     .build();
-/// ```
+/// Statistics are always collected on the tree-walking path; there is no
+/// switch for it, and the cost is one counter update per instruction. The
+/// optimized interpreter and the JIT do not run hooks at all, and account for
+/// statistics separately -- the JIT only when asked, since counting costs.
 ///
 /// # Example: Custom Statistics
 ///
@@ -607,13 +605,13 @@ impl ExecutionHook for SharedLimitHook {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
 /// use gyrus::hooks::builtin::DebugTrackingHook;
-/// use gyrus::debug::DebugInfo;
+/// use gyrus::parse_with_debug;
 ///
-/// let debug_info = DebugInfo::from_source("[>+<-]");
+/// let (_instructions, debug_info) = parse_with_debug("[>+<-]").unwrap();
 /// let hook = DebugTrackingHook::new(debug_info);
-/// // Hook will track loops and provide source locations
+/// // The hook tracks loops and resolves source locations.
 /// ```
 #[derive(Debug)]
 pub struct DebugTrackingHook {

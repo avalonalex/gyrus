@@ -120,12 +120,12 @@
 //! Detect common issues before execution:
 //!
 //! ```rust
-//! use gyrus::{parse, validate};
+//! use gyrus::{parse_with_debug, validate};
 //!
 //! # fn main() -> Result<(), gyrus::BfError> {
 //! let source = "[+]";  // Inefficient pattern
-//! let instructions = parse(source)?;
-//! let warnings = validate(&instructions);
+//! let (instructions, debug_info) = parse_with_debug(source)?;
+//! let warnings = validate(&instructions, &debug_info);
 //!
 //! for warning in warnings {
 //!     eprintln!("Warning: {}", warning);
@@ -188,4 +188,4 @@ pub use optimizer::{
 pub use parser::{parse, parse_with_debug};
 pub use stats::ExecutionStats;
 pub use types::{InstructionIndex, MemoryAddress, MemorySize, StepCount};
-pub use validator::validate;
+pub use validator::{validate, validate_with_cell_model};

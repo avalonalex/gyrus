@@ -14,6 +14,15 @@ in August 2026, and it is the rule that keeps it readable.
 | [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | **High — the next thing to build** |
 | [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design reviewed and scoped 2026-08-25, unimplemented | Low — after the debugger |
 
+## Future
+
+Recorded rather than scheduled. These are not next, and saying so here is the
+point: a directory where everything looks imminent is one nobody trusts.
+
+| Document | Status | Why it is not next |
+|---|---|---|
+| [formal-verification.md](formal-verification.md) | Not started | Narrow but real: the two correctness bugs this project has had are both the kind a model checker settles and a test cannot. Waiting on the debugger, and on confirming the toolchain friction is tolerable |
+
 ## Writing one
 
 ```markdown
