@@ -456,12 +456,43 @@ no matter how few instructions surround it. That also explains the earlier
 constraint either.
 
 **So the next thing to try is memory-level parallelism, not fewer
-instructions.** Unroll the seek to test several strided cells per iteration, so
-independent loads are in flight together, and only then branch on the combined
-result. For stride 1 the same idea is a NEON compare across 16 bytes. Both are
-real work and both must respect the tape contract at the far end of the
-unrolled step; neither is worth attempting without re-measuring against this
-table.
+instructions.** — and it was, and it worked. See below.
+
+### Unrolling the seek — 2026-08-25, **-14%**
+
+Acting on the finding above: the seek now reads eight cells per step instead of
+one. The loads have no dependency on each other and issue together; `umin`
+folds them, which is zero exactly when one of the cells is zero; and a single
+branch decides whether to take the whole step. Eight loads and one branch,
+where there were eight loads and eight branches.
+
+Reading ahead is only sound where the cells are on the tape, so the unrolled
+step sits behind a range guard over the whole span, and the one-at-a-time loop
+still runs at the tape's ends and for the last few cells of a seek whose zero
+falls inside a span. That is what keeps it exact: a seek that runs off the tape
+fails at the read that does it, never at a speculative one, and all three
+engines still report the same cell.
+
+| unroll | mandelbrot vs `main` |
+|---|---|
+| 2 | -10.2% |
+| 4 | -13.2% |
+| **8** | **-14.7%** |
+| 16 | -8.1% |
+
+Eight is where two effects cross: wider means more loads in flight, but also a
+wider guarded span, so more seeks fall to the one-at-a-time path and more code
+runs per step.
+
+Confirmed over three rounds at eight: mandelbrot -13.2%, -13.8%, -14.1%;
+hanoi -0.0%; 99beer -2.4%. The JIT is now 3.6x the optimized interpreter on
+mandelbrot, from 3x.
+
+Which of the two mechanisms dominates -- load latency now overlapped, or eight
+times fewer branches -- is not separated here; that needs CPU performance
+counters rather than a stopwatch. The curve above is the evidence that it is
+one of them, and the earlier 0.0% is the evidence that it is neither
+instruction count nor the guards.
 
 ### One shared exit epilogue in the JIT — 2026-08-25, negative
 
@@ -639,3 +670,4 @@ For each new optimization:
 - 2026-08-24: Offset addressing tried and recorded as a negative result; scan by N promoted on its evidence
 - 2026-08-25: JIT shared exit epilogue tried and recorded as a negative result; `GYRUS_JIT_DISASM=1` added to make emitted code inspectable
 - 2026-08-25: profiled the JIT by construct (`GYRUS_JIT_DUMP` + srcloc); seeks are 49% of mandelbrot and the loop is latency-bound, so instruction count is the wrong target
+- 2026-08-25: seek unrolled eight cells wide on that evidence, -14% on mandelbrot

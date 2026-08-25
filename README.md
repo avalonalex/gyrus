@@ -121,9 +121,9 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 (optimized, JIT, debug, tracing), the optimizer, the hook system, static
 validation, minification, syntax highlighting, and the `gyrus-tool`
 subcommands. The JIT is `gyrus --jit program.bf`: the same bytes and the same
-errors as the interpreters, with source locations, three times faster on
-mandelbrot -- and slower on programs that finish before it has finished
-compiling. See [execution models](docs/execution-models.md#the-jit).
+errors as the interpreters, with source locations, three and a half times
+faster on mandelbrot -- and slower on programs that finish before it has
+finished compiling. See [execution models](docs/execution-models.md#the-jit).
 
 **Planned**: a TUI debugger with breakpoints and memory visualization, a REPL,
 and an AOT build on the JIT's translator. Designs live in [`PRD/`](PRD/).

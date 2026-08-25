@@ -1363,6 +1363,91 @@ impl<'p> Translator<'_, 'p> {
         self.store(result, addr);
     }
 
+    /// How many cells a seek examines per unrolled step.
+    ///
+    /// Measured on mandelbrot, where seeks are 49% of the run: 2 gives -10.2%,
+    /// 4 gives -13.2%, 8 gives -14.7%, and 16 gives back half the win at -8.1%.
+    /// Wider means more loads in flight, but also a wider guarded span, so more
+    /// seeks fall to the one-at-a-time path and more code runs per step. Eight
+    /// is where those cross.
+    const SEEK_UNROLL: i64 = 8;
+
+    /// A seek: step by `delta` until the cell under the cursor is zero.
+    ///
+    /// Written to keep several loads in flight. The one-cell-at-a-time loop
+    /// this replaces was measured at 49% of mandelbrot's runtime and did not
+    /// get faster when an instruction was removed from it, because its branch
+    /// depends on its load and only one load is ever outstanding: it runs at
+    /// load-to-branch latency whatever surrounds it. So this reads four cells
+    /// at once, combines them with `umin` -- zero if any of them is zero --
+    /// and branches once. The loads have no dependency on each other and issue
+    /// together.
+    ///
+    /// Reading ahead is only safe where the cells are on the tape, so the
+    /// unrolled step sits behind a range guard covering the whole span. When it
+    /// does not hold -- near either end of the tape, or for a stride wide
+    /// enough that four steps leave it -- the one-at-a-time loop runs instead,
+    /// and that is what makes this exact rather than approximate: a seek that
+    /// runs off the tape still fails at the read that does it, and never at a
+    /// speculative one.
+    fn seek(&mut self, index: usize, delta: i64, after: Block) {
+        let span = delta * (Self::SEEK_UNROLL - 1);
+        let (lowest, highest) = if delta > 0 { (0, span) } else { (span, 0) };
+
+        let choose = self.b.create_block();
+        let wide = self.b.create_block();
+        let step = self.b.create_block();
+        let narrow = self.b.create_block();
+        let narrow_step = self.b.create_block();
+        self.b.ins().jump(choose, &[]);
+
+        // Is the whole unrolled span on the tape?
+        self.b.switch_to_block(choose);
+        let c = self.b.use_var(self.vars.cursor);
+        let len = self.tape_len();
+        let lo = self.b.ins().iadd_imm_s(c, lowest);
+        let hi = self.b.ins().iadd_imm_s(c, highest);
+        let lo_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, lo, len);
+        let hi_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, hi, len);
+        let both = self.b.ins().band(lo_ok, hi_ok);
+        self.b.ins().brif(both, wide, &[], narrow, &[]);
+
+        // Four cells, four loads, one branch.
+        self.b.switch_to_block(wide);
+        let base = self.tape_base();
+        let c = self.b.use_var(self.vars.cursor);
+        let addr = self.b.ins().iadd(base, c);
+        let mut values = Vec::with_capacity(Self::SEEK_UNROLL as usize);
+        for n in 0..Self::SEEK_UNROLL {
+            let at = self.b.ins().iadd_imm_s(addr, delta * n);
+            values.push(self.b.ins().uload8(types::I32, access_flags(), at, 0));
+        }
+        let mut combined = values[0];
+        for v in &values[1..] {
+            combined = self.b.ins().umin(combined, *v);
+        }
+        // Every cell non-zero: take the whole step and go round again.
+        self.b.ins().brif(combined, step, &[], narrow, &[]);
+
+        self.b.switch_to_block(step);
+        let c = self.b.use_var(self.vars.cursor);
+        let c = self.b.ins().iadd_imm_s(c, delta * Self::SEEK_UNROLL);
+        self.b.def_var(self.vars.cursor, c);
+        self.b.ins().jump(choose, &[]);
+
+        // One cell at a time: the tape's ends, and the last few cells of a
+        // seek that found its zero inside an unrolled span. The read is inside
+        // the loop, so a seek that runs off the tape fails at the read, as the
+        // interpreter's does.
+        self.b.switch_to_block(narrow);
+        self.loop_test(index, narrow_step, after);
+        self.b.switch_to_block(narrow_step);
+        let c = self.b.use_var(self.vars.cursor);
+        let c = self.b.ins().iadd_imm_s(c, delta);
+        self.b.def_var(self.vars.cursor, c);
+        self.b.ins().jump(narrow, &[]);
+    }
+
     /// The start of a loop body, after the condition has passed: with limits
     /// armed, count down to the next `bf_tick` -- which sees the iterations
     /// completed so far, so a loop that ends exactly at its budget completes,
@@ -1559,19 +1644,8 @@ impl<'p> Translator<'_, 'p> {
                 } else {
                     -(*stride as i64)
                 };
-                let header = self.b.create_block();
-                let body = self.b.create_block();
                 let after = self.b.create_block();
-                self.b.ins().jump(header, &[]);
-                self.b.switch_to_block(header);
-                // The read is inside the loop, so a seek that runs off the
-                // tape fails at the read, as the interpreter's does.
-                self.loop_test(index, body, after);
-                self.b.switch_to_block(body);
-                let c = self.b.use_var(self.vars.cursor);
-                let c = self.b.ins().iadd_imm_s(c, delta);
-                self.b.def_var(self.vars.cursor, c);
-                self.b.ins().jump(header, &[]);
+                self.seek(index, delta, after);
                 self.b.switch_to_block(after);
                 // The cell a right seek stopped on is the furthest it read; a
                 // left seek's furthest is where it started, which whatever
