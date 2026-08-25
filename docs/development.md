@@ -113,13 +113,13 @@ GYRUS_JIT_DUMP=/tmp/code.bin samply record -s -r 20000 -- \
 Mapping the leaf frames through that table is how the JIT's time was first
 attributed by construct -- 49% of mandelbrot is seek loops -- and how it was
 established that those loops are latency-bound rather than
-instruction-bound. See [`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md).
+instruction-bound. See [Performance](performance.md).
 
 `GYRUS_JIT_DISASM=1` makes `gyrus --jit` print the machine code Cranelift
 emitted, on stderr, before running. It is how you find out what a translation
 choice actually costs rather than guessing -- and, as often, what it does not
 cost: see the shared-exit experiment in
-[`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md), where
+[Performance](performance.md), where
 removing a third of the emitted instructions made the program slower.
 
 `benchmark.sh` is a differential test that also reports timings: it diffs every

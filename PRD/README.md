@@ -12,7 +12,6 @@ in August 2026, and it is the rule that keeps it readable.
 | Document | Status | Priority |
 |---|---|---|
 | [optimizer-hook-integration.md](optimizer-hook-integration.md) | Design complete, unimplemented | High — blocks aggressive optimization |
-| [optimizer_improvements.md](optimizer_improvements.md) | Catalogue of missed optimizations, and of the ones tried and dropped | Medium |
 | [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | Medium |
 | [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design complete, unimplemented | Low |
 

@@ -113,6 +113,7 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 | [Development tools](docs/tooling.md) | `gyrus-tool`: validate, minify, view, inspect |
 | [Development](docs/development.md) | Building, testing, benchmarking |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
+| [Performance](docs/performance.md) | How it got fast, what didn't work, and why — with a glossary |
 | [Changelog](CHANGELOG.md) | What changed, and why, from 0.1 to now |
 
 ## Status
