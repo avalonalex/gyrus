@@ -68,11 +68,15 @@ Both patterns are **mathematically equivalent**:
 
 ---
 
-### 2. Scan by N Cells
+### 2. Scan by N Cells — ✅ shipped
 
 **Priority:** Medium
 **Complexity:** Low
 **Impact:** Useful for data structures like arrays
+
+**Shipped 2026-08-24:** `SeekRight(stride)` / `SeekLeft(stride)`. Mandelbrot
+4.82 s → 2.89 s (**+40%**), its loop iterations 754M → 266M; hanoi unchanged.
+Kept here because the evidence below is what put it first.
 
 **Problem:**
 Currently we only recognize `[>]` and `[<]` for scanning by 1 cell. Many programs scan by N cells (e.g., for packed data structures).
@@ -305,10 +309,9 @@ Inline simple loop bodies when beneficial.
 ## Implementation Priority
 
 **Phase 1 - High Value, Low Complexity:**
-1. Scan by N cells (SeekRight/Left with step size) ⭐
-   - Low complexity
-   - The only item with a measured hot spot behind it: 124 such loops in
-     mandelbrot, each iteration a block call (see "Evidence" under item 2)
+1. ✅ Scan by N cells (SeekRight/Left with step size) — shipped, +40% on
+   mandelbrot. 124 such loops there, each iteration a block call (see
+   "Evidence" under item 2)
 
 **Phase 2 - Medium Value:**
 2. Loop rotation for MultiplyAdd recognition

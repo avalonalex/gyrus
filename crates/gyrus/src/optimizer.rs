@@ -15,8 +15,9 @@
 //! ## Loop Pattern Recognition
 //! - `[-]` → `Zero` - Clear current cell (not `[+]`: it reaches zero only by
 //!   wrapping past 255, which checked cells reject)
-//! - `[>]` → `SeekRight(0)` - Find next zero cell
-//! - `[<]` → `SeekLeft(0)` - Find previous zero cell
+//! - `[>]` → `SeekRight(1)` - Find next zero cell
+//! - `[>>>]` → `SeekRight(3)` - Find next zero cell, three cells at a time
+//! - `[<]` → `SeekLeft(1)` - Find previous zero cell
 //! - `[->>+<<]` → `MoveRight(2)` - Move value to offset
 //! - `[->+<]` → `MoveRight(1)` - Move value to next cell
 //!
@@ -105,10 +106,18 @@ pub enum OptimizedInstruction {
     Input(SourceRange),
     /// Set current cell to zero (optimized `[-]`)
     Zero(SourceRange),
-    /// Seek right to next zero cell (optimized `[>]`)
-    SeekRight(SourceRange),
-    /// Seek left to previous zero cell (optimized `[<]`)
-    SeekLeft(SourceRange),
+    /// Seek right, `stride` cells at a time, to the next zero cell
+    /// (optimized `[>]`, `[>>]`, ...).
+    ///
+    /// The stride is what makes this pay on real programs: a program that
+    /// keeps records of N cells scans for the end of its table with `[>>>>>>>>>]`,
+    /// and mandelbrot spends 47% of the instructions it executes inside 124
+    /// such loops. Each iteration of one was a whole `Loop` block call for a
+    /// single fused move.
+    SeekRight(usize, SourceRange),
+    /// Seek left, `stride` cells at a time, to the previous zero cell
+    /// (optimized `[<]`, `[<<]`, ...). See [`SeekRight`](Self::SeekRight).
+    SeekLeft(usize, SourceRange),
     /// Multiply current cell by multipliers and add to target offsets, then zero current cell
     /// Example: `[->+++>+<<]` → `MultiplyAdd(vec![(1, 3), (2, 1)])`
     /// Semantics:
@@ -135,8 +144,8 @@ impl OptimizedInstruction {
             OptimizedInstruction::Output(r) => *r,
             OptimizedInstruction::Input(r) => *r,
             OptimizedInstruction::Zero(r) => *r,
-            OptimizedInstruction::SeekRight(r) => *r,
-            OptimizedInstruction::SeekLeft(r) => *r,
+            OptimizedInstruction::SeekRight(_, r) => *r,
+            OptimizedInstruction::SeekLeft(_, r) => *r,
             OptimizedInstruction::MultiplyAdd(_, r) => *r,
             OptimizedInstruction::Loop(_, r) => *r,
         }
@@ -426,18 +435,29 @@ fn recognize_loop_pattern(
         )));
     }
 
-    // Pattern: [>] → SeekRight
-    if body.len() == 1 && matches!(body[0], Instruction::IncrementPointer) {
-        return Some(OptimizedInstruction::SeekRight(SourceRange::new(
-            loop_start, loop_end,
-        )));
+    // Pattern: [>], [>>], ... → SeekRight(stride). A body that is nothing but
+    // moves in one direction is a scan; the number of moves is the stride.
+    if !body.is_empty()
+        && body
+            .iter()
+            .all(|inst| matches!(inst, Instruction::IncrementPointer))
+    {
+        return Some(OptimizedInstruction::SeekRight(
+            body.len(),
+            SourceRange::new(loop_start, loop_end),
+        ));
     }
 
-    // Pattern: [<] → SeekLeft
-    if body.len() == 1 && matches!(body[0], Instruction::DecrementPointer) {
-        return Some(OptimizedInstruction::SeekLeft(SourceRange::new(
-            loop_start, loop_end,
-        )));
+    // Pattern: [<], [<<], ... → SeekLeft(stride)
+    if !body.is_empty()
+        && body
+            .iter()
+            .all(|inst| matches!(inst, Instruction::DecrementPointer))
+    {
+        return Some(OptimizedInstruction::SeekLeft(
+            body.len(),
+            SourceRange::new(loop_start, loop_end),
+        ));
     }
 
     // Pattern: Generalized multiplication loops
@@ -589,6 +609,28 @@ mod tests {
         );
     }
 
+    /// A scan's stride is the number of moves in its body; `[>]` is stride 1.
+    #[test]
+    fn scan_loops_fold_with_their_stride() {
+        for (src, expect) in [
+            (
+                "[>]",
+                OptimizedInstruction::SeekRight(1, SourceRange::new(0, 2)),
+            ),
+            (
+                "[>>>]",
+                OptimizedInstruction::SeekRight(3, SourceRange::new(0, 4)),
+            ),
+            (
+                "[<<]",
+                OptimizedInstruction::SeekLeft(2, SourceRange::new(0, 3)),
+            ),
+        ] {
+            let optimized = optimize(&crate::parser::parse(src).unwrap());
+            assert_eq!(optimized.instructions, vec![expect], "{src}");
+        }
+    }
+
     /// Patterns that carry no cell arithmetic are unaffected by the cell model.
     #[test]
     fn seek_and_clear_still_fold_under_checked_cells() {
@@ -664,7 +706,7 @@ mod tests {
         assert_eq!(optimized.instructions.len(), 1);
         assert!(matches!(
             optimized.instructions[0],
-            OptimizedInstruction::SeekRight(_)
+            OptimizedInstruction::SeekRight(..)
         ));
     }
 
