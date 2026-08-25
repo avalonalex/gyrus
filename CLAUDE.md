@@ -127,8 +127,9 @@ re-exports and crate docs.
 - **lib** (`lib.rs`): Pure module interface with re-exports
 
 **CLI** (`crates/gyrus-cli/src/main.rs`) — execution only
-   - Flow: read file → parse → optimize (unless `--debug`) → interpret → (stats)
-   - Flags: `--verbose`, `--quiet`, `--debug`, `--trace`, `--max-steps`,
+   - Flow: read file → parse → optimize (unless `--debug`) → interpret, or
+     JIT-compile and run (`--jit`) → (stats)
+   - Flags: `--verbose`, `--quiet`, `--debug`, `--trace`, `--jit`, `--max-steps`,
      `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`,
      `--unbounded-initial`, `--unbounded-max`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
