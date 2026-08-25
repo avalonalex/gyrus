@@ -1,625 +1,172 @@
-# Testing Infrastructure - Comprehensive Status & Roadmap
+# Testing
 
-**Last Updated**: October 2025
+How gyrus is tested, and where each kind of test lives.
 
----
+Back to the [README](../README.md). For running the suite and the rest of the
+development loop, see [Development](development.md).
 
-## Executive Summary
+Deliberately absent: test counts, coverage percentages, and status tables. They
+change with every commit, and a stale number is worse than no number — this
+file used to open with "136 total tests" long after there were far more. Run
+`cargo test --workspace` for the current picture.
 
-Testing infrastructure has been significantly improved with **136 total tests** (103% increase from initial 67 tests) and a comprehensive program corpus of **33 BrainFuck programs**.
+## The shape of the suite
 
-**Current Status**: Production-ready foundation ✅
-**Next Priority**: CI Integration, Performance Baseline, Property Test Expansion
+| Where | What it covers |
+|---|---|
+| `crates/gyrus/src/**` | Unit tests beside the code they test, including `interpreter/tests.rs` |
+| `crates/gyrus/src/test_utils.rs` | Helpers shared by those tests — `#[cfg(test)]` and private, so it is not API |
+| `crates/gyrus/tests/program_corpus.rs` | Real BrainFuck programs, run end to end through the tree-walker |
+| `crates/gyrus/tests/property_debug_symbols.rs` | Proptest over debug-symbol invariants |
+| `crates/gyrus-jit/tests/corpus.rs` | The same corpus under the JIT, driven from the manifest |
+| `crates/gyrus-jit/tests/differential.rs` | JIT against the optimized interpreter on the bundled programs |
+| `crates/gyrus-jit/tests/generated.rs` | JIT against the interpreter on generated programs, every configuration |
+| `crates/gyrus/benches/` | Criterion micro-benchmarks for the interpreter and the parser |
+| `scripts/` | Checks that guard claims the code cannot make on its own |
 
----
+## Differential testing is the backbone
 
-## Current State (Achievements)
+gyrus has four execution paths — tree-walking, optimized, JIT, and tracing —
+that must agree. Almost nothing else in the project can be checked by looking
+at it; an optimizer that is subtly wrong still produces plausible output. So
+the engines are held against each other rather than against expectations
+written by hand:
 
-### Test Coverage
+- **`differential.rs`** runs the JIT and the optimized interpreter on the same
+  source and input and requires the same bytes out, and the same error where
+  there is one. The optimized interpreter is in turn held to the tree-walker,
+  so agreement chains back to the simplest implementation.
+- **`generated.rs`** does the same over randomly generated programs — 400 seeds
+  under both memory models and both cell models. Step budgets are not
+  comparable between engines (optimized instructions on one side, loop
+  iterations on the other), so a run the interpreter cannot finish inside its
+  budget is skipped rather than compared; every other outcome, including *which*
+  error at *what* position, has to match.
+- **`scripts/benchmark.sh`** diffs every timed run against a golden output in
+  `benchmarks/expected/` and, for the fast programs, checks the optimized and
+  `--debug` interpreters byte for byte. This makes the benchmark script a
+  differential test that happens to also report timings: a number that improves
+  while the output moves is a bug, and the script fails rather than printing it.
+  Re-record with `--record` only after confirming the new output is correct.
 
-| Category | Count | Status |
-|----------|-------|--------|
-| Unit tests (library) | 96 | ✅ Passing |
-| Integration tests | 24 | ✅ Passing |
-| Doc tests | 16 | ✅ Passing |
-| **Total** | **136 tests** | ✅ All passing |
-| Benchmarks | 10 | ✅ Compiling |
+## The program corpus
 
-**Test execution time**: ~2 seconds (unit: 0.6s, integration: 1.2s, doc: 0.02s)
+`programs/` holds real BrainFuck: Hello World and friends in `basic/`,
+deliberate failures in `errors/`, programs that trigger a specific warning in
+`warnings/`, runtime edge cases (EOF handling, deep nesting, loops that never
+end) in `tests/`, a debug-symbol demonstration in `debug/`, and a borrowed
+collection in `third-party/` — mandelbrot, hanoi, a quine, factor, rot13, life,
+and the utilities, each credited in
+[`third-party/CREDITS.md`](../programs/third-party/CREDITS.md).
 
-### Program Corpus
+`programs/test_manifest.toml` declares what each case should do: input,
+expected output, expected exit, and any configuration the program needs
+(memory size, step limit, timeout, EOF behavior).
 
-**Total**: 33 programs across 5 categories (all working!)
+**One caveat worth knowing before you add a case.** The JIT's `corpus.rs`
+parses the manifest and runs what it finds there. `program_corpus.rs` — the
+tree-walker's — does not: its cases are hand-written to *mirror* the manifest.
+The two can drift, and adding a manifest entry does not automatically give the
+tree-walker a test. Add both until that is fixed.
 
-- **basic/** - 5 programs (hello_world, simple, line_comments, comments_demo, comments_test)
-- **advanced/** - 6 programs (quine, factor, rot13, fibonacci, collatz, deep_nesting)
-- **utilities/** - 9 programs (cat, reverse, strip_tabs_lf, ascii_unary, clearscreen, beep, true, brainfuck_print, text_to_bf)
-- **tests/** - 6 programs (EOF behavior, infinite loops, warnings)
-- **errors/** - 7 programs (parse errors, runtime errors)
+Programs that never terminate on purpose (rot13, fibonacci) are tested by
+giving them a step limit and asserting on a prefix of the output — the limit
+stands in for the Ctrl-C a human would type. Programs with binary output are
+compared as raw bytes. Everything runs through `StringIo` rather than real
+stdin/stdout, so the suite is fast and deterministic.
 
-### Test Categories
+## Property-based tests
 
-- Basic programs (3 tests)
-- Advanced programs (5 tests) - quine, factor, rot13, fibonacci, collatz
-- Utility programs (8 tests)
-- EOF behavior tests (3 tests)
-- Error handling tests (3 tests)
-- Stress tests (1 test)
-- Corpus inventory (1 test)
+Proptest is used where a property should hold for *every* program rather than
+for a chosen few. The parser carries most of them (parsing never panics on
+arbitrary input, valid programs always parse, parsing is deterministic,
+balanced brackets always parse, comments never change validity), with more over
+codegen and the interpreter, and `property_debug_symbols.rs` covering the
+instruction-to-source mapping.
 
----
+```bash
+cargo test proptest                       # just the property tests
+PROPTEST_CASES=1000 cargo test proptest   # more cases than the default 100
+```
 
-## Completed Work
+A failing case is minimized by proptest and written to a regressions file —
+`crates/gyrus/proptest-regressions/` for the in-module tests, alongside the test
+for the integration ones. Those files are committed, which is the point: the
+shrunk counterexample becomes a permanent regression test.
 
-### ✅ Phase 1: Test Utilities Module
+## Generated programs
 
-**Status**: COMPLETE
-
-**Location**: `crates/gyrus/src/test_utils.rs`
-
-The module is `#[cfg(test)]` and private. It is not public API and is not
-compiled into what library consumers link, so helpers can be added, renamed, or
-deleted here without it being a breaking change.
-
-**Features**:
-- `run_bf(source, input)` - Simple test helper
-- `run_bf_with_config(source, input, config)` - Custom config helper
-- `run_bf_expect_ok/err()` - Assertion helpers
-- `assert_bf_equivalent()` - Program equivalence testing
-- `configs::*` - Pre-configured test configs (`tiny_memory`, `small_memory`,
-  `with_step_limit`, `with_eof_behavior`)
-- `proptest_strategies::arb_bf_program()` - Balanced-bracket program strategy
-
-Random program generation is *not* here. It is a real feature rather than a
-test helper, so it lives in `gyrus::random` behind the off-by-default `random`
-feature:
+`gyrus::random` generates BrainFuck for fuzzing and for the differential
+harness. It is a real feature rather than a test helper, so it sits behind the
+off-by-default `random` feature — the crate's only optional dependency:
 
 ```bash
 cargo test -p gyrus --features random     # exercise the generator
 cargo run -p gyrus-tool -- generate       # the same generator, from the CLI
 ```
 
-**Impact**: 54% reduction in test boilerplate
-
-### ✅ Phase 2: Property-Based Testing (Proptest)
-
-**Status**: COMPLETE
-
-**Dependency**: proptest 1.5
-
-**Tests**: 5 property tests for parser
-
-**Properties Verified**:
-1. Parsing never panics (on any input)
-2. Valid BF programs always parse successfully
-3. Parsing is deterministic
-4. Balanced brackets always parse
-5. Comments don't affect validity
-
-**Strategy**: Custom generators for valid BF programs and balanced brackets
-
-### ✅ Phase 3: Benchmark Infrastructure (Criterion)
-
-**Status**: COMPLETE
-
-**Dependency**: criterion 0.5 with HTML reports
-
-**Benchmarks**: 10 benchmarks across 2 suites
-
-**Interpreter Benchmarks** (`benches/interpreter.rs`):
-- Simple arithmetic
-- Nested loops
-- Pointer movement
-- I/O operations
-- Hello World
-
-**Parser Benchmarks** (`benches/parser.rs`):
-- Simple programs
-- Nested loops
-- Long programs (100x repeat)
-- Hello World
-- Programs with comments
-
-**Usage**: `cargo bench` (generates HTML reports in `target/criterion/`)
-
-### ✅ Phase 4: Integration Tests with Program Corpus
-
-**Status**: COMPLETE
-
-**Implementation**:
-- Created `programs/test_manifest.toml` documenting test expectations
-- Created `tests/program_corpus.rs` with 24 integration tests
-- Tests verify real BrainFuck programs execute correctly
-- Helper functions `run_program()` and `run_program_bytes()` for testing
-- All tests use mock I/O (StringIo) for fast, deterministic execution
-
-**Test Coverage**:
-- Basic programs: hello_world, simple, line_comments
-- Advanced programs: quine, factor, rot13, fibonacci, collatz
-- Utility programs: cat, reverse, strip_tabs_lf, ascii_unary, clearscreen, beep, true, brainfuck_print
-- EOF behavior: SetZero, SetNegOne, NoChange
-- Error handling: unmatched brackets, memory overflow, infinite loop
-- Stress testing: deep nesting
-
-**Documentation**:
-- `fibonacci_README.md` - 237 lines explaining sophisticated multi-digit arithmetic algorithm
-- `programs/README.md` - Comprehensive corpus documentation
-- All programs include usage examples and expected output
-
-### ✅ Phase 5: Utility Programs Collection
-
-**Status**: COMPLETE
-
-**Source**: D.B. Cristofani's collection (http://www.hevanet.com/cristofd/brainfuck/)
-
-**Programs**: 9 practical utilities demonstrating BrainFuck can be useful
-
-**Testing Innovations**:
-- **Step limit as "Ctrl-C"** - For infinite loop programs (rot13, fibonacci)
-- **starts_with() validation** - For streaming/infinite output programs
-- **Raw byte testing** - Using `run_program_bytes()` for binary output
-- **Mock I/O throughout** - Fast, deterministic tests with StringIo
-
----
-
-## Benefits Achieved
-
-- ✅ Reduced test boilerplate with utilities (test_utils.rs)
-- ✅ Catch edge cases with property-based testing (proptest)
-- ✅ Performance tracking with benchmarks (criterion)
-- ✅ Real-world verification with integration tests (program corpus)
-- ✅ Better confidence in correctness (103% more tests)
-- ✅ Foundation for future optimizations (baseline metrics)
-- ✅ Documented test expectations (test_manifest.toml)
-- ✅ Fast, deterministic testing with mock I/O (StringIo)
-- ✅ Creative testing strategies (step limit as "Ctrl-C" for infinite loop programs)
-- ✅ Comprehensive documentation (fibonacci_README.md explains sophisticated algorithms)
-- ✅ Wide range of test programs (33 programs from simple utilities to complex algorithms)
-- ✅ Mathematical algorithms tested (Collatz conjecture, Fibonacci, factorization)
-
----
-
-## Remaining Work
-
-### 🔴 High Priority
-
-#### 1. CI/CD Integration
-
-**Priority**: CRITICAL (foundation for ongoing quality)
-
-**Tasks**:
-```yaml
-# .github/workflows/ci.yml
-name: CI
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all-features
-      - run: cargo test --doc
-      - run: cargo clippy -- -D warnings
-      - run: cargo fmt -- --check
-
-  benchmarks:
-    runs-on: ubuntu-latest
-    # Run on schedule, not every commit
-    if: github.event_name == 'schedule'
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo bench --no-fail-fast
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-tarpaulin
-      - run: cargo tarpaulin --out Xml
-      - uses: codecov/codecov-action@v3
-```
-
-**Deliverables**:
-- GitHub Actions workflow
-- Coverage reporting (codecov or coveralls)
-- Status badges in README
-- Automated test runs on every commit
-
-**Estimated effort**: 4 hours
-
-#### 2. Performance Baseline Documentation
-
-**Priority**: HIGH (enables regression detection)
-
-**Tasks**:
-1. Run `cargo bench` on reference hardware
-2. Document baseline performance metrics
-3. Create `PRD/PERFORMANCE_BASELINE.md`
-
-**Metrics to capture**:
-```markdown
-# Performance Baseline
-
-**Date**: [Date]
-**Hardware**: [CPU, RAM details]
-**Rust version**: [version]
-
-## Parser Performance
-- Simple programs: X programs/sec
-- Nested loops: X programs/sec
-- Hello World: X programs/sec
-
-## Interpreter Performance
-- Simple arithmetic: X instructions/sec
-- Nested loops: X iterations/sec
-- I/O operations: X bytes/sec
-- Hello World: X ms total
-
-## Memory Overhead
-- Parser: X KB per program
-- Interpreter: X KB baseline + Y KB per 1000 cells
-
-## Comparison
-[Optional: compare with other BF interpreters]
-```
-
-**Deliverables**:
-- Documented baseline metrics
-- Benchmark execution guide
-- Performance regression detection strategy
-
-**Estimated effort**: 2 hours
-
-### 🟡 Medium Priority
-
-#### 3. Expand Property-Based Tests
-
-**Priority**: MEDIUM (improve edge case coverage)
-
-**Current**: 5 property tests (parser only)
-
-**Proposed additions**:
-
-```rust
-// tests/property_tests.rs
-
-// Interpreter determinism
-proptest! {
-    #[test]
-    fn interpreter_is_deterministic(
-        program in valid_bf_source(),
-        input in ".*"
-    ) {
-        let result1 = run_bf(&program, &input);
-        let result2 = run_bf(&program, &input);
-        prop_assert_eq!(result1, result2);
-    }
-}
-
-// Step counting accuracy
-proptest! {
-    #[test]
-    fn step_count_matches_instructions(
-        program in simple_bf_source()
-    ) {
-        // Verify stats.total_steps equals count of BF commands executed
-        // (accounting for loops)
-    }
-}
-
-// Memory model equivalence (for compatible programs)
-proptest! {
-    #[test]
-    fn memory_models_preserve_semantics(
-        program in simple_bf_source()
-    ) {
-        // Programs that don't rely on wrapping/bounds should work
-        // identically across memory models
-    }
-}
-
-// I/O correctness
-proptest! {
-    #[test]
-    fn io_roundtrip(input in ".*") {
-        // ,[.,] should echo input exactly
-        let (output, _) = run_bf(",[.,]", &input).unwrap();
-        prop_assert_eq!(output, input);
-    }
-}
-```
-
-**Deliverables**:
-- 4-6 new interpreter property tests
-- Improved generators (simple programs, I/O-focused programs)
-- Documentation of tested properties
-
-**Estimated effort**: 6 hours
-
-#### 4. Test Manifest Integration
-
-**Priority**: MEDIUM (reduce test duplication)
-
-**Current**: `test_manifest.toml` drives the JIT's corpus test
-(`crates/gyrus-jit/tests/corpus.rs`); the tree-walker's corpus test still
-hand-codes its cases
-
-**Proposed**:
-
-```rust
-// tests/manifest_driven.rs
-// Load test_manifest.toml and generate tests dynamically
-
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct TestCase {
-    name: String,
-    file: String,
-    input: Option<String>,
-    expected_output: Option<String>,
-    expected_exit: String, // "success" or "error"
-    expected_warnings: Option<usize>,
-    config: Option<TestConfig>,
-}
-
-#[test]
-fn run_manifest_tests() {
-    let manifest = load_manifest("programs/test_manifest.toml");
-
-    for test in manifest.tests {
-        // Generate test cases from manifest
-        run_test_case(&test);
-    }
-}
-```
-
-**Deliverables**:
-- Manifest-driven test runner
-- All 33 programs verified against manifest
-- Reduced duplication in test code
-
-**Estimated effort**: 8 hours
-
-#### 5. Coverage Measurement
-
-**Priority**: MEDIUM (identify gaps)
-
-**Tasks**:
+It produces two kinds of program: uniformly random instruction soup, which is
+good at finding crashes, and *idiomatic* programs built from recognizable
+patterns (clear loops, copies, multiplies, scans), which are good at finding
+optimizer bugs because they contain the shapes the optimizer rewrites.
+
+## Benchmarks
 
 ```bash
-# Install cargo-tarpaulin or cargo-llvm-cov
-cargo install cargo-tarpaulin
+cargo bench                          # criterion, HTML reports in target/criterion/
+cargo bench --bench interpreter
+cargo bench --bench parser
+cargo bench -- simple_arithmetic     # one benchmark by name
 
-# Generate coverage report
-cargo tarpaulin --out Html --output-dir coverage/
-
-# Document coverage percentage
-# Identify untested code paths
+scripts/benchmark.sh                 # end-to-end timings, output verified
+scripts/benchmark.sh --full          # include the slow --debug runs
+scripts/benchmark.sh --profile PROG  # loop profile via --trace
 ```
 
-**Deliverables**:
-- HTML coverage reports
-- Documentation of coverage percentage
-- List of untested code paths with rationale
+The criterion suites cover arithmetic, nested loops, pointer movement, I/O,
+Hello World, hanoi, and mandelbrot for the interpreter; simple, nested, long,
+and comment-heavy sources for the parser. `hanoi` and `mandelbrot` are embedded
+via `include_str!` so the benchmark binary does not depend on the working
+directory.
 
-**Estimated effort**: 3 hours
+Micro-benchmarks and `benchmark.sh` answer different questions: criterion tells
+you whether a function got slower, `benchmark.sh` tells you whether a program
+got slower *and still prints the right thing*.
 
-### 🟢 Low Priority (Polish)
+## Checks that guard claims
 
-#### 6. Additional Testing Features
-
-**Fuzzing** (Optional):
-```rust
-// fuzz/fuzz_targets/parser.rs
-#[no_mangle]
-pub extern "C" fn LLVMFuzzerTestOneInput(data: &[u8]) -> i32 {
-    if let Ok(s) = std::str::from_utf8(data) {
-        let _ = parse(s); // Should never panic
-    }
-    0
-}
-```
-
-**Snapshot Testing** (Optional):
-```rust
-// Use insta crate for error message regression testing
-#[test]
-fn test_error_message_format() {
-    let result = parse("[[[+");
-    insta::assert_snapshot!(format!("{}", result.unwrap_err()));
-}
-```
-
-**Performance Budgets** (Optional):
-```rust
-#[test]
-fn hello_world_performance_budget() {
-    let start = Instant::now();
-    run_program("basic/hello_world.bf", "", config);
-    assert!(start.elapsed() < Duration::from_millis(10));
-}
-```
-
-**Additional Programs** (Optional):
-- 99_bottles.bf
-- mandelbrot.bf (stress test)
-- prime.bf
-- hanoi.bf
-- sort.bf (byte sorting from Cristofani's examples)
-
-**Estimated effort per feature**: 2-6 hours each
-
----
-
-## Testing Best Practices
-
-### 1. Test Naming Convention
-
-```rust
-// Pattern: test_<component>_<scenario>_<expected_outcome>
-#[test]
-fn test_parser_unmatched_bracket_returns_error() { ... }
-
-#[test]
-fn test_interpreter_step_limit_halts_execution() { ... }
-
-#[test]
-fn test_fibonacci_generates_correct_sequence() { ... }
-```
-
-### 2. Test Organization
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod parsing {
-        // Parser tests
-    }
-
-    mod execution {
-        // Interpreter tests
-    }
-
-    mod edge_cases {
-        // Boundary conditions
-    }
-}
-```
-
-### 3. Use Test Utilities
-
-```rust
-// Good - uses helper
-use crate::test_utils::run_bf_expect_ok;
-let (output, stats) = run_bf_expect_ok("+++++.", "");
-
-// Avoid - manual setup every time
-let instructions = parse("+++++.").unwrap();
-let config = ExecutionConfig::default();
-let mut input = StringIo::new("");
-// ... many lines of boilerplate
-```
-
----
-
-## Running Tests
+Some facts about this repository are claims nobody exercises day to day, so they
+rot silently. Each of these has been wrong at least once, which is why it is a
+script now rather than a good intention:
 
 ```bash
-# All tests (136 total)
-cargo test
-
-# Just integration tests
-cargo test --test program_corpus
-
-# Just property tests
-cargo test proptest
-
-# Benchmarks
-cargo bench
-
-# With test corpus inventory
-cargo test test_corpus_inventory -- --nocapture
-
-# With coverage
-cargo tarpaulin --out Html
+scripts/check-msrv.sh              # the workspace builds on its declared MSRV
+scripts/check-readme-commands.py   # every flag the docs use really exists
+scripts/check-doc-links.py         # every relative Markdown link resolves
+scripts/check-examples.sh          # every example runs, not just compiles
+scripts/check-tape-access.py       # the tape is indexed only where the contract is enforced
 ```
 
----
+`check-examples.sh` runs each example rather than only building it, because
+building is not enough: when `MemoryAddress` became signed,
+`hooks_execution_tracer` still compiled and panicked on its first instruction,
+and nothing noticed because nothing ran it.
 
-## Success Criteria
+`check-readme-commands.py` needs `cargo build --release --workspace` first.
 
-### Current Achievement
+When adding a claim to the docs, ask whether a script could check it. If it
+could, write the script — an unexecuted claim is one that will eventually be
+false.
 
-- ✅ 136 total tests (goal: 100+)
-- ✅ Fast execution (< 2 seconds)
-- ✅ Zero flaky tests
-- ✅ Property-based testing active
-- ✅ Benchmark infrastructure ready
-- ✅ Comprehensive program corpus
+## Adding a test
 
-### Remaining Goals
-
-- ⏳ CI/CD integration
-- ⏳ Code coverage measurement (target: 85%+)
-- ⏳ Performance baseline documented
-- ⏳ Manifest-driven testing
-- ⏳ Expanded property tests (10+ total)
-
----
-
-## Implementation Roadmap
-
-### Immediate (Next Sprint)
-1. **CI/CD Integration** [4 hours] - CRITICAL
-2. **Performance Baseline** [2 hours] - HIGH
-
-### Near-term (Next Month)
-3. **Expand Property Tests** [6 hours] - MEDIUM
-4. **Test Manifest Integration** [8 hours] - MEDIUM
-5. **Coverage Measurement** [3 hours] - MEDIUM
-
-### Long-term (Optional)
-6. **Fuzzing** [4 hours]
-7. **Snapshot Testing** [3 hours]
-8. **Additional Programs** [2 hours each]
-9. **Performance Budgets** [4 hours]
-
-**Total estimated effort for high/medium priority items**: ~23 hours
-
----
-
-## Risks & Mitigations
-
-### Risk 1: CI Build Times
-**Impact**: MEDIUM
-**Mitigation**:
-- Cache dependencies
-- Run benchmarks on schedule, not every commit
-- Parallel test execution
-
-### Risk 2: False Positives in Property Tests
-**Impact**: LOW
-**Mitigation**:
-- Use deterministic seeds
-- Document known edge cases
-- Refine generators based on failures
-
-### Risk 3: Coverage Gaps
-**Impact**: LOW
-**Mitigation**:
-- Review coverage reports regularly
-- Focus on critical paths
-- Accept that 100% coverage is not goal
-
----
-
-## Conclusion
-
-The testing infrastructure is **production-ready** with:
-
-✅ **Comprehensive coverage**: 136 tests across unit/integration/property/doc
-✅ **Real-world validation**: 33 BrainFuck programs from simple to sophisticated
-✅ **Performance tracking**: Benchmark infrastructure ready
-✅ **Developer experience**: Test utilities reduce boilerplate by 54%
-✅ **Quality assurance**: Property tests catch edge cases
-✅ **Fast feedback**: < 2 second test execution
-
-**Next steps** focus on automation (CI/CD) and measurement (performance baseline, coverage) to maintain this quality as the project grows.
-
----
-
-## References
-
-- **D.B. Cristofani's BF Programs**: http://www.hevanet.com/cristofd/brainfuck/
-- **Fibonacci Algorithm**: `programs/third-party/advanced/fibonacci_README.md`
-- **Test Manifest**: `programs/test_manifest.toml`
-- **Test Utilities**: `crates/gyrus/src/test_utils.rs` (private, `#[cfg(test)]`)
-- **Random Programs**: `crates/gyrus/src/random.rs` (`random` feature)
+- **A language or interpreter behavior**: a unit test beside the code, using
+  the helpers in `test_utils.rs` (`run_bf`, `run_bf_expect_ok`,
+  `run_bf_expect_err`, `assert_bf_equivalent`, and the ready-made configs).
+- **A whole program**: add it under `programs/`, describe it in
+  `test_manifest.toml`, and add the matching case to `program_corpus.rs`.
+- **Something that should hold for every program**: a proptest, not fifty
+  hand-written cases.
+- **An optimizer or JIT change**: nothing hand-written is as good as the
+  differential harness. If a new pattern is recognized, make sure the generator
+  can produce it, so `generated.rs` exercises it on every run.
