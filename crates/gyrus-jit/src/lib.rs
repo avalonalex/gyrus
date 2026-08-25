@@ -20,7 +20,7 @@ use gyrus::io::{BfInput, BfOutput};
 use gyrus::optimizer::{OptimizedInstruction, OptimizedProgram};
 use gyrus::{
     BfError, CellModel, DebugInfo, EofBehavior, ExecutionConfig, ExecutionStats, MemoryAddress,
-    MemoryDump, MemorySize, Result,
+    MemorySize, Result, StepCount,
 };
 use std::ffi::c_void;
 
@@ -95,12 +95,20 @@ fn access_flags() -> MemFlagsData {
 }
 
 /// Why a site can fail, and which original instruction it belongs to.
+///
+/// The index is the instruction's position in the parsed program -- the
+/// start of its `SourceRange` -- which is what `DebugInfo` maps to a source
+/// location. The interpreters report their *step count* in the error's
+/// `instruction_index` field instead, because that is all they have at the
+/// failing access; the JIT knows the instruction, so it reports that, and
+/// with debug info can point at the line and column, which the optimized
+/// interpreter never could.
 #[derive(Clone, Copy)]
 enum Site {
-    /// A read or write of the cell under the cursor, off the tape.
+    /// A read or write of a cell that is not on the tape.
     Access { instruction_index: usize },
     /// The I/O callback reported an error; the runtime holds it.
-    Io,
+    Io { instruction_index: usize },
 }
 
 type Entry = extern "C" fn(*mut c_void, *mut u8, i64, *mut i64) -> i32;
@@ -143,30 +151,23 @@ pub fn run(
     if status != 0 {
         let site = sites[(status - 1) as usize];
         return Err(match site {
-            Site::Access { instruction_index } => BfError::MemoryOutOfBounds {
-                instruction_index: instruction_index.into(),
-                attempted: cursor as isize,
-                max: MemorySize::new(tape.len() - 1),
-                memory_dump: Some(Box::new(MemoryDump::from_memory(
-                    &tape,
-                    MemoryAddress::new(cursor as isize),
-                ))),
-                source_location: debug_info.and_then(|d| d.lookup(instruction_index)),
-                loop_call_stack: None,
-                hint: format!(
-                    "Attempted to use cell {cursor}, outside the {}-cell tape. Moving the cursor \
-                     there is allowed; reading or writing it is not.",
-                    tape.len()
-                ),
-            },
-            Site::Io => {
+            // The same constructor the interpreters use, so the message
+            // cannot drift; see `MemoryModel::access_error` for the fields.
+            Site::Access { instruction_index } => config.memory_model().access_error(
+                MemoryAddress::new(cursor as isize),
+                &tape,
+                StepCount::new(instruction_index as u64),
+                debug_info,
+                instruction_index,
+            ),
+            Site::Io { instruction_index } => {
                 let (operation, source) = rt
                     .io_error
                     .take()
                     .unwrap_or_else(|| ("I/O", std::io::Error::other("unknown I/O failure")));
                 BfError::IoError {
                     operation: operation.to_string(),
-                    instruction_index: None,
+                    instruction_index: Some(instruction_index.into()),
                     source,
                 }
             }
@@ -392,7 +393,12 @@ impl Translator<'_> {
                 let v = self.b.ins().uextend(types::I32, v);
                 let call = self.b.ins().call(self.write_ref, &[self.rt, v]);
                 let status = self.b.inst_results(call)[0];
-                let fail = self.fail_block(Site::Io, c);
+                let fail = self.fail_block(
+                    Site::Io {
+                        instruction_index: index,
+                    },
+                    c,
+                );
                 let ok = self.b.create_block();
                 self.b.ins().brif(status, fail, &[], ok, &[]);
                 self.b.switch_to_block(ok);
@@ -401,7 +407,12 @@ impl Translator<'_> {
                 let call = self.b.ins().call(self.read_ref, &[self.rt]);
                 let r = self.b.inst_results(call)[0];
                 let here = self.b.use_var(self.cursor);
-                let fail = self.fail_block(Site::Io, here);
+                let fail = self.fail_block(
+                    Site::Io {
+                        instruction_index: index,
+                    },
+                    here,
+                );
                 let failed = self.b.ins().icmp_imm_s(IntCC::Equal, r, -2);
                 let ok = self.b.create_block();
                 self.b.ins().brif(failed, fail, &[], ok, &[]);

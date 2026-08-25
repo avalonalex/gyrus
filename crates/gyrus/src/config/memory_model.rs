@@ -86,6 +86,24 @@ impl MemoryBehavior for FixedMemory {
         instruction_index: usize,
     ) -> Result<&'a mut u8> {
         // A fixed tape never grows, so being off it is the end of the story.
+        Err(self.access_error(cursor, memory, step_count, debug_info, instruction_index))
+    }
+
+    fn initial_size(&self) -> MemorySize {
+        self.size
+    }
+}
+
+impl FixedMemory {
+    /// The error for using `cursor`, which is off this tape.
+    fn access_error(
+        &self,
+        cursor: MemoryAddress,
+        memory: &[u8],
+        step_count: StepCount,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> BfError {
         let last = MemorySize::new(self.size.get().saturating_sub(1));
         let hint = if cursor.get() < 0 {
             format!(
@@ -105,7 +123,7 @@ impl MemoryBehavior for FixedMemory {
                 (cursor.get().max(0) as usize + 1).max(self.size.get() * 2),
             )
         };
-        Err(out_of_bounds(
+        out_of_bounds(
             cursor,
             memory,
             last,
@@ -113,11 +131,7 @@ impl MemoryBehavior for FixedMemory {
             debug_info,
             instruction_index,
             hint,
-        ))
-    }
-
-    fn initial_size(&self) -> MemorySize {
-        self.size
+        )
     }
 }
 
@@ -195,6 +209,24 @@ impl MemoryBehavior for UnboundedMemory {
             // tape-access-ok: just resized the tape to cover idx.
             return Ok(&mut memory[idx]);
         }
+        Err(self.access_error(cursor, memory, step_count, debug_info, instruction_index))
+    }
+
+    fn initial_size(&self) -> MemorySize {
+        self.initial_size
+    }
+}
+
+impl UnboundedMemory {
+    /// The error for using `cursor`, which no growth of this tape can reach.
+    fn access_error(
+        &self,
+        cursor: MemoryAddress,
+        memory: &[u8],
+        step_count: StepCount,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> BfError {
         let last = MemorySize::new(self.max_size.get().saturating_sub(1));
         let hint = if cursor.get() < 0 {
             "Attempted to use a cell left of cell 0. The tape grows rightwards only; \
@@ -208,7 +240,7 @@ impl MemoryBehavior for UnboundedMemory {
                 self.max_size.get()
             )
         };
-        Err(out_of_bounds(
+        out_of_bounds(
             cursor,
             memory,
             last,
@@ -216,11 +248,7 @@ impl MemoryBehavior for UnboundedMemory {
             debug_info,
             instruction_index,
             hint,
-        ))
-    }
-
-    fn initial_size(&self) -> MemorySize {
-        self.initial_size
+        )
     }
 }
 
@@ -297,6 +325,37 @@ impl MemoryModel {
             }
             MemoryModel::Unbounded(m) => {
                 m.cell_off_tape(cursor, memory, step_count, debug_info, instruction_index)
+            }
+        }
+    }
+}
+
+impl MemoryModel {
+    /// The error for using `cursor`, a position this model cannot make a cell
+    /// of: off a fixed tape, or beyond an unbounded tape's maximum.
+    ///
+    /// This is the one place the message is written. Both interpreters reach
+    /// it through [`Self::cell_off_tape`]; the JIT, which finds out about a
+    /// bad access after its generated code has returned, calls it directly
+    /// with the position the code recorded. `instruction_index` is what
+    /// `debug_info` is looked up with; `step_count` is what the error
+    /// reports as its `instruction_index`, an inherited naming the
+    /// interpreters fill with their step count and the JIT with the
+    /// instruction index itself.
+    pub fn access_error(
+        &self,
+        cursor: MemoryAddress,
+        memory: &[u8],
+        step_count: StepCount,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> BfError {
+        match self {
+            MemoryModel::Fixed(m) => {
+                m.access_error(cursor, memory, step_count, debug_info, instruction_index)
+            }
+            MemoryModel::Unbounded(m) => {
+                m.access_error(cursor, memory, step_count, debug_info, instruction_index)
             }
         }
     }
