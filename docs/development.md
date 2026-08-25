@@ -100,6 +100,21 @@ scripts/benchmark.sh --profile PROG  # loop profile via --trace
 cargo bench                          # criterion micro-benchmarks
 ```
 
+`GYRUS_JIT_DUMP=path` writes the emitted bytes to `path` and prints the address
+they were mapped at, alongside a `path.srcloc` table of code offset to AST
+index. A sampling profiler sees only addresses inside JIT'd code; those two
+files are what turn a sample into a BrainFuck construct:
+
+```bash
+GYRUS_JIT_DUMP=/tmp/code.bin samply record -s -r 20000 -- \
+    ./target/release/gyrus --jit programs/third-party/advanced/mandelbrot.bf
+```
+
+Mapping the leaf frames through that table is how the JIT's time was first
+attributed by construct -- 49% of mandelbrot is seek loops -- and how it was
+established that those loops are latency-bound rather than
+instruction-bound. See [`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md).
+
 `GYRUS_JIT_DISASM=1` makes `gyrus --jit` print the machine code Cranelift
 emitted, on stderr, before running. It is how you find out what a translation
 choice actually costs rather than guessing -- and, as often, what it does not

@@ -403,6 +403,66 @@ value in SSA within a run, and read Cranelift's output for a hot loop.
 Kept so that nobody measures these again. Each has a branch or PR with the
 code; the numbers are what decided it.
 
+### The seek loop is latency-bound — 2026-08-25, the useful negative
+
+**How it was measured.** `GYRUS_JIT_DUMP=path` writes the emitted bytes and
+prints the address they were mapped at, and every emitted instruction now
+carries the AST index it came from (`set_srcloc`), so Cranelift's offset table
+turns a profiler's hex into BrainFuck. `samply` at 20 kHz on mandelbrot, leaf
+frames mapped through that table:
+
+| construct | share of time |
+|---|---|
+| `SeekRight` | 30.3% |
+| `Loop` (the header test) | 24.6% |
+| `SeekLeft` | 18.4% |
+| `MultiplyAdd` | 9.5% |
+| `Right` / `Left` | 9.5% |
+| `Add` / `Sub` | 7.2% |
+
+95.9% of samples are inside the generated code; the runtime callbacks and I/O
+do not appear. **Seeks are 49% of the run**, which confirms by time what was
+previously known by instruction count.
+
+**The experiment.** The seek loop's whole body is a bounds check, a byte load
+and a test. The test was costing two instructions rather than one:
+Cranelift cannot assume an `I8` has clear high bits, so `brif` on one lowers to
+`ands wzr, w, #255` and a flag-testing branch. Widening afterwards does not
+help -- the egraph rewrites `brif(uextend(v))` back to `brif(v)`. Loading the
+byte straight into an `I32` with `uload8` leaves no `I8` in the IR, and the
+test becomes a single `cbnz`:
+
+```
+                                  subs xzr, x0, x20     ; bounds check
+subs xzr, x0, x20                 b.lo body
+b.lo body                         ldrb w5, [x19, x0]
+ldrb w5, [x19, x0]        -->     cbnz w5, step
+ands wzr, w5, #255
+b.ne step
+```
+
+Six instructions an iteration became five, in 49% of the runtime.
+
+**Result: 0.0%.** mandelbrot 938.9 ms against 939.0 ms; hanoi 131.7 against
+131.7. Interleaved min-of-7 against a `main` worktree binary. Only 99beer
+moved, -3.7%, and that is a 10 ms program where the win is compile time.
+
+**What that means, and it is the point.** Removing a sixth of the instructions
+from half the runtime changed nothing, so the seek loop is not
+instruction-throughput-bound. Its branch depends on its load, and there is
+exactly one load in flight at a time: the loop runs at load-to-branch latency
+no matter how few instructions surround it. That also explains the earlier
+4.5% ceiling for removing every bounds check -- the checks were never the
+constraint either.
+
+**So the next thing to try is memory-level parallelism, not fewer
+instructions.** Unroll the seek to test several strided cells per iteration, so
+independent loads are in flight together, and only then branch on the combined
+result. For stride 1 the same idea is a NEON compare across 16 bytes. Both are
+real work and both must respect the tape contract at the far end of the
+unrolled step; neither is worth attempting without re-measuring against this
+table.
+
 ### One shared exit epilogue in the JIT — 2026-08-25, negative
 
 **The observation.** `GYRUS_JIT_DISASM=1` prints what Cranelift emitted. For
@@ -578,3 +638,4 @@ For each new optimization:
 - 2025-11-02: Initial document with 6 optimization opportunities identified
 - 2026-08-24: Offset addressing tried and recorded as a negative result; scan by N promoted on its evidence
 - 2026-08-25: JIT shared exit epilogue tried and recorded as a negative result; `GYRUS_JIT_DISASM=1` added to make emitted code inspectable
+- 2026-08-25: profiled the JIT by construct (`GYRUS_JIT_DUMP` + srcloc); seeks are 49% of mandelbrot and the loop is latency-bound, so instruction count is the wrong target
