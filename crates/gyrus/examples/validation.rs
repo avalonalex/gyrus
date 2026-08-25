@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo run --example validation
 
-use gyrus::{BfError, parse, validate};
+use gyrus::{BfError, parse_with_debug, validate};
 
 fn main() -> Result<(), BfError> {
     println!("=== Program Validation Example ===\n");
@@ -14,8 +14,8 @@ fn main() -> Result<(), BfError> {
     println!("Example 1: Clean Program");
     println!("------------------------");
     let clean_program = "+++++[>+++++<-]>+.";
-    let instructions = parse(clean_program)?;
-    let warnings = validate(&instructions);
+    let (instructions, debug_info) = parse_with_debug(clean_program)?;
+    let warnings = validate(&instructions, &debug_info);
 
     if warnings.is_empty() {
         println!("✓ Program is clean - no warnings");
@@ -31,8 +31,8 @@ fn main() -> Result<(), BfError> {
     println!("Example 2: Empty Loop");
     println!("---------------------");
     let empty_loop = "+++[]+++";
-    let instructions = parse(empty_loop)?;
-    let warnings = validate(&instructions);
+    let (instructions, debug_info) = parse_with_debug(empty_loop)?;
+    let warnings = validate(&instructions, &debug_info);
 
     println!("Program: {}", empty_loop);
     if !warnings.is_empty() {
@@ -48,8 +48,8 @@ fn main() -> Result<(), BfError> {
     println!("Example 3: Infinite Increment Loop");
     println!("-----------------------------------");
     let infinite_loop = "+++[+]";
-    let instructions = parse(infinite_loop)?;
-    let warnings = validate(&instructions);
+    let (instructions, debug_info) = parse_with_debug(infinite_loop)?;
+    let warnings = validate(&instructions, &debug_info);
 
     println!("Program: {}", infinite_loop);
     if !warnings.is_empty() {
@@ -66,8 +66,8 @@ fn main() -> Result<(), BfError> {
     println!("Example 4: Extreme Nesting");
     println!("--------------------------");
     let deeply_nested = "[[[[[[[[[[[+]]]]]]]]]]]"; // 11 levels deep
-    let instructions = parse(deeply_nested)?;
-    let warnings = validate(&instructions);
+    let (instructions, debug_info) = parse_with_debug(deeply_nested)?;
+    let warnings = validate(&instructions, &debug_info);
 
     println!("Program: {}", deeply_nested);
     println!("Nesting depth: 11 levels");
@@ -84,8 +84,8 @@ fn main() -> Result<(), BfError> {
     println!("Example 5: Multiple Issues");
     println!("--------------------------");
     let multiple_issues = "[][+][[[[[[[[[[[++]]]]]]]]]]]"; // Empty loop + infinite loop + deep nesting
-    let instructions = parse(multiple_issues)?;
-    let warnings = validate(&instructions);
+    let (instructions, debug_info) = parse_with_debug(multiple_issues)?;
+    let warnings = validate(&instructions, &debug_info);
 
     println!("Program: {}", multiple_issues);
     println!("✓ Detected {} warning(s):", warnings.len());
@@ -100,10 +100,10 @@ fn main() -> Result<(), BfError> {
 
     let program = "++[++]"; // Intentionally problematic
     println!("Step 1: Parse the program");
-    let instructions = match parse(program) {
-        Ok(instrs) => {
+    let (instructions, debug_info) = match parse_with_debug(program) {
+        Ok(parsed) => {
             println!("  ✓ Parsing successful");
-            instrs
+            parsed
         }
         Err(e) => {
             println!("  ✗ Parse error: {}", e);
@@ -112,7 +112,7 @@ fn main() -> Result<(), BfError> {
     };
 
     println!("\nStep 2: Validate for warnings");
-    let warnings = validate(&instructions);
+    let warnings = validate(&instructions, &debug_info);
 
     if warnings.is_empty() {
         println!("  ✓ No warnings - safe to execute");

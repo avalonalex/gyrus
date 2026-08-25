@@ -563,6 +563,46 @@ pub enum BfWarning {
     },
 }
 
+impl BfWarning {
+    /// Where the warning points.
+    pub fn location(&self) -> SourceLocation {
+        match self {
+            BfWarning::EmptyLoop { location }
+            | BfWarning::ExtremeNesting { location, .. }
+            | BfWarning::SuspiciousPattern { location, .. }
+            | BfWarning::DeadCode { location, .. } => *location,
+        }
+    }
+
+    /// A stable identifier for the kind of warning.
+    ///
+    /// Stable in the sense that matters: it is what a caller filters or
+    /// suppresses on, so it may not change when the prose does. The prose is
+    /// for people and can be improved freely; this cannot.
+    pub fn code(&self) -> &'static str {
+        match self {
+            BfWarning::EmptyLoop { .. } => "empty-loop",
+            BfWarning::ExtremeNesting { .. } => "extreme-nesting",
+            BfWarning::SuspiciousPattern { .. } => "suspicious-pattern",
+            BfWarning::DeadCode { .. } => "dead-code",
+        }
+    }
+
+    /// The warning with its source line and a caret, the way errors are shown.
+    ///
+    /// A warning that names a line the reader then has to go and find is doing
+    /// half the job; this is the other half, and it is the same treatment
+    /// [`BfError`] and [`RuntimeWarning`] already give.
+    pub fn format_with_source(&self, source: &str) -> String {
+        let location = self.location();
+        format!(
+            "{}\n\n{}",
+            self,
+            extract_source_context_highlighted(source, location)
+        )
+    }
+}
+
 impl fmt::Display for BfWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

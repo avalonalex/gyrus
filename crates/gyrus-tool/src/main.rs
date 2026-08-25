@@ -3,14 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 
 use gyrus::{
-    BfError, CellModel, DebugInfo, SourceLocation, U8WrappingCells,
+    BfError, CellModel, DebugInfo, SourceLocation,
     codegen::compile_string,
     minify, optimize_with_cell_model, parse, parse_with_debug,
     random::{
         IdiomaticConfig, RandomProgramConfig, generate_idiomatic_program, generate_random_program,
     },
     syntax::{ColorTheme, SyntaxHighlighter},
-    validate,
+    validate_with_cell_model,
 };
 
 #[derive(Parser)]
@@ -294,18 +294,9 @@ fn run_validate(
     })?;
 
     // Parse the program
-    let (instructions, _debug_info) = parse_with_debug(&source)?;
+    let (instructions, debug_info) = parse_with_debug(&source)?;
 
-    // Parse cell model (for future use when validation becomes model-aware)
-    let _cell_model_parsed = match cell_model.parse::<CellModel>() {
-        Ok(CellModel::U8Checked(_)) => {
-            eprintln!(
-                "Note: Cell model '{}' specified, but validation currently assumes u8 wrapping.",
-                cell_model
-            );
-            eprintln!("      Model-aware validation is planned for a future release.");
-            CellModel::U8Wrapping(U8WrappingCells)
-        }
+    let model = match cell_model.parse::<CellModel>() {
         Ok(model) => model,
         Err(()) => {
             eprintln!(
@@ -316,8 +307,7 @@ fn run_validate(
         }
     };
 
-    // Validate (currently always assumes u8 wrapping)
-    let warnings = validate(&instructions);
+    let warnings = validate_with_cell_model(&instructions, &debug_info, model);
 
     if warnings.is_empty() {
         println!("✓ Validation complete: No warnings found");
@@ -325,7 +315,10 @@ fn run_validate(
     } else {
         eprintln!("Validation found {} warning(s):\n", warnings.len());
         for warning in &warnings {
-            eprintln!("{}\n", warning);
+            // With source context and a caret, the way errors are shown. A
+            // warning that names a line the reader then has to go and find is
+            // doing half the job.
+            eprintln!("{}\n", warning.format_with_source(&source));
         }
 
         eprintln!("Validation complete: {} warnings", warnings.len());
@@ -711,12 +704,20 @@ fn display_optimization_mapping(
                 source.len()
             };
 
-            // Extract the source substring using character offsets
-            let source_bytes = source.as_bytes();
-            let substring = if char_end <= source_bytes.len() && char_start <= char_end {
-                String::from_utf8_lossy(&source_bytes[char_start..char_end]).to_string()
+            // `SourceLocation::offset` counts characters, not bytes -- the
+            // parser advances it once per `char`. Slicing the byte array with
+            // those indices silently produces the wrong text the moment the
+            // source contains a multi-byte character, which a comment easily
+            // can, and `from_utf8_lossy` then hides it behind replacement
+            // characters instead of failing. Take characters.
+            let substring: String = if char_start <= char_end {
+                source
+                    .chars()
+                    .skip(char_start)
+                    .take(char_end - char_start)
+                    .collect()
             } else {
-                "".to_string()
+                String::new()
             };
 
             output.push_str(&substring);

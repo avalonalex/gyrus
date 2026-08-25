@@ -229,13 +229,18 @@ let config = ExecutionConfig::builder()
 
 ### Cell-Model-Aware Validation
 
-The validator (`validator.rs`) provides **cell-model-aware** warnings via `validate_with_cell_model()`:
+The validator (`validator.rs`) provides **cell-model-aware** warnings via
+`validate_with_cell_model()`; `validate()` is that with the default model.
+Warnings carry the position of the loop's `[`, resolved through `DebugInfo`,
+and `BfWarning::format_with_source` renders them with a caret the way errors
+are rendered.
 
 **Pattern**: `[+]` (increment loop behavior)
 - **With U8Wrapping**: Inefficient (~256 iterations), but terminates by wrapping through 0
   - Warning: "Inefficient pattern: loops ~256 times. Use [-] to clear a cell."
 - **With U8Checked**: Will error on overflow when reaching 255+1
-  - Warning: "Will error on overflow with checked arithmetic."
+  - Warning: "Will fail under checked cells: incrementing by N never reaches
+    zero, and the cell overflows at 255. Use [-] to clear a cell."
 
 **Pattern**: `[-]` (cell clear)
 - **All models**: This is idiomatic BrainFuck

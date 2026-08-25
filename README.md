@@ -82,7 +82,8 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
   breakpoints, profilers, and tracers — and zero cost when unused
 
 **Diagnostics**
-- Every error carries a line, a column, and a syntax-highlighted excerpt
+- Every error *and warning* carries a line, a column, and a
+  syntax-highlighted excerpt
 - All bracket mismatches reported in a single pass
 - Static validation for empty loops, extreme nesting, and inefficient idioms,
   aware of which cell model you are running

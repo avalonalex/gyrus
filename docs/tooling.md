@@ -19,14 +19,21 @@ gyrus-tool validate program.bf
 
 **`gyrus-tool validate` (Lint Mode)**
 - Parses and analyzes the code for issues
-- Shows all warnings (or "No warnings found")
+- Shows all warnings, each with its line, column, and a caret into the source
+  (or "No warnings found")
 - Never executes the program
 - Useful for checking code quality without running
 
-**Validation Target: U8 Wrapping**
-- Validation ALWAYS assumes u8 wrapping (production/JIT target)
-- Warns about inefficient patterns for standard BrainFuck
-- Independent of runtime cell model (`--cell-model` is for runtime only)
+**Validation target: pick the cell model you will run under**
+- `--cell-model wrapping` (the default) or `--cell-model checked`
+- The model changes what a pattern *means*, not just how fast it is. `[+]`
+  under wrapping is a slow way to clear a cell -- it counts up, wraps through
+  255 to zero, and stops after about 256 iterations. Under checked cells the
+  same loop never wraps: it reports an overflow at 255. One is an
+  inefficiency, the other is a program that stops working, and the warning
+  says which.
+- Independent of the model used to *execute*; this is the model to assume
+  while reading.
 
 ### Warning Types
 
