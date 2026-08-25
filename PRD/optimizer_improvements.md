@@ -126,11 +126,18 @@ already is.
 
 ---
 
-### 3. Set Value Pattern
+### 3. Set Value Pattern — ✅ shipped
 
 **Priority:** Medium
 **Complexity:** Medium
 **Impact:** Common in initialization code
+
+**Shipped 2026-08-24**, as the post-optimization pass: `Zero Add(n)` →
+`Set(n)` under any cell model, `Zero Sub(n)` → `Set(256 − n)` under wrapping
+only, and a `Set` absorbs further arithmetic. It was not premature: hanoi
+executes **46%** of its instructions inside `[-]+++` patterns (324 sites),
+and fusing them is hanoi 226 ms → 192 ms (**+15%**), steps 154M → 133M.
+squares 267K → 255K steps; mandelbrot unchanged.
 
 **Problem:**
 Setting a cell to a specific value currently requires separate Zero + Add instructions. We could fuse these into a single Set instruction.
@@ -325,10 +332,8 @@ Inline simple loop bodies when beneficial.
    mandelbrot (334 of its 345 balanced loops already folded), but the
    dominant pattern in squares, triangle and 99beer; see item 1
 
-3. Set value pattern (Zero + Add fusion)
-   - Medium impact
-   - Medium complexity
-   - Consider if benefit justifies complexity
+3. ✅ Set value pattern (Zero + Add fusion) — shipped, +15% on hanoi; see
+   item 3
 
 **Phase 3 - Nice to Have:**
 4. Addition/subtraction cancellation
