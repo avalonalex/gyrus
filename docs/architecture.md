@@ -642,8 +642,8 @@ pub enum OptimizedInstruction {
 
     // Loop patterns
     Zero(SourceRange),              // [-] or [+]
-    SeekRight(SourceRange),         // [>]
-    SeekLeft(SourceRange),          // [<]
+    SeekRight(usize, SourceRange),  // [>], [>>], ... (stride)
+    SeekLeft(usize, SourceRange),   // [<], [<<], ...
     MoveRight(usize, SourceRange),  // [->+<] move value N cells right
     MoveLeft(usize, SourceRange),   // [-<+>] move value N cells left
 
@@ -690,8 +690,8 @@ Detects common idioms and converts to single operations:
 | Pattern | BF Code | Optimized | Description |
 |---------|---------|-----------|-------------|
 | Clear cell | `[-]` or `[+]` | `Zero` | Set current cell to 0 |
-| Seek right | `[>]` | `SeekRight` | Find next zero cell (right) |
-| Seek left | `[<]` | `SeekLeft` | Find previous zero cell (left) |
+| Seek right | `[>]`, `[>>]`, ... | `SeekRight(stride)` | Find next zero cell (right), `stride` cells at a time |
+| Seek left | `[<]`, `[<<]`, ... | `SeekLeft(stride)` | Find previous zero cell (left), `stride` cells at a time |
 | Move right | `[->+<]` | `MoveRight(1)` | Move value 1 cell right, zero source |
 | Move left | `[-<+>]` | `MoveLeft(1)` | Move value 1 cell left, zero source |
 
