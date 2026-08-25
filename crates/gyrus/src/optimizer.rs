@@ -15,6 +15,7 @@
 //! ## Loop Pattern Recognition
 //! - `[-]` → `Zero` - Clear current cell (not `[+]`: it reaches zero only by
 //!   wrapping past 255, which checked cells reject)
+//! - `[-]+++` → `Set(3)` - Clear and store a constant
 //! - `[>]` → `SeekRight(1)` - Find next zero cell
 //! - `[>>>]` → `SeekRight(3)` - Find next zero cell, three cells at a time
 //! - `[<]` → `SeekLeft(1)` - Find previous zero cell
@@ -107,6 +108,14 @@ pub enum OptimizedInstruction {
     Input(SourceRange),
     /// Set current cell to zero (optimized `[-]`)
     Zero(SourceRange),
+    /// Set current cell to a value (`[-]+++` → `Set(3)`)
+    ///
+    /// A clear followed by a run of `+` is how BrainFuck writes a constant,
+    /// and initialisation code is full of it: hanoi has 324. Fusing the two
+    /// saves a dispatch each. `[-]---` folds too, to the wrapped value, but
+    /// only under wrapping cells -- checked cells report the underflow the
+    /// first `-` would have caused.
+    Set(u8, SourceRange),
     /// Seek right, `stride` cells at a time, to the next zero cell
     /// (optimized `[>]`, `[>>]`, ...).
     ///
@@ -145,6 +154,7 @@ impl OptimizedInstruction {
             OptimizedInstruction::Output(r) => *r,
             OptimizedInstruction::Input(r) => *r,
             OptimizedInstruction::Zero(r) => *r,
+            OptimizedInstruction::Set(_, r) => *r,
             OptimizedInstruction::SeekRight(_, r) => *r,
             OptimizedInstruction::SeekLeft(_, r) => *r,
             OptimizedInstruction::MultiplyAdd(_, r) => *r,
@@ -246,7 +256,69 @@ pub fn optimize_with_cell_model(
 ) -> OptimizedProgram {
     let original_count = count_original_instructions(instructions);
     let optimized = optimize_block(instructions, 0, cell_model).0;
+    let optimized = fuse_sets(optimized, cell_model);
     OptimizedProgram::new(optimized, original_count, cell_model)
+}
+
+/// Fuse a clear and the arithmetic that follows it into one `Set`.
+///
+/// `Zero Add(n)` is a store of `n`, under any cell model: the add starts from
+/// zero and cannot overflow. `Zero Sub(n)` is a store of the wrapped value
+/// under wrapping cells; under checked cells the first `-` underflows, and
+/// that error is what checked cells exist to report, so the pair is left
+/// alone there. A `Set` followed by more arithmetic folds again, so
+/// `[-]+++++---` is one instruction.
+///
+/// Runs after fusion and pattern recognition, over each block and its loop
+/// bodies. The fused instruction's range spans both originals, which are
+/// adjacent, so no range in the output overlaps another.
+fn fuse_sets(
+    instructions: Vec<OptimizedInstruction>,
+    cell_model: CellModel,
+) -> Vec<OptimizedInstruction> {
+    let wrapping = matches!(cell_model, CellModel::U8Wrapping(_));
+    let mut result: Vec<OptimizedInstruction> = Vec::with_capacity(instructions.len());
+    for instruction in instructions {
+        let fused = match (result.last(), &instruction) {
+            (Some(OptimizedInstruction::Zero(z)), OptimizedInstruction::Add(n, a)) => Some(
+                OptimizedInstruction::Set(*n, SourceRange::new(z.start, a.end)),
+            ),
+            (Some(OptimizedInstruction::Set(v, z)), OptimizedInstruction::Add(n, a)) => Some(
+                OptimizedInstruction::Set(v.wrapping_add(*n), SourceRange::new(z.start, a.end)),
+            ),
+            (Some(OptimizedInstruction::Zero(z)), OptimizedInstruction::Sub(n, a)) if wrapping => {
+                Some(OptimizedInstruction::Set(
+                    0u8.wrapping_sub(*n),
+                    SourceRange::new(z.start, a.end),
+                ))
+            }
+            (Some(OptimizedInstruction::Set(v, z)), OptimizedInstruction::Sub(n, a))
+                if wrapping =>
+            {
+                Some(OptimizedInstruction::Set(
+                    v.wrapping_sub(*n),
+                    SourceRange::new(z.start, a.end),
+                ))
+            }
+            _ => None,
+        };
+        match fused {
+            Some(set) => {
+                result.pop();
+                result.push(set);
+            }
+            None => match instruction {
+                OptimizedInstruction::Loop(body, range) => {
+                    result.push(OptimizedInstruction::Loop(
+                        fuse_sets(body, cell_model),
+                        range,
+                    ));
+                }
+                other => result.push(other),
+            },
+        }
+    }
+    result
 }
 
 /// Count original instructions (including nested loops)
@@ -640,6 +712,53 @@ mod tests {
             matches!(optimized.instructions[0], OptimizedInstruction::Loop(_, _)),
             "expected a general Loop, got {:?}",
             optimized.instructions[0]
+        );
+    }
+
+    /// `[-]` and the arithmetic after it are one store.
+    #[test]
+    fn clear_then_add_fuses_to_set() {
+        let checked = CellModel::U8Checked(crate::config::U8CheckedCells);
+        let wrapping = CellModel::default();
+        let one = |src: &str, model: CellModel| {
+            let optimized = optimize_with_cell_model(&crate::parser::parse(src).unwrap(), model);
+            optimized.instructions
+        };
+        assert_eq!(
+            one("[-]+++", wrapping),
+            vec![OptimizedInstruction::Set(3, SourceRange::new(0, 5))]
+        );
+        assert_eq!(
+            one("[-]+++", checked),
+            vec![OptimizedInstruction::Set(3, SourceRange::new(0, 5))]
+        );
+        assert_eq!(
+            one("[-]+++++--", wrapping),
+            vec![OptimizedInstruction::Set(3, SourceRange::new(0, 9))]
+        );
+        assert_eq!(
+            one("[-]---", wrapping),
+            vec![OptimizedInstruction::Set(253, SourceRange::new(0, 5))]
+        );
+        // Under checked cells `[-]---` underflows at the first `-`, and must
+        // still do so at run time, so the pair stays apart.
+        assert_eq!(
+            one("[-]---", checked),
+            vec![
+                OptimizedInstruction::Zero(SourceRange::new(0, 2)),
+                OptimizedInstruction::Sub(3, SourceRange::new(2, 5)),
+            ]
+        );
+        // Inside a loop body too.
+        assert_eq!(
+            one("+[[-]++]", wrapping),
+            vec![
+                OptimizedInstruction::Add(1, SourceRange::new(0, 1)),
+                OptimizedInstruction::Loop(
+                    vec![OptimizedInstruction::Set(2, SourceRange::new(2, 6))],
+                    SourceRange::new(1, 6)
+                ),
+            ]
         );
     }
 

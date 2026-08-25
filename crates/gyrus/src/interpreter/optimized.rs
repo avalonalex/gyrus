@@ -572,6 +572,13 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             Ok(ExecutionFlow::Continue)
         }
 
+        OptimizedInstruction::Set(value, _range) => {
+            // [-]+++ → store the constant. Model-independent: the optimizer
+            // only builds one where the arithmetic could not have faulted.
+            *state.cell(None, 0)? = *value;
+            Ok(ExecutionFlow::Continue)
+        }
+
         OptimizedInstruction::SeekRight(stride, _range) => {
             // [>], [>>], ... → seek to the next zero cell, `stride` cells at
             // a time.
@@ -1432,6 +1439,48 @@ mod tests {
             let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
             interpret_optimized(&program, build(), &mut i, &mut o).unwrap();
             assert_eq!(o.output_bytes(), &debug[..], "{src}");
+        }
+    }
+
+    /// `Set` stores what the clear-and-add it replaces would have left, under
+    /// both cell models; `[-]---` under checked cells still reports the
+    /// underflow, because it was not fused.
+    #[test]
+    fn set_agrees_with_the_debug_interpreter() {
+        for src in [
+            "[-]+++.",
+            "++++[-]+++++--.",
+            "[-]---.",
+            "+++[[-]++<]>.",
+            "[-]+++++++++++.[-].",
+        ] {
+            for checked in [false, true] {
+                let build = || {
+                    let b = ExecutionConfigBuilder::new().with_memory_size(100);
+                    if checked {
+                        b.with_checked_cells().build()
+                    } else {
+                        b.build()
+                    }
+                };
+                let instructions = parse(src).unwrap();
+                let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+                let debug = crate::interpret_with_io(&instructions, build(), &mut i, &mut o, None)
+                    .map(|_| o.output_bytes().to_vec());
+                let program = optimize_with_cell_model(&instructions, *build().cell_model());
+                let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+                let optimized = interpret_optimized(&program, build(), &mut i, &mut o)
+                    .map(|_| o.output_bytes().to_vec());
+                match (debug, optimized) {
+                    (Ok(d), Ok(o)) => assert_eq!(d, o, "{src} checked={checked}"),
+                    (Err(d), Err(o)) => assert_eq!(
+                        std::mem::discriminant(&d),
+                        std::mem::discriminant(&o),
+                        "{src} checked={checked}: {d:?} vs {o:?}"
+                    ),
+                    (d, o) => panic!("{src} checked={checked}: debug {d:?}, optimized {o:?}"),
+                }
+            }
         }
     }
 
