@@ -1,6 +1,6 @@
 # PRD: Cranelift JIT
 
-**Status**: Steps 1–3 done (spike; errors; cell and memory models, limits, statistics). Steps 4–6 remain: `--jit`, the corpus under it, docs
+**Status**: Steps 1–6 done: the JIT is `gyrus --jit`, benchmarked and documented. What remains is the performance work under Risks
 **Last Updated**: 2026-08-24
 **Priority**: High — the largest remaining win, and the interpreter is close to done
 

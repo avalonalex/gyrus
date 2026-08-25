@@ -2,7 +2,7 @@
 # Benchmark and profile the interpreter on real BrainFuck programs.
 #
 # Measures end-to-end wall clock for the `gyrus` binary: parse, optimize,
-# execute, write output. For per-phase numbers with warmup and outlier
+# execute (or JIT-compile and execute), write output. For per-phase numbers with warmup and outlier
 # rejection, use the criterion benches instead (`cargo bench`).
 #
 # Every run is diffed against a recorded golden output in benchmarks/expected/.
@@ -81,8 +81,8 @@ if [ "$RECORD" = 1 ]; then
 fi
 
 # --- benchmark mode ---------------------------------------------------------
-printf '%-46s %10s %12s %8s\n' "program" "optimized" "--debug" "speedup"
-printf '%-46s %10s %12s %8s\n' "$(printf '%.0s-' {1..46})" "----------" "------------" "--------"
+printf '%-38s %10s %10s %12s %8s\n' "program" "optimized" "--jit" "--debug" "speedup"
+printf '%-38s %10s %10s %12s %8s\n' "$(printf '%.0s-' {1..38})" "----------" "----------" "------------" "--------"
 
 failures=0
 for entry in "${PROGRAMS[@]}"; do
@@ -95,14 +95,24 @@ for entry in "${PROGRAMS[@]}"; do
     opt_ms=$(elapsed "$t0" "$t1")
 
     if [ -f "$golden" ] && ! cmp -s /tmp/gyrus-bench.out "$golden"; then
-        printf '%-46s  OUTPUT CHANGED vs %s\n' "$name" "$golden"
+        printf '%-38s  OUTPUT CHANGED vs %s\n' "$name" "$golden"
         diff "$golden" /tmp/gyrus-bench.out | head -4 | sed 's/^/      /'
         failures=$((failures + 1))
         continue
     fi
 
+    # The JIT is a third engine, held to the same bytes; compile time is in
+    # the number, as it is for the user.
+    t0=$(ms_now); "$GYRUS" --jit "$prog" < /dev/null > /tmp/gyrus-bench.jit 2>/dev/null; t1=$(ms_now)
+    jit_ms=$(elapsed "$t0" "$t1")
+    if ! cmp -s /tmp/gyrus-bench.out /tmp/gyrus-bench.jit; then
+        printf '%-38s  MODES DISAGREE: optimized output != --jit output\n' "$name"
+        failures=$((failures + 1))
+        continue
+    fi
+
     if [ "$want_debug" = "no" ] && [ "$FULL" != 1 ]; then
-        printf '%-46s %9sms %12s %8s\n' "$name" "$opt_ms" "(--full)" "-"
+        printf '%-38s %9sms %9sms %12s %8s\n' "$name" "$opt_ms" "$jit_ms" "(--full)" "-"
         continue
     fi
 
@@ -110,13 +120,13 @@ for entry in "${PROGRAMS[@]}"; do
     dbg_ms=$(elapsed "$t0" "$t1")
 
     if ! cmp -s /tmp/gyrus-bench.out /tmp/gyrus-bench.dbg; then
-        printf '%-46s  MODES DISAGREE: optimized output != --debug output\n' "$name"
+        printf '%-38s  MODES DISAGREE: optimized output != --debug output\n' "$name"
         failures=$((failures + 1))
         continue
     fi
 
     speedup=$(python3 -c "print(f'{$dbg_ms / max($opt_ms, 1):.1f}x')")
-    printf '%-46s %9sms %11sms %8s\n' "$name" "$opt_ms" "$dbg_ms" "$speedup"
+    printf '%-38s %9sms %9sms %11sms %8s\n' "$name" "$opt_ms" "$jit_ms" "$dbg_ms" "$speedup"
 done
 
 # --- cell-model differential ------------------------------------------------
@@ -131,7 +141,7 @@ done
 # locations), so compare what the program produced and whether it failed --
 # not the diagnostic wording.
 echo
-echo "Cell-model differential (optimized vs --debug under --cell-model checked)"
+echo "Cell-model differential (optimized vs --debug vs --jit under --cell-model checked)"
 checked_bytes=0
 for entry in "${PROGRAMS[@]}"; do
     prog="${entry%%:*}"
@@ -143,9 +153,12 @@ for entry in "${PROGRAMS[@]}"; do
     opt_rc=$?
     "$GYRUS" --debug --cell-model checked "$prog" < /dev/null > /tmp/gyrus-chk.dbg 2>/dev/null
     dbg_rc=$?
+    "$GYRUS" --jit --cell-model checked "$prog" < /dev/null > /tmp/gyrus-chk.jit 2>/dev/null
+    jit_rc=$?
 
-    if ! cmp -s /tmp/gyrus-chk.opt /tmp/gyrus-chk.dbg || [ "$opt_rc" != "$dbg_rc" ]; then
-        printf '  %-44s MODES DISAGREE (exit %s vs %s)\n' "$name" "$opt_rc" "$dbg_rc"
+    if ! cmp -s /tmp/gyrus-chk.opt /tmp/gyrus-chk.dbg || [ "$opt_rc" != "$dbg_rc" ] \
+        || ! cmp -s /tmp/gyrus-chk.opt /tmp/gyrus-chk.jit || [ "$opt_rc" != "$jit_rc" ]; then
+        printf '  %-44s MODES DISAGREE (exit %s vs %s vs %s)\n' "$name" "$opt_rc" "$dbg_rc" "$jit_rc"
         failures=$((failures + 1))
     else
         printf '  %-44s agree (exit %s)\n' "$name" "$opt_rc"
@@ -167,6 +180,6 @@ if [ "$failures" -gt 0 ]; then
     echo "FAIL: $failures program(s) produced unexpected output." >&2
     exit 1
 fi
-echo "All outputs match benchmarks/expected/, and both interpreters agree"
+echo "All outputs match benchmarks/expected/, and all three engines agree"
 echo "under the default and checked cell models."
 echo "Profile one with:  scripts/benchmark.sh --profile <program.bf>"

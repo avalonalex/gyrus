@@ -12,6 +12,13 @@ repository.workspace = true
 name = "gyrus"
 path = "src/main.rs"
 
+[features]
+# `--jit`: compile with Cranelift instead of interpreting. On by default;
+# `--no-default-features` builds the interpreter-only binary.
+default = ["jit"]
+jit = ["dep:gyrus-jit"]
+
 [dependencies]
 gyrus.workspace = true
+gyrus-jit = { workspace = true, optional = true }
 clap.workspace = true

@@ -42,6 +42,33 @@ program *used*, so travelling to cell 100,000 and back without touching anything
 reports one cell, not 100,000 — and under `--memory-model unbounded` the tape
 grows to cover cells that are used, not cells the cursor passed over.
 
+## The JIT
+
+`--jit` compiles the optimized program to native code with Cranelift and runs
+that. It enforces the same contract as the interpreters -- every read or write
+is checked against the tape, every failure is reported as the same error with
+the same message -- and is held to them by test: the benchmark corpus runs
+under all three engines and must agree byte for byte, under both cell models.
+
+Where it differs, on purpose:
+
+- **Errors carry source locations.** The JIT knows which instruction each
+  failure belongs to, so `--jit` errors show the line, column and caret that
+  the optimized interpreter can only show under `--debug`. The
+  `instruction_index` in the error is the instruction's index in the program
+  rather than the interpreter's step count.
+- **Steps are loop iterations.** `--max-steps` bounds the number of loop
+  iterations, and `Total steps executed` reports that number. The
+  interpreter's count is in optimized-instruction units; both are
+  approximations of the unfused program, and the JIT counts nothing finer.
+  A loop that ends exactly at its budget completes, as in the interpreter.
+- **Compile time is part of the run.** Tens of milliseconds for the largest
+  programs in the corpus; a program too short to loop is faster interpreted.
+
+Everything else -- memory models, growth on access under `--memory-model
+unbounded`, cell models, EOF behaviour, the timeout, and every statistic both
+engines define alike -- is the same.
+
 ## Memory Models
 
 gyrus supports two different memory models to handle different BrainFuck variants and use cases:
