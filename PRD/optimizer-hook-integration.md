@@ -14,7 +14,7 @@ the optimizer can go while `ExecutionHook` still sees something truthful.
 Extracted from the former `optimization-and-advanced-features.md`, whose other
 four sections duplicated the focused PRDs they pointed at
 (`optimizer_improvements.md`, `macro-preprocessor-design.md`,
-`tui_debugger_and_tutorial.md`, `compilation_backend.md`). This was the part
+`tui_debugger_and_tutorial.md`, `cranelift-jit.md`). This was the part
 that existed nowhere else.
 
 ## 🔧 Hook System Integration - CRITICAL DESIGN DECISION

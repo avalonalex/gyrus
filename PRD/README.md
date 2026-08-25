@@ -14,8 +14,7 @@ in August 2026, and it is the rule that keeps it readable.
 | [public-release-and-rename.md](public-release-and-rename.md) | In progress — phases 1-4 done, release remaining | High |
 | [optimizer-hook-integration.md](optimizer-hook-integration.md) | Design complete, unimplemented | High — blocks aggressive optimization |
 | [optimizer_improvements.md](optimizer_improvements.md) | Catalogue of missed optimizations, and of the ones tried and dropped | Medium |
-| [compilation_backend.md](compilation_backend.md) | Design complete, unimplemented | Medium — the big one |
-| [cranelift_implementation_insights.md](cranelift_implementation_insights.md) | Supporting research for the above | Medium |
+| [cranelift-jit.md](cranelift-jit.md) | Not started; design current as of #11 | High — the largest remaining win |
 | [tui_debugger_and_tutorial.md](tui_debugger_and_tutorial.md) | Design complete, unimplemented | Medium |
 | [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design complete, unimplemented | Low |
 
