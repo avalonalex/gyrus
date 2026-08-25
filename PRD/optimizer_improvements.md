@@ -23,11 +23,18 @@ This document tracks optimization patterns that are currently missed by the gyru
 
 ## Missed Optimization Opportunities
 
-### 1. Loop Rotation/Normalization for MultiplyAdd
+### 1. Loop Rotation/Normalization for MultiplyAdd — ✅ shipped
 
 **Priority:** High
 **Complexity:** Medium
 **Impact:** Common pattern in real BrainFuck programs
+
+**Shipped 2026-08-24**, as option B: `recognize_multiply_loop` accepts the
+source's single `-`/`+` anywhere in the body. Measured share of executed
+instructions inside such loops: squares 56%, triangle 32%, 99beer 22%,
+bf2c 11%, mandelbrot 1%. Optimized steps: squares 959K → 267K, 99beer
+339K → 137K, triangle 44K → 20K. Wall clock on those is process startup,
+so the step counts are the honest number; hanoi and mandelbrot unchanged.
 
 **Problem:**
 The MultiplyAdd pattern matcher requires the loop to start with `-` or `+`, but BrainFuck loops are circular - the starting position doesn't matter semantically.
@@ -314,10 +321,9 @@ Inline simple loop bodies when beneficial.
    "Evidence" under item 2)
 
 **Phase 2 - Medium Value:**
-2. Loop rotation for MultiplyAdd recognition
-   - Medium complexity
-   - Less than it looks on the benchmark corpus: of mandelbrot's 345 balanced
-     innermost loops, 334 already start with `-`/`+` and fold; 11 do not
+2. ✅ Loop rotation for MultiplyAdd recognition — shipped. Little for
+   mandelbrot (334 of its 345 balanced loops already folded), but the
+   dominant pattern in squares, triangle and 99beer; see item 1
 
 3. Set value pattern (Zero + Add fusion)
    - Medium impact

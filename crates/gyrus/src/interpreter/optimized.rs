@@ -1399,6 +1399,42 @@ mod tests {
         }
     }
 
+    /// A multiply loop with its decrement last, in the middle, or as a `+`
+    /// folds to the same `MultiplyAdd` as the decrement-first form, and the
+    /// reference for that is the tree-walker running the loop as written.
+    #[test]
+    fn rotated_multiply_loops_agree_with_the_debug_interpreter() {
+        let programs = [
+            "+++++[>+++<-]>.",
+            "+++++[>+++<->+<]>.>.",
+            // mandelbrot's shape: source at cell 7, targets at 6 and 1.
+            ">>>>>>>+++++++[<->-<<<<<<+>>>>>>]<.<<<<<.",
+            // Source incremented: runs 256 - 5 = 251 times, wrapping the targets.
+            "+++++[>+<+]>.",
+            "+++++[>+<+>--<]>.",
+        ];
+        for src in programs {
+            let build = || ExecutionConfigBuilder::new().with_memory_size(100).build();
+            let instructions = parse(src).unwrap();
+            let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+            crate::interpret_with_io(&instructions, build(), &mut i, &mut o, None).unwrap();
+            let debug = o.output_bytes().to_vec();
+            let program = optimize(&instructions);
+            assert!(
+                program
+                    .instructions
+                    .iter()
+                    .any(|i| matches!(i, OptimizedInstruction::MultiplyAdd(..))),
+                "{src}: expected the loop to fold"
+            );
+            // Raw bytes on both sides: `run_opt` returns a lossy String, and
+            // 249 is not UTF-8.
+            let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+            interpret_optimized(&program, build(), &mut i, &mut o).unwrap();
+            assert_eq!(o.output_bytes(), &debug[..], "{src}");
+        }
+    }
+
     /// A MultiplyAdd target more than one cell past the end of a fixed tape used to
     /// index past `memory.len()` and panic: the bounds check stepped the pointer only
     /// once, which cannot reach an offset of 2.
