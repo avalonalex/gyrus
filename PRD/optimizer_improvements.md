@@ -174,11 +174,16 @@ Setting a cell to a specific value currently requires separate Zero + Add instru
 
 ---
 
-### 4. Addition/Subtraction Cancellation
+### 4. Addition/Subtraction Cancellation — measured, not worth doing
 
 **Priority:** Low
 **Complexity:** Low
 **Impact:** Mostly benefits obfuscated code
+
+**Measured 2026-08-24:** 0.0% of executed instructions on every benchmark
+program (hanoi has 10 static sites, the rest none). The only program in
+`programs/` with any number of them is oobrain (328, generated code), which
+is not benchmarked. Not done; revisit only with a program that has them.
 
 **Problem:**
 Consecutive Add/Sub operations can partially or fully cancel out.
@@ -211,11 +216,14 @@ Consecutive Add/Sub operations can partially or fully cancel out.
 
 ---
 
-### 5. Dead Code Elimination
+### 5. Dead Code Elimination — measured, not worth doing
 
 **Priority:** Medium
 **Complexity:** Medium
 **Impact:** Helps with generated code and initialization
+
+**Measured 2026-08-24:** the `+++[-]` shape occurs 1 time in hanoi, 2 in
+mandelbrot, 1 in life, and nowhere else in `programs/`. Not done.
 
 **Problem:**
 Operations at the start of a program that are overwritten before being read are unnecessary.
@@ -335,16 +343,10 @@ Inline simple loop bodies when beneficial.
 3. ✅ Set value pattern (Zero + Add fusion) — shipped, +15% on hanoi; see
    item 3
 
-**Phase 3 - Nice to Have:**
-4. Addition/subtraction cancellation
-   - Low impact (rare in practice)
-   - Low complexity
-   - Easy win for generated code
-
-5. Dead code elimination
-   - Medium impact
-   - Medium-high complexity
-   - Better suited for JIT/AOT stage
+**Phase 3 - measured and declined (2026-08-24):**
+4. Addition/subtraction cancellation — 0% of executed instructions on the
+   benchmark set; see item 4
+5. Dead code elimination — four static sites in the whole corpus; see item 5
 
 **Defer to JIT/AOT:**
 - Constant folding
@@ -427,6 +429,17 @@ the `execute_instruction` match should be measured with the pass it enables
 switched *off*, against `main`, before the pass is judged.
 
 ---
+
+## How the priorities were measured
+
+Static counts of a pattern say little: hanoi's 324 `[-]+++` sites could have
+been cold. What decided the order above was the share of *executed*
+instructions each pattern covers, from a throwaway tool: a hook that counts
+`before_instruction` per instruction index on the debug interpreter, dumped
+per source offset of the minified program, then summed over each pattern's
+span. It is ~40 lines against the library and takes seconds on everything
+but mandelbrot (minutes) and hanoi (~10 minutes). Worth rebuilding before
+picking the next item.
 
 ## Testing Strategy
 
