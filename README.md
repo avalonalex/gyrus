@@ -1,5 +1,7 @@
 # gyrus
 
+[![CI](https://github.com/avalonalex/gyrus/actions/workflows/ci.yml/badge.svg)](https://github.com/avalonalex/gyrus/actions/workflows/ci.yml)
+
 **Production-grade tooling for BrainFuck — interpreter, optimizer, and
 Cranelift JIT in Rust.**
 
