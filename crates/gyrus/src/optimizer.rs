@@ -18,8 +18,9 @@
 //! - `[>]` → `SeekRight(1)` - Find next zero cell
 //! - `[>>>]` → `SeekRight(3)` - Find next zero cell, three cells at a time
 //! - `[<]` → `SeekLeft(1)` - Find previous zero cell
-//! - `[->>+<<]` → `MoveRight(2)` - Move value to offset
-//! - `[->+<]` → `MoveRight(1)` - Move value to next cell
+//! - `[->+<]`, `[>+<-]` → `MultiplyAdd([(1, 1)])` - Move value to next cell;
+//!   the source's `-` may sit anywhere in the body
+//! - `[->>+++<<]` → `MultiplyAdd([(2, 3)])` - Multiply into an offset
 //!
 //! # Source Location Tracking
 //!
@@ -474,36 +475,34 @@ fn recognize_loop_pattern(
 
 /// Recognize multiplication loop patterns
 ///
-/// A multiplication loop has the form:
-/// 1. Starts with decrement (-) or increment (+) of current cell
-/// 2. Contains movement and arithmetic operations
-/// 3. Returns to original position (position 0)
-/// 4. Adds (current cell * multiplier) to various offsets
+/// A multiplication loop is a balanced body -- moves and arithmetic only, the
+/// cursor back where it started -- that touches the source cell (position 0)
+/// exactly once, with a single `-` or `+`. Every other `+`/`-` run adds to
+/// some other cell, and the loop runs once per unit of the source, so the
+/// whole thing is `cell[k] += cell[0] * m` for each target, then `cell[0] = 0`.
 ///
-/// Example: [->+++>+<<]
-/// - Decrements current cell
-/// - Moves right (+1), adds 3, moves right again (+2 total), adds 1, moves left twice (back to 0)
-/// - Result: cell[1] += cell[0] * 3; cell[2] += cell[0] * 1; cell[0] = 0
+/// The source's `-` may sit anywhere in the body. `[->+++<]` and `[>+++<-]`
+/// are the same loop -- a BrainFuck loop body is circular, and a `-` at the
+/// end of one iteration is a `-` at the start of the next, with the loop
+/// condition read in between either way. Requiring it first, as the first
+/// version of this function did, missed 56% of what squares executes and a
+/// third of triangle; hand-written programs put the decrement last at least
+/// as often as first.
+///
+/// Example: `[->+++>+<<]` and `[>+++>+<<-]`
+/// - cell[1] += cell[0] * 3; cell[2] += cell[0] * 1; cell[0] = 0
 fn recognize_multiply_loop(
     body: &[&Instruction],
     loop_start: usize,
     loop_end: usize,
 ) -> Option<OptimizedInstruction> {
-    if body.is_empty() {
-        return None;
-    }
-
-    // Check if first instruction is a decrement or increment
-    let decrement_factor = match body[0] {
-        Instruction::DecrementValue => -1,
-        Instruction::IncrementValue => 1,
-        _ => return None,
-    };
-
-    // Track position and collect (offset, multiplier) pairs
+    // -1 for a source decremented by `-`, +1 for one incremented by `+`
+    // (which reaches zero by wrapping, 256 - n iterations, so every
+    // multiplier flips sign). None until the source's one op is seen.
+    let mut decrement_factor: Option<i32> = None;
     let mut position: isize = 0;
     let mut adds: Vec<(isize, i32)> = Vec::new();
-    let mut i = 1;
+    let mut i = 0;
 
     while i < body.len() {
         match body[i] {
@@ -515,36 +514,28 @@ fn recognize_multiply_loop(
                 position -= 1;
                 i += 1;
             }
-            Instruction::IncrementValue => {
-                // Incrementing the current cell in a multiplication loop doesn't make sense
-                if position == 0 {
-                    return None;
-                }
-                // Count consecutive increments
+            Instruction::IncrementValue | Instruction::DecrementValue => {
+                let sign = if matches!(body[i], Instruction::IncrementValue) {
+                    1
+                } else {
+                    -1
+                };
+                // Count the run of the same instruction.
                 let mut count = 1;
-                while i + count < body.len()
-                    && matches!(body[i + count], Instruction::IncrementValue)
-                {
+                while i + count < body.len() && body[i + count] == body[i] {
                     count += 1;
                 }
-                // Multiplier is positive for increments, negated by source decrement direction
-                adds.push((position, count as i32 * -decrement_factor));
-                i += count;
-            }
-            Instruction::DecrementValue => {
-                // Multiple decrements of the current cell don't make sense for this pattern
                 if position == 0 {
-                    return None;
+                    // The source may be touched once, by one instruction: a
+                    // second op, or a run of two, makes the iteration count
+                    // something other than the source's value.
+                    if count != 1 || decrement_factor.is_some() {
+                        return None;
+                    }
+                    decrement_factor = Some(sign);
+                } else {
+                    adds.push((position, count as i32 * sign));
                 }
-                // Count consecutive decrements
-                let mut count = 1;
-                while i + count < body.len()
-                    && matches!(body[i + count], Instruction::DecrementValue)
-                {
-                    count += 1;
-                }
-                // Multiplier is negative for decrements, negated by source decrement direction
-                adds.push((position, -(count as i32) * -decrement_factor));
                 i += count;
             }
             _ => {
@@ -554,15 +545,19 @@ fn recognize_multiply_loop(
         }
     }
 
-    // Check if we returned to position 0
-    if position == 0 && !adds.is_empty() {
-        Some(OptimizedInstruction::MultiplyAdd(
-            adds,
-            SourceRange::new(loop_start, loop_end),
-        ))
-    } else {
-        None
+    // Balanced, one source op, and something to multiply into.
+    let factor = decrement_factor?;
+    if position != 0 || adds.is_empty() {
+        return None;
     }
+    // A `+` on the source flips every multiplier: the loop runs 256 - n times.
+    for (_, multiplier) in &mut adds {
+        *multiplier *= -factor;
+    }
+    Some(OptimizedInstruction::MultiplyAdd(
+        adds,
+        SourceRange::new(loop_start, loop_end),
+    ))
 }
 
 #[cfg(test)]
@@ -583,6 +578,45 @@ mod tests {
             "expected MultiplyAdd, got {:?}",
             optimized.instructions[0]
         );
+    }
+
+    /// The source's `-` may be anywhere in the body: `[>+++<-]` is the same
+    /// loop as `[->+++<]`, and folds to the same instruction.
+    #[test]
+    fn multiply_loop_folds_with_the_decrement_anywhere() {
+        let expect = |src: &str| {
+            let optimized = optimize(&crate::parser::parse(src).unwrap());
+            assert_eq!(optimized.instructions.len(), 1, "{src}");
+            match &optimized.instructions[0] {
+                OptimizedInstruction::MultiplyAdd(adds, _) => adds.clone(),
+                other => panic!("{src}: expected MultiplyAdd, got {other:?}"),
+            }
+        };
+        assert_eq!(expect("[->+++<]"), vec![(1, 3)]);
+        assert_eq!(expect("[>+++<-]"), vec![(1, 3)]);
+        assert_eq!(expect("[>+++<->+<]"), vec![(1, 3), (1, 1)]);
+        // mandelbrot's shape: two targets, the decrement in the middle.
+        assert_eq!(expect("[<->-<<<<<<+>>>>>>]"), vec![(-1, -1), (-6, 1)]);
+        // A `+` on the source flips the multipliers, wherever it sits.
+        assert_eq!(expect("[+>+<]"), vec![(1, -1)]);
+        assert_eq!(expect("[>+<+]"), vec![(1, -1)]);
+    }
+
+    /// What is not a multiply loop: the source touched twice, or by a run,
+    /// or a body that does not come back to it.
+    #[test]
+    fn multiply_loop_needs_exactly_one_source_op_and_balance() {
+        for src in ["[->+<-]", "[-->+<]", "[>+<--]", "[->+]", "[>+<]", "[-]"] {
+            let optimized = optimize(&crate::parser::parse(src).unwrap());
+            assert!(
+                !matches!(
+                    optimized.instructions[0],
+                    OptimizedInstruction::MultiplyAdd(..)
+                ),
+                "{src} must not fold to MultiplyAdd, got {:?}",
+                optimized.instructions[0]
+            );
+        }
     }
 
     /// ...but not under checked cells; see [`optimize_with_cell_model`] for why
