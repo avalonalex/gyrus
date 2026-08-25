@@ -355,8 +355,8 @@ Runs end at loops, seeks and `MultiplyAdd`. Its prerequisite, the tape
 contract (access outside the tape is an error, movement is not), shipped in
 #4 and stands on its own at 8–11%.
 
-**Code:** PR #5 (branch `experiment/offset-addressing`), kept open and not
-merged. It carries a `GYRUS_NO_FOLD=1` toggle that disables the pass at
+**Code:** PR #5 (branch `experiment/offset-addressing`), closed without
+merging. It carries a `GYRUS_NO_FOLD=1` toggle that disables the pass at
 optimize time, which is how the fold's effect was separated from the
 interpreter-side cost.
 
