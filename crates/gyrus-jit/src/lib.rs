@@ -11,7 +11,9 @@
 //! interpreter would have produced, through the interpreter's own constructors.
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{AbiParam, Block, FuncRef, InstBuilder, MemFlagsData, Value, types};
+use cranelift_codegen::ir::{
+    AbiParam, Block, FuncRef, InstBuilder, MemFlagsData, SourceLoc, Value, types,
+};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -800,9 +802,44 @@ fn compile<'p>(program: &'p OptimizedProgram, options: Options) -> Result<Compil
     {
         eprintln!("{text}");
     }
+    // `GYRUS_JIT_DUMP=path` writes the emitted bytes there and prints the
+    // address they were mapped at. A sampling profiler sees only addresses in
+    // JIT'd code, so this is what turns a sample into an instruction.
+    let dump_to = std::env::var_os("GYRUS_JIT_DUMP");
+    let emitted: Option<Vec<u8>> = dump_to
+        .is_some()
+        .then(|| ctx.compiled_code().map(|c| c.code_buffer().to_vec()))
+        .flatten();
+    let srclocs: Option<Vec<(u32, u32, u32)>> = dump_to.is_some().then(|| {
+        ctx.compiled_code()
+            .map(|c| {
+                c.buffer
+                    .get_srclocs_sorted()
+                    .iter()
+                    .map(|s| (s.start, s.end, s.loc.bits()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
     module.clear_context(&mut ctx);
     module.finalize_definitions().map_err(|e| cranelift(&e))?;
     let code = module.get_finalized_function(main_id);
+    if let (Some(path), Some(bytes)) = (dump_to, emitted) {
+        std::fs::write(&path, &bytes).ok();
+        if let Some(map) = srclocs {
+            let mut text = String::new();
+            for (start, end, loc) in map {
+                text.push_str(&format!("{start} {end} {loc}\n"));
+            }
+            std::fs::write(format!("{}.srcloc", path.to_string_lossy()), text).ok();
+        }
+        eprintln!(
+            "jit-dump base=0x{:x} len={} file={}",
+            code as usize,
+            bytes.len(),
+            std::path::Path::new(&path).display()
+        );
+    }
     // SAFETY: `code` is the entry of a function defined with exactly the
     // signature `Entry` describes (one pointer-sized param, an i32 result,
     // the ISA's default calling convention, which is the platform C ABI).
@@ -1371,7 +1408,17 @@ impl<'p> Translator<'_, 'p> {
     fn loop_test(&mut self, index: usize, nonzero: Block, zero: Block) {
         let c = self.b.use_var(self.vars.cursor);
         let addr = self.checked_addr(c, index);
-        let v = self.load(addr);
+        // Load the byte straight into an `I32` rather than loading an `I8`
+        // and branching on it. Cranelift cannot assume an `I8` has clear high
+        // bits, so `brif` on one costs a mask (`ands wzr, w, #255`) plus a
+        // flag-testing branch; and widening afterwards does not help, because
+        // the egraph rewrites `brif(uextend(v))` straight back to `brif(v)`.
+        // With no `I8` in the IR at all, the byte load is already zero-extended
+        // and the test is a plain `cbnz`.
+        //
+        // This is the seek loop's entire body, and seeks are 49% of
+        // mandelbrot's time.
+        let v = self.b.ins().uload8(types::I32, access_flags(), addr, 0);
         self.b.ins().brif(v, nonzero, &[], zero, &[]);
     }
 
@@ -1426,6 +1473,9 @@ impl<'p> Translator<'_, 'p> {
     fn instruction(&mut self, instruction: &'p OptimizedInstruction) {
         use OptimizedInstruction as I;
         let index = instruction.source_range().start;
+        // Machine code carries the AST index it came from, which is what lets
+        // a profiler's addresses be read as BrainFuck rather than as hex.
+        self.b.set_srcloc(SourceLoc::new(index as u32));
         match instruction {
             I::Add(n, _) | I::Sub(n, _) => {
                 let c = self.b.use_var(self.vars.cursor);
