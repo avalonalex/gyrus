@@ -606,7 +606,13 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
             let hi = seek_window_end(CHECK_LIMITS, stride, state, limits);
             match scan_right(&state.memory, start, hi, stride) {
                 Scan::Found(distance) => {
-                    state.pointer = MemoryAddress::new((start + distance) as isize);
+                    let end = start + distance;
+                    // The scan read every cell it examined without going
+                    // through `cell_at`, so the peak has to be told here --
+                    // the tree-walker and the JIT both count them, and the
+                    // differential against the JIT is what found this out.
+                    state.peak_used = state.peak_used.max(end);
+                    state.pointer = MemoryAddress::new(end as isize);
                     state.step_count += (distance / stride) as u64;
                     return Ok(ExecutionFlow::Continue);
                 }
@@ -617,9 +623,10 @@ fn execute_instruction<const CHECK_LIMITS: bool, const WRAPPING: bool, I: BfInpu
                     // -- fire the step limit, grow an unbounded tape, or report
                     // a fixed one's overrun.
                     if examined > 0 {
+                        let last = start + (examined - 1) * stride;
+                        state.peak_used = state.peak_used.max(last);
                         state.step_count += (examined - 1) as u64;
-                        state.pointer =
-                            MemoryAddress::new((start + (examined - 1) * stride) as isize);
+                        state.pointer = MemoryAddress::new(last as isize);
                     }
                 }
             }

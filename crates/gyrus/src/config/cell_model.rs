@@ -124,19 +124,10 @@ impl CellBehavior for U8CheckedCells {
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
-        let old_value = *value;
         *value = value.checked_add(1).ok_or_else(|| {
-            use crate::error::BfError;
             // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
             let instruction_idx = step_count.get().saturating_sub(1) as usize;
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
-            BfError::CellOverflow {
-                instruction_index: step_count.into(),
-                current_value: old_value,
-                source_location,
-                hint: "Cell value reached maximum (255) and cannot be incremented further with checked arithmetic. \
-                       Use --cell-model wrapping to allow overflow, or modify your program.".to_string(),
-            }
+            U8CheckedCells::overflow_error(step_count, debug_info, instruction_idx)
         })?;
         Ok(())
     }
@@ -147,21 +138,55 @@ impl CellBehavior for U8CheckedCells {
         step_count: StepCount,
         debug_info: Option<&DebugInfo>,
     ) -> Result<()> {
-        let old_value = *value;
         *value = value.checked_sub(1).ok_or_else(|| {
-            use crate::error::BfError;
             // step_count is incremented BEFORE instruction execution, so subtract 1 to get actual instruction index
             let instruction_idx = step_count.get().saturating_sub(1) as usize;
-            let source_location = debug_info.and_then(|d| d.lookup(instruction_idx));
-            BfError::CellUnderflow {
-                instruction_index: step_count.into(),
-                current_value: old_value,
-                source_location,
-                hint: "Cell value is at minimum (0) and cannot be decremented further with checked arithmetic. \
-                       Use --cell-model wrapping to allow underflow, or modify your program.".to_string(),
-            }
+            U8CheckedCells::underflow_error(step_count, debug_info, instruction_idx)
         })?;
         Ok(())
+    }
+}
+
+impl U8CheckedCells {
+    /// The error for incrementing a cell that holds 255.
+    ///
+    /// Written once, here: the interpreters raise it from `try_increment`, and
+    /// the JIT, which checks a whole fused `Add(n)` at once and learns of the
+    /// overflow after its code has returned, calls it directly. The failing
+    /// cell always holds 255 when this is raised -- the unfused program would
+    /// have incremented its way there first -- so that is what is reported.
+    /// `step_count` fills the error's `instruction_index` field, as the
+    /// interpreters do; `instruction_index` is what `debug_info` is looked up
+    /// with.
+    pub fn overflow_error(
+        step_count: StepCount,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> crate::error::BfError {
+        crate::error::BfError::CellOverflow {
+            instruction_index: step_count.into(),
+            current_value: u8::MAX,
+            source_location: debug_info.and_then(|d| d.lookup(instruction_index)),
+            hint: "Cell value reached maximum (255) and cannot be incremented further with checked arithmetic. \
+                   Use --cell-model wrapping to allow overflow, or modify your program."
+                .to_string(),
+        }
+    }
+
+    /// The error for decrementing a cell that holds 0. See [`Self::overflow_error`].
+    pub fn underflow_error(
+        step_count: StepCount,
+        debug_info: Option<&DebugInfo>,
+        instruction_index: usize,
+    ) -> crate::error::BfError {
+        crate::error::BfError::CellUnderflow {
+            instruction_index: step_count.into(),
+            current_value: 0,
+            source_location: debug_info.and_then(|d| d.lookup(instruction_index)),
+            hint: "Cell value is at minimum (0) and cannot be decremented further with checked arithmetic. \
+                   Use --cell-model wrapping to allow underflow, or modify your program."
+                .to_string(),
+        }
     }
 }
 
