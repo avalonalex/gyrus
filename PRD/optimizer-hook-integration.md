@@ -12,10 +12,9 @@ debugger, profiler, or tracer wants to stop at. This document works out how far
 the optimizer can go while `ExecutionHook` still sees something truthful.
 
 Extracted from the former `optimization-and-advanced-features.md`, whose other
-four sections duplicated the focused PRDs they pointed at
-(`optimizer_improvements.md`, `macro-preprocessor-design.md`,
-`tui_debugger_and_tutorial.md`, `cranelift-jit.md`). This was the part
-that existed nowhere else.
+four sections duplicated the focused PRDs they pointed at. This was the part
+that existed nowhere else; most of those documents have since been deleted as
+their features shipped.
 
 ## 🔧 Hook System Integration - CRITICAL DESIGN DECISION
 

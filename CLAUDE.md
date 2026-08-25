@@ -30,8 +30,10 @@ the development compiler.
 - **`README.md`** — the landing page, kept short on purpose. It says what gyrus
   is, shows one error message, gives a quick start, and links onward.
 - **`docs/`** — user-facing reference: usage, errors, execution models, tooling,
-  development, testing, architecture. Anything describing what *exists* goes
-  here.
+  development, testing, architecture, performance. Anything describing what
+  *exists* goes here. `performance.md` is also where the optimization work's
+  negative results live: it concluded in August 2026, and the experiments that
+  did not pay are recorded there so they are not repeated.
 - **`PRD/`** — design documents for what does **not** exist yet. When a feature
   ships, delete its PRD rather than archiving it: the code and `docs/` describe
   what was built, and git history keeps the reasoning.

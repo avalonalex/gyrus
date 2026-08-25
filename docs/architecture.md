@@ -132,7 +132,7 @@ every instruction.
 (`Add`, `Sub`, `Right`, `Left`) and recognizes loop idioms: clear loops
 (`Zero`), scan loops (`SeekRight`/`SeekLeft`), and multiply loops
 (`MultiplyAdd`). The Optimizer Design section below covers what it recognizes
-and why; [`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md)
+and why; [Performance](performance.md)
 covers what it does not, including the folds that were tried and measured as
 losses.
 
@@ -195,7 +195,7 @@ verifies the output while it does.
 Not bottlenecks: parsing, which is a fast one-time cost, and error
 construction, which is a cold path.
 
-[`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md) catalogues
+[Performance](performance.md) records
 what is left, including the experiments that were tried and measured as losses.
 
 ---
@@ -473,7 +473,7 @@ Copy, multi-cell move, and multiplication patterns used to be listed here. They
 are all `MultiplyAdd` now: it takes a list of `(offset, multiplier)` pairs, so
 one variant covers all three.
 
-[`PRD/optimizer_improvements.md`](../PRD/optimizer_improvements.md) is the live
+[Performance](performance.md) is the
 catalogue — what is missing, what was tried, and what was measured as a loss.
 
 ### Integration Points
