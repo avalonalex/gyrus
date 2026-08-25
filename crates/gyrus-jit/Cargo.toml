@@ -15,3 +15,9 @@ cranelift-frontend.workspace = true
 cranelift-module.workspace = true
 cranelift-jit.workspace = true
 cranelift-native.workspace = true
+
+[dev-dependencies]
+# The generated-program differential needs the generator (`gyrus::random`)
+# and a seedable RNG.
+gyrus = { workspace = true, features = ["random"] }
+rand.workspace = true
