@@ -180,8 +180,8 @@ verifies the output while it does.
   idioms is the single largest win. By the time compilation shipped, most of
   the speedup the original plan attributed to it had already been taken by the
   optimizer.
-- **The JIT is roughly 3x over the optimized interpreter on mandelbrot and
-  1.5x on hanoi**, and *loses* on programs that finish in a few milliseconds,
+- **The JIT is roughly 3.5x over the optimized interpreter on mandelbrot and
+  1.4x on hanoi**, and *loses* on programs that finish in a few milliseconds,
   because compile time is part of the run — tens of milliseconds for the
   largest programs in the corpus.
 - **The JIT is within about 1.6x of native** on mandelbrot. That gap is codegen
