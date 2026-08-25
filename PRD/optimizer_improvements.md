@@ -497,15 +497,38 @@ their share roughly doubled. That is worth knowing precisely because the old
 4.5% has been cited here as a reason not to pursue check elimination, and at
 7.5-9% it is a different proposition.
 
-**What that suggests, and what it does not.** A loop containing a seek can
-never be guarded -- `span()` returns `None` on a seek, because the reach
-depends on the data -- so those loops pay a bounds check on every iteration,
-and every one of mandelbrot's hot loops contains a seek. The narrow idea that
-fits: when a loop body *ends* in a seek, the back edge arrives with the cursor
-on a cell the seek has just read successfully, so the header's re-check is
-redundant on that edge though not on entry. That is a fraction of the 7.5%, not
-all of it, and it needs the argument made carefully for the unbounded model,
-where growth moves the tape underneath exactly that reasoning.
+**The 7.5% is not available, and that is a decision rather than an
+oversight.** Bounds-checked memory is what gyrus is for: the README leads with
+it, the tape contract is the one invariant `scripts/check-tape-access.py`
+exists to enforce, and an implementation that drops it to go faster is one of
+the many BrainFuck implementations this is not. A `--unsafe` flag may earn its
+place later; it does not have one now.
+
+That leaves a narrower thing, which is worth keeping straight because the
+ceiling measurement blurs the two together:
+
+- *Removing* checks is unsound, and off the table without an explicit opt-in.
+- *Not repeating* a check is neither. If a seek has just read cell N and
+  stopped there, a loop header that re-reads cell N on the back edge is
+  re-establishing a fact it already has. Eliminating that changes no semantics
+  and weakens no contract -- it is ordinary bounds-check elimination, and it
+  stays inside the tape contract rather than opting out of it.
+
+The second is the only version worth pursuing, and only with the argument
+actually made. A loop containing a seek can never be guarded -- `span()`
+returns `None` on a seek, because the reach depends on the data -- so those
+loops pay a check every iteration, and every one of mandelbrot's hot loops
+contains a seek, which is what makes the back edge interesting. Two things the
+proof has to survive, and the second is where a subtle bug would live:
+
+- the redundancy holds on the back edge but not on loop entry, so entry keeps
+  its check;
+- under `--memory-model unbounded` the tape can be reallocated mid-loop, which
+  moves the base and the length underneath exactly the reasoning that made the
+  earlier check sufficient.
+
+Worth a fraction of 7.5%, and only if that argument holds. Not worth guessing
+at.
 
 ### Unrolling the seek — 2026-08-25, **-17.6%**
 
