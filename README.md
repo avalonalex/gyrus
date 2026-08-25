@@ -123,6 +123,7 @@ The unreasonable part is that all of this actually works.
 | [Development tools](docs/tooling.md) | `gyrus-tool`: validate, minify, view, inspect |
 | [Development](docs/development.md) | Building, testing, benchmarking |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
+| [Changelog](CHANGELOG.md) | What changed, and why, from 0.1 to now |
 
 ## Status
 
