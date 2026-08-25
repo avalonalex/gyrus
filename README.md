@@ -1,8 +1,7 @@
 # gyrus
 
-**Production-grade tooling for a language that will never see production.**
-
-If you are going to run BrainFuck in production, run it on gyrus.
+**Production-grade tooling for BrainFuck — interpreter, optimizer, and
+Cranelift JIT in Rust.**
 
 When a bracket does not close, you get the line and the column, not a program
 that quietly does the wrong thing forever — and you get *every* unbalanced
