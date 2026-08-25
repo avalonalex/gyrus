@@ -32,6 +32,7 @@ const OFF_LEN: i32 = offset_of!(Runtime<'static>, len) as i32;
 const OFF_CURSOR: i32 = offset_of!(Runtime<'static>, cursor) as i32;
 const OFF_ITERATIONS: i32 = offset_of!(Runtime<'static>, iterations) as i32;
 const OFF_PEAK: i32 = offset_of!(Runtime<'static>, peak) as i32;
+const OFF_COUNTDOWN: i32 = offset_of!(Runtime<'static>, countdown) as i32;
 
 /// How often, in loop iterations, the runtime is asked whether to stop. The
 /// interpreter reads the clock at most once per this many steps; a loop
@@ -53,6 +54,9 @@ struct Runtime<'a> {
     cursor: i64,
     iterations: u64,
     peak: u64,
+    /// Exchanged with the generated code around `bf_slow`, which continues
+    /// the countdown to the next tick where the code left it.
+    countdown: i64,
 
     tape: Vec<u8>,
     memory_model: MemoryModel,
@@ -66,6 +70,18 @@ struct Runtime<'a> {
     limits: Limits,
     /// Which limit stopped the run, set by `bf_tick`.
     limit_hit: Option<LimitHit>,
+    /// The regions the generated code guards, by number: what `bf_slow`
+    /// interprets when a guard fails. Borrowed from the program.
+    guarded: Vec<Guarded<'a>>,
+    limited: bool,
+    debug_info: Option<&'a DebugInfo>,
+    /// An error `bf_slow` built, with the interpreter's own constructors,
+    /// for `run_with` to return.
+    error: Option<BfError>,
+    /// The peak `bf_slow` saw; merged with the generated code's on exit.
+    peak_slow: u64,
+    checked: bool,
+    stats: bool,
 }
 
 struct Limits {
@@ -201,6 +217,204 @@ extern "C" fn bf_tick(rt: *mut c_void, completed: u64) -> i64 {
     rt.limits.countdown(completed) as i64
 }
 
+/// A region the generated code runs unchecked behind one bounds guard, and
+/// the runtime interprets when the guard fails.
+#[derive(Clone, Copy)]
+enum Guarded<'p> {
+    /// A straight-line run.
+    Run(&'p [OptimizedInstruction]),
+    /// A balanced loop nest: the cells it can touch are the same every
+    /// iteration, so one guard before it covers all of them.
+    Nest(&'p OptimizedInstruction),
+}
+
+/// A guard failed: interpret the region here instead, exactly as the
+/// optimized interpreter would -- every effect up to the failing access,
+/// then that access's error, built with the interpreter's own constructors
+/// -- or, if nothing was actually out of range (the guard over-approximates:
+/// an `Input` that leaves its cell alone still counts, and so does a nested
+/// loop that never runs), run it to the end. Returns 0 on completion, 1
+/// with the error left in the runtime. The cursor, the iteration count and
+/// the tick countdown are exchanged through the runtime.
+extern "C" fn bf_slow(rt: *mut c_void, region: u32) -> i32 {
+    let rt = runtime(rt);
+    let mut cursor = rt.cursor;
+    let result = match rt.guarded[region as usize] {
+        Guarded::Run(run) => slow_block(rt, run, &mut cursor),
+        Guarded::Nest(nest) => slow_instruction(rt, nest, &mut cursor),
+    };
+    rt.cursor = cursor;
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            rt.error = Some(error);
+            1
+        }
+    }
+}
+
+fn slow_block(
+    rt: &mut Runtime<'static>,
+    block: &[OptimizedInstruction],
+    cursor: &mut i64,
+) -> Result<()> {
+    for inst in block {
+        slow_instruction(rt, inst, cursor)?;
+    }
+    Ok(())
+}
+
+/// One instruction, the interpreter's way. Everything the JIT translates
+/// has an arm here, so that any region can fall back to it.
+fn slow_instruction(
+    rt: &mut Runtime<'static>,
+    inst: &OptimizedInstruction,
+    cursor: &mut i64,
+) -> Result<()> {
+    use OptimizedInstruction as I;
+    let index = inst.source_range().start;
+    match inst {
+        I::Right(n, _) => *cursor += *n as i64,
+        I::Left(n, _) => *cursor -= *n as i64,
+        I::Add(n, _) | I::Sub(n, _) => {
+            let idx = slow_cell(rt, *cursor, index)?;
+            let cell = rt.tape[idx];
+            let add = matches!(inst, I::Add(..));
+            rt.tape[idx] = if rt.checked {
+                // The unfused program steps to the boundary first, which is
+                // why the error reports the boundary value.
+                let steps = StepCount::new(index as u64);
+                if add {
+                    (cell as u16 + *n as u16 <= 255)
+                        .then_some(cell.wrapping_add(*n))
+                        .ok_or_else(|| {
+                            U8CheckedCells::overflow_error(steps, rt.debug_info, index)
+                        })?
+                } else {
+                    (cell >= *n)
+                        .then_some(cell.wrapping_sub(*n))
+                        .ok_or_else(|| {
+                            U8CheckedCells::underflow_error(steps, rt.debug_info, index)
+                        })?
+                }
+            } else if add {
+                cell.wrapping_add(*n)
+            } else {
+                cell.wrapping_sub(*n)
+            };
+        }
+        I::Zero(_) | I::Set(_, _) => {
+            let value = if let I::Set(v, _) = inst { *v } else { 0 };
+            let idx = slow_cell(rt, *cursor, index)?;
+            rt.tape[idx] = value;
+        }
+        I::Output(_) => {
+            let idx = slow_cell(rt, *cursor, index)?;
+            let byte = rt.tape[idx];
+            if bf_write(rt as *mut Runtime<'static> as *mut c_void, byte as u32) != 0 {
+                return Err(slow_io_error(rt, index));
+            }
+        }
+        I::Input(_) => {
+            // Read first, then find the cell: the interpreter consumes the
+            // byte before it discovers the cell is off the tape.
+            let r = bf_read(rt as *mut Runtime<'static> as *mut c_void);
+            if r == -2 {
+                return Err(slow_io_error(rt, index));
+            }
+            if r >= 0 {
+                let idx = slow_cell(rt, *cursor, index)?;
+                rt.tape[idx] = r as u8;
+            }
+        }
+        I::SeekRight(stride, _) | I::SeekLeft(stride, _) => {
+            let delta = if matches!(inst, I::SeekRight(..)) {
+                *stride as i64
+            } else {
+                -(*stride as i64)
+            };
+            loop {
+                let idx = slow_cell(rt, *cursor, index)?;
+                if rt.tape[idx] == 0 {
+                    break;
+                }
+                *cursor += delta;
+            }
+        }
+        I::MultiplyAdd(targets, _) => {
+            let idx = slow_cell(rt, *cursor, index)?;
+            let source = rt.tape[idx];
+            if source == 0 {
+                return Ok(());
+            }
+            for (offset, multiplier) in targets {
+                let t = slow_cell(rt, *cursor + *offset as i64, index)?;
+                let sum = rt.tape[t] as i32 + source as i32 * multiplier;
+                rt.tape[t] = sum as u8;
+            }
+            let idx = slow_cell(rt, *cursor, index)?;
+            rt.tape[idx] = 0;
+        }
+        I::Loop(body, _) => loop {
+            let idx = slow_cell(rt, *cursor, index)?;
+            if rt.tape[idx] == 0 {
+                break;
+            }
+            // What `body_entry` does in the generated code: count down to
+            // the tick, which sees the iterations completed so far.
+            if rt.limited {
+                rt.countdown -= 1;
+                if rt.countdown == 0 {
+                    let next = bf_tick(rt as *mut Runtime<'static> as *mut c_void, rt.iterations);
+                    if next < 0 {
+                        return Err(limit_error(rt, rt.debug_info, index));
+                    }
+                    rt.countdown = next;
+                }
+            }
+            if rt.stats || rt.limited {
+                rt.iterations += 1;
+            }
+            slow_block(rt, body, cursor)?;
+        },
+    }
+    Ok(())
+}
+
+/// The tape index for `cursor`, growing the tape under the unbounded model
+/// as the interpreter does, or the interpreter's error.
+fn slow_cell(rt: &mut Runtime<'static>, cursor: i64, index: usize) -> Result<usize> {
+    let position = MemoryAddress::new(cursor as isize);
+    if position.index(rt.tape.len()).is_none()
+        && bf_grow(rt as *mut Runtime<'static> as *mut c_void, cursor) == 0
+    {
+        return Err(rt.memory_model.access_error(
+            position,
+            &rt.tape,
+            StepCount::new(index as u64),
+            rt.debug_info,
+            index,
+        ));
+    }
+    let idx = position.index(rt.tape.len()).expect("on the tape now");
+    if rt.stats {
+        rt.peak_slow = rt.peak_slow.max(idx as u64);
+    }
+    Ok(idx)
+}
+
+fn slow_io_error(rt: &mut Runtime<'static>, index: usize) -> BfError {
+    let (operation, source) = rt
+        .io_error
+        .take()
+        .unwrap_or_else(|| ("I/O", std::io::Error::other("unknown I/O failure")));
+    BfError::IoError {
+        operation: operation.to_string(),
+        instruction_index: Some(index.into()),
+        source,
+    }
+}
+
 /// Flags for every tape access. `trusted` is notrap + aligned: the bounds
 /// compare that precedes each access is what makes notrap true.
 fn access_flags() -> MemFlagsData {
@@ -228,6 +442,8 @@ enum Site {
     Underflow { instruction_index: usize },
     /// `bf_tick` said stop, at this loop; the runtime holds which limit.
     Limit { instruction_index: usize },
+    /// `bf_slow` failed and left the finished error in the runtime.
+    Slow,
 }
 
 type Entry = extern "C" fn(*mut c_void) -> i32;
@@ -295,7 +511,7 @@ pub fn run_with(
         initial_countdown: limits.countdown(0),
         stats: statistics == Statistics::Full,
     };
-    let (entry, sites, _module) = compile(program, options)?;
+    let (entry, sites, guarded, _module) = compile(program, options)?;
 
     let mut tape = vec![0u8; memory_model.initial_size().get()];
     let mut rt = Runtime {
@@ -304,6 +520,7 @@ pub fn run_with(
         cursor: 0,
         iterations: 0,
         peak: 0,
+        countdown: options.initial_countdown as i64,
         tape,
         memory_model,
         input,
@@ -314,6 +531,13 @@ pub fn run_with(
         bytes_written: 0,
         limits,
         limit_hit: None,
+        guarded,
+        limited: options.limited,
+        debug_info,
+        error: None,
+        peak_slow: 0,
+        checked: options.checked,
+        stats: options.stats,
     };
     // Calling the pointer is safe Rust; what made it sound is the transmute
     // in `compile`, and the runtime outliving the call.
@@ -353,6 +577,10 @@ pub fn run_with(
                 instruction_index,
             ),
             Site::Limit { instruction_index } => limit_error(&rt, debug_info, instruction_index),
+            Site::Slow => rt
+                .error
+                .take()
+                .expect("bf_slow reported failure without an error"),
         });
     }
 
@@ -365,7 +593,7 @@ pub fn run_with(
         // The `+ 1` that turns a highest index into a count, as
         // `VmState::peak_cells_used` does.
         peak_memory_used: match statistics {
-            Statistics::Full => MemorySize::new(rt.peak as usize + 1),
+            Statistics::Full => MemorySize::new(rt.peak.max(rt.peak_slow) as usize + 1),
             Statistics::Cheap => MemorySize::new(0),
         },
         cells_modified: rt.tape.iter().filter(|&&c| c != 0).count(),
@@ -424,7 +652,9 @@ struct Options {
 }
 
 /// Translate and compile. The module is returned so the code stays mapped.
-fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<Site>, JITModule)> {
+type Compiled<'p> = (Entry, Vec<Site>, Vec<Guarded<'p>>, JITModule);
+
+fn compile<'p>(program: &'p OptimizedProgram, options: Options) -> Result<Compiled<'p>> {
     let cranelift = |e: &dyn std::fmt::Display| BfError::ConfigurationError {
         message: format!("Cranelift: {e}"),
     };
@@ -443,6 +673,7 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
     jit.symbol("bf_read", bf_read as *const u8);
     jit.symbol("bf_grow", bf_grow as *const u8);
     jit.symbol("bf_tick", bf_tick as *const u8);
+    jit.symbol("bf_slow", bf_slow as *const u8);
     let mut module = JITModule::new(jit);
     let ptr = module.target_config().pointer_type();
 
@@ -460,6 +691,7 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
     let read_id = declare("bf_read", &[ptr], types::I32)?;
     let grow_id = declare("bf_grow", &[ptr, types::I64], types::I32)?;
     let tick_id = declare("bf_tick", &[ptr, types::I64], types::I64)?;
+    let slow_id = declare("bf_slow", &[ptr, types::I32], types::I32)?;
 
     let mut ctx = module.make_context();
     ctx.func.signature.params.push(AbiParam::new(ptr));
@@ -472,11 +704,12 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
         read: module.declare_func_in_func(read_id, &mut ctx.func),
         grow: module.declare_func_in_func(grow_id, &mut ctx.func),
         tick: module.declare_func_in_func(tick_id, &mut ctx.func),
+        slow: module.declare_func_in_func(slow_id, &mut ctx.func),
     };
 
     let frontend_config = module.target_config();
     let mut fb_ctx = FunctionBuilderContext::new();
-    let sites = {
+    let (sites, runs) = {
         let mut b = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
         let entry = b.create_block();
         b.append_block_params_for_function_params(entry);
@@ -516,6 +749,8 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
             options,
             sites: Vec::new(),
             exits: Vec::new(),
+            unchecked: false,
+            guarded: Vec::new(),
         };
         if options.grows {
             t.load_tape();
@@ -528,7 +763,7 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
 
         t.b.seal_all_blocks();
         t.b.finalize(frontend_config);
-        t.sites
+        (t.sites, t.guarded)
     };
 
     module
@@ -541,7 +776,7 @@ fn compile(program: &OptimizedProgram, options: Options) -> Result<(Entry, Vec<S
     // signature `Entry` describes (one pointer-sized param, an i32 result,
     // the ISA's default calling convention, which is the platform C ABI).
     let entry: Entry = unsafe { std::mem::transmute(code) };
-    Ok((entry, sites, module))
+    Ok((entry, sites, runs, module))
 }
 
 /// Straight-line instructions: cell operations and moves.
@@ -558,6 +793,78 @@ fn in_run(inst: &OptimizedInstruction) -> bool {
             | I::Right(..)
             | I::Left(..)
     )
+}
+
+/// A run touching this many distinct cells gets one guard instead of a
+/// check per access. Below it, the guard's two compares would not beat the
+/// checks they replace.
+const GUARD_FROM: usize = 3;
+
+/// The cells a straight-line run may touch, relative to where it starts:
+/// the lowest, the highest, and how many distinct ones. `Input` counts even
+/// though it may leave its cell alone -- the guard may be pessimistic, the
+/// slow path is exact.
+fn touched(run: &[OptimizedInstruction]) -> Option<(i64, i64, usize)> {
+    use OptimizedInstruction as I;
+    let mut offset: i64 = 0;
+    let mut cells = std::collections::BTreeSet::new();
+    for inst in run {
+        match inst {
+            I::Right(n, _) => offset += *n as i64,
+            I::Left(n, _) => offset -= *n as i64,
+            I::Add(..) | I::Sub(..) | I::Zero(..) | I::Set(..) | I::Output(..) | I::Input(..) => {
+                cells.insert(offset);
+            }
+            _ => unreachable!("not a straight-line instruction"),
+        }
+    }
+    let lowest = *cells.first()?;
+    let highest = *cells.last()?;
+    Some((lowest, highest, cells.len()))
+}
+
+/// The cells a block can touch, relative to where it starts, if that is
+/// fixed: a block with no seek, whose nested loops all come back to where
+/// they started. Returns (net movement, lowest, highest) -- lowest and
+/// highest over every access, including loop headers, multiply targets and
+/// `Input` (over-approximating, which a guard may). `None` when a seek or
+/// an unbalanced nested loop makes the span depend on the data.
+fn span(block: &[OptimizedInstruction]) -> Option<(i64, i64, i64)> {
+    use OptimizedInstruction as I;
+    let mut offset: i64 = 0;
+    let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
+    let mut touch = |at: i64| {
+        lowest = lowest.min(at);
+        highest = highest.max(at);
+    };
+    for inst in block {
+        match inst {
+            I::Right(n, _) => offset += *n as i64,
+            I::Left(n, _) => offset -= *n as i64,
+            I::Add(..) | I::Sub(..) | I::Zero(..) | I::Set(..) | I::Output(..) | I::Input(..) => {
+                touch(offset)
+            }
+            I::MultiplyAdd(targets, _) => {
+                touch(offset);
+                for (target, _) in targets {
+                    touch(offset + *target as i64);
+                }
+            }
+            I::Loop(body, _) => {
+                touch(offset);
+                let (net, lo, hi) = span(body)?;
+                if net != 0 {
+                    return None;
+                }
+                if lo <= hi {
+                    touch(offset + lo);
+                    touch(offset + hi);
+                }
+            }
+            I::SeekRight(..) | I::SeekLeft(..) => return None,
+        }
+    }
+    Some((offset, lowest, highest))
 }
 
 /// Instructions that read the cell under the cursor before anything else.
@@ -635,10 +942,16 @@ struct Calls {
     read: FuncRef,
     grow: FuncRef,
     tick: FuncRef,
+    slow: FuncRef,
 }
 
-struct Translator<'a> {
+struct Translator<'a, 'p> {
     b: FunctionBuilder<'a>,
+    /// Inside a guarded run's fast path: the guard has proved every access
+    /// in range, so `checked_addr` checks nothing.
+    unchecked: bool,
+    /// The guarded regions, by number, for `bf_slow`.
+    guarded: Vec<Guarded<'p>>,
     rt: Value,
     ptr: types::Type,
     vars: Vars,
@@ -654,7 +967,7 @@ struct Translator<'a> {
     exits: Vec<(Block, Value, i64)>,
 }
 
-impl Translator<'_> {
+impl<'p> Translator<'_, 'p> {
     /// (Re)load the tape's base and length from the runtime, under the
     /// unbounded model, where they can change.
     fn load_tape(&mut self) {
@@ -731,6 +1044,10 @@ impl Translator<'_> {
     /// cover the cell, which is what the interpreter's access does. Returns
     /// the cell's address. The peak is not noted here; see `note_peak`.
     fn checked_addr(&mut self, cursor: Value, instruction_index: usize) -> Value {
+        if self.unchecked {
+            let base = self.tape_base();
+            return self.b.ins().iadd(base, cursor);
+        }
         // Under the unbounded model the check is re-run after growth, so it
         // needs a block of its own to jump back to.
         let check = if self.options.grows {
@@ -800,7 +1117,7 @@ impl Translator<'_> {
     /// follows the run reads the cell the run ends on before doing anything
     /// else, so that position counts too. Inside a balanced loop body the
     /// loop notes all of this itself, once, and `note_runs` is false.
-    fn block(&mut self, instructions: &[OptimizedInstruction], note_runs: bool) {
+    fn block(&mut self, instructions: &'p [OptimizedInstruction], note_runs: bool) {
         let mut i = 0;
         while i < instructions.len() {
             if !in_run(&instructions[i]) {
@@ -823,10 +1140,109 @@ impl Translator<'_> {
                     self.note_peak(c, furthest);
                 }
             }
-            for inst in &instructions[i..end] {
-                self.instruction(inst);
-            }
+            self.run(&instructions[i..end]);
             i = end;
+        }
+    }
+
+    /// Translate one straight-line run: guarded, if it touches enough
+    /// distinct cells for one guard to beat a check per access.
+    ///
+    /// The guard is two compares on the run's lowest and highest cell. If
+    /// both are on the tape the run is translated with no checks at all;
+    /// if not, the runtime interprets the run instead (`bf_slow`), which
+    /// reproduces every effect up to the failing access and then the
+    /// interpreter's own error -- or finishes the run, when the guard was
+    /// pessimistic. Sixteen blocks of IR per access become none.
+    fn run(&mut self, run: &'p [OptimizedInstruction]) {
+        if self.unchecked {
+            return self.plain(run);
+        }
+        let Some((lowest, highest, distinct)) = touched(run) else {
+            return self.plain(run);
+        };
+        if distinct < GUARD_FROM {
+            return self.plain(run);
+        }
+        self.guard(lowest, highest, Guarded::Run(run), |t| t.plain(run));
+    }
+
+    /// Emit `region` behind one bounds guard on `lowest..=highest`, relative
+    /// to the cursor: the fast path is `translate` with every check off, the
+    /// slow path a call into the runtime's interpreter for the region, after
+    /// which the cursor and the counters are taken back from the runtime.
+    fn guard(
+        &mut self,
+        lowest: i64,
+        highest: i64,
+        region: Guarded<'p>,
+        translate: impl FnOnce(&mut Self),
+    ) {
+        let c = self.b.use_var(self.vars.cursor);
+        let len = self.tape_len();
+        let lo = self.b.ins().iadd_imm_s(c, lowest);
+        let hi = self.b.ins().iadd_imm_s(c, highest);
+        let lo_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, lo, len);
+        let hi_ok = self.b.ins().icmp(IntCC::UnsignedLessThan, hi, len);
+        let ok = self.b.ins().band(lo_ok, hi_ok);
+        let fast = self.b.create_block();
+        let slow = self.b.create_block();
+        self.b.set_cold_block(slow);
+        let join = self.b.create_block();
+        self.b.ins().brif(ok, fast, &[], slow, &[]);
+
+        self.b.switch_to_block(fast);
+        let was = std::mem::replace(&mut self.unchecked, true);
+        translate(self);
+        self.unchecked = was;
+        self.b.ins().jump(join, &[]);
+
+        self.b.switch_to_block(slow);
+        self.guarded.push(region);
+        let id = self
+            .b
+            .ins()
+            .iconst(types::I32, (self.guarded.len() - 1) as i64);
+        self.b.ins().store(access_flags(), c, self.rt, OFF_CURSOR);
+        let iterations = self.b.use_var(self.vars.iterations);
+        self.b
+            .ins()
+            .store(access_flags(), iterations, self.rt, OFF_ITERATIONS);
+        let countdown = self.b.use_var(self.vars.countdown);
+        self.b
+            .ins()
+            .store(access_flags(), countdown, self.rt, OFF_COUNTDOWN);
+        let call = self.b.ins().call(self.calls.slow, &[self.rt, id]);
+        let status = self.b.inst_results(call)[0];
+        let fail = self.fail_block(Site::Slow, c);
+        let resume = self.b.create_block();
+        self.b.ins().brif(status, fail, &[], resume, &[]);
+        self.b.switch_to_block(resume);
+        let after = self
+            .b
+            .ins()
+            .load(types::I64, access_flags(), self.rt, OFF_CURSOR);
+        self.b.def_var(self.vars.cursor, after);
+        let iterations = self
+            .b
+            .ins()
+            .load(types::I64, access_flags(), self.rt, OFF_ITERATIONS);
+        self.b.def_var(self.vars.iterations, iterations);
+        let countdown = self
+            .b
+            .ins()
+            .load(types::I64, access_flags(), self.rt, OFF_COUNTDOWN);
+        self.b.def_var(self.vars.countdown, countdown);
+        if self.options.grows {
+            self.load_tape();
+        }
+        self.b.ins().jump(join, &[]);
+        self.b.switch_to_block(join);
+    }
+
+    fn plain(&mut self, run: &'p [OptimizedInstruction]) {
+        for inst in run {
+            self.instruction(inst);
         }
     }
 
@@ -928,7 +1344,49 @@ impl Translator<'_> {
         self.b.ins().brif(v, nonzero, &[], zero, &[]);
     }
 
-    fn instruction(&mut self, instruction: &OptimizedInstruction) {
+    /// A loop, checked: the header reads the cell under the cursor every
+    /// iteration and branches on it.
+    fn loop_plain(
+        &mut self,
+        _instruction: &'p OptimizedInstruction,
+        body: &'p [OptimizedInstruction],
+        index: usize,
+    ) {
+        // A balanced body touches the same cells every iteration, so
+        // its furthest cell is noted once, at the exit, if the loop
+        // ran at all -- which the iteration counter tells: a few
+        // instructions per loop execution, no new blocks, and nothing
+        // on the iteration path, where a note cost 9% of mandelbrot.
+        let (net, furthest) = extent(body);
+        let balanced = net == Some(0);
+        let note = match (self.options.stats, balanced, furthest) {
+            (true, true, Some(furthest)) => Some((furthest, self.b.use_var(self.vars.iterations))),
+            _ => None,
+        };
+        let header = self.b.create_block();
+        let body_block = self.b.create_block();
+        let after = self.b.create_block();
+        self.b.ins().jump(header, &[]);
+        self.b.switch_to_block(header);
+        self.loop_test(index, body_block, after);
+        self.b.switch_to_block(body_block);
+        self.body_entry(index);
+        self.block(body, self.options.stats && !balanced);
+        self.b.ins().jump(header, &[]);
+        self.b.switch_to_block(after);
+        if let Some((furthest, entered_at)) = note {
+            let now = self.b.use_var(self.vars.iterations);
+            let ran = self.b.ins().icmp(IntCC::NotEqual, now, entered_at);
+            let c = self.b.use_var(self.vars.cursor);
+            let position = self.b.ins().iadd_imm_s(c, furthest);
+            let peak = self.b.use_var(self.vars.peak);
+            let candidate = self.b.ins().select(ran, position, peak);
+            let peak = self.b.ins().umax(peak, candidate);
+            self.b.def_var(self.vars.peak, peak);
+        }
+    }
+
+    fn instruction(&mut self, instruction: &'p OptimizedInstruction) {
         use OptimizedInstruction as I;
         let index = instruction.source_range().start;
         match instruction {
@@ -1072,39 +1530,17 @@ impl Translator<'_> {
                 self.b.switch_to_block(after);
             }
             I::Loop(body, _) => {
-                // A balanced body touches the same cells every iteration, so
-                // its furthest cell is noted once, at the exit, if the loop
-                // ran at all -- which the iteration counter tells: a few
-                // instructions per loop execution, no new blocks, and nothing
-                // on the iteration path, where a note cost 9% of mandelbrot.
-                let (net, furthest) = extent(body);
-                let balanced = net == Some(0);
-                let note = match (self.options.stats, balanced, furthest) {
-                    (true, true, Some(furthest)) => {
-                        Some((furthest, self.b.use_var(self.vars.iterations)))
+                // A nest whose cells are fixed is guarded once, before the
+                // header, and compiled with no checks inside: one guard for
+                // every iteration's header and body. Inside a guarded region
+                // nothing guards again.
+                match span(body) {
+                    Some((0, lo, hi)) if !self.unchecked && lo <= hi => {
+                        self.guard(lo.min(0), hi.max(0), Guarded::Nest(instruction), |t| {
+                            t.loop_plain(instruction, body, index)
+                        });
                     }
-                    _ => None,
-                };
-                let header = self.b.create_block();
-                let body_block = self.b.create_block();
-                let after = self.b.create_block();
-                self.b.ins().jump(header, &[]);
-                self.b.switch_to_block(header);
-                self.loop_test(index, body_block, after);
-                self.b.switch_to_block(body_block);
-                self.body_entry(index);
-                self.block(body, self.options.stats && !balanced);
-                self.b.ins().jump(header, &[]);
-                self.b.switch_to_block(after);
-                if let Some((furthest, entered_at)) = note {
-                    let now = self.b.use_var(self.vars.iterations);
-                    let ran = self.b.ins().icmp(IntCC::NotEqual, now, entered_at);
-                    let c = self.b.use_var(self.vars.cursor);
-                    let position = self.b.ins().iadd_imm_s(c, furthest);
-                    let peak = self.b.use_var(self.vars.peak);
-                    let candidate = self.b.ins().select(ran, position, peak);
-                    let peak = self.b.ins().umax(peak, candidate);
-                    self.b.def_var(self.vars.peak, peak);
+                    _ => self.loop_plain(instruction, body, index),
                 }
             }
         }
