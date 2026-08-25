@@ -127,8 +127,7 @@ fn eof_behaviours_agree() {
 }
 
 /// The tape contract: moving off the tape is fine, touching it is the error,
-/// reported with the cursor that did it. (`instruction_index` is the
-/// interpreter's step count and is not matched yet -- see the PRD's step 2.)
+/// reported with the cursor that did it.
 #[test]
 fn out_of_tape_access_is_the_same_error() {
     let build = || ExecutionConfigBuilder::new().with_memory_size(5).build();
@@ -173,4 +172,130 @@ fn checked_cells_are_refused_for_now() {
         gyrus_jit::run(&program, &config, &mut i, &mut o, None),
         Err(BfError::ConfigurationError { .. })
     ));
+}
+
+/// Not just the same variant: the same hint, bound, dump and message. The
+/// one field left out is `instruction_index`, where the interpreter reports
+/// its step count and the JIT the instruction -- see `Site` in the JIT.
+#[test]
+fn out_of_tape_errors_are_word_for_word_the_interpreters() {
+    let workspace = workspace();
+    let overflow =
+        std::fs::read_to_string(workspace.join("programs/errors/memory_overflow.bf")).unwrap();
+    // The sample walks a few hundred cells right; a tape one short of that
+    // makes its final `+` the overrun, whatever the exact count.
+    let reach = overflow.matches('>').count() - overflow.matches('<').count();
+    let cases: Vec<(String, usize)> = vec![
+        ("<+".to_string(), 5),
+        (">>>>>+".to_string(), 5),
+        ("+++[->>>>>+<<<<<]".to_string(), 5),
+        (overflow, reach),
+    ];
+    for (src, size) in cases {
+        let build = move || ExecutionConfigBuilder::new().with_memory_size(size).build();
+        let (interp, jit) = both(&src, "", build);
+        let (Err(a), Err(b)) = (interp, jit) else {
+            panic!("{src}: expected both to fail");
+        };
+        let (
+            BfError::MemoryOutOfBounds {
+                instruction_index: ia,
+                attempted: a1,
+                max: a2,
+                memory_dump: a3,
+                hint: a4,
+                ..
+            },
+            BfError::MemoryOutOfBounds {
+                instruction_index: ib,
+                attempted: b1,
+                max: b2,
+                memory_dump: b3,
+                hint: b4,
+                ..
+            },
+        ) = (&a, &b)
+        else {
+            panic!("{src}: {a:?} vs {b:?}");
+        };
+        assert_eq!((a1, a2, a4), (b1, b2, b4), "{src}");
+        assert_eq!(format!("{a3:?}"), format!("{b3:?}"), "{src}: memory dump");
+        let scrub = |text: String, index: &gyrus::InstructionIndex| {
+            text.replace(&format!("instruction {index}"), "instruction ?")
+        };
+        assert_eq!(
+            scrub(a.format_detailed(), ia),
+            scrub(b.format_detailed(), ib),
+            "{src}: formatted"
+        );
+    }
+}
+
+/// What the JIT can do that the optimized interpreter cannot: with debug
+/// info, the error points at the instruction that did it.
+#[test]
+fn with_debug_info_the_error_has_a_source_location() {
+    // Line 2, column 3 is the `+` that writes cell -1.
+    let src = "++\n<<+";
+    let (instructions, debug_info) = gyrus::parse_with_debug(src).unwrap();
+    let program = optimize(&instructions);
+    let config = ExecutionConfigBuilder::new().with_memory_size(5).build();
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    let err = gyrus_jit::run(&program, &config, &mut i, &mut o, Some(&debug_info)).unwrap_err();
+    let BfError::MemoryOutOfBounds {
+        source_location: Some(loc),
+        attempted,
+        ..
+    } = err
+    else {
+        panic!("expected a located out-of-bounds error, got {err:?}");
+    };
+    assert_eq!(attempted, -2);
+    assert_eq!((loc.line, loc.column), (2, 3));
+    // And it renders with the source context, caret and all.
+    let (instructions, debug_info) = gyrus::parse_with_debug(src).unwrap();
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    let err = gyrus_jit::run(
+        &optimize(&instructions),
+        &config,
+        &mut i,
+        &mut o,
+        Some(&debug_info),
+    )
+    .unwrap_err();
+    let rendered = err.format_with_source(src);
+    assert!(rendered.contains("At line 2, column 3"), "{rendered}");
+}
+
+/// An I/O failure is the same error, down to the operation named.
+#[test]
+fn io_errors_are_the_interpreters() {
+    let build = || {
+        ExecutionConfigBuilder::new()
+            .with_memory_size(5)
+            .with_eof_behavior(EofBehavior::Error)
+            .build()
+    };
+    let (interp, jit) = both(",", "", build);
+    let (Err(a), Err(b)) = (interp, jit) else {
+        panic!("expected both to fail")
+    };
+    assert_eq!(a.to_string(), b.to_string());
+    let (
+        BfError::IoError {
+            operation: oa,
+            source: sa,
+            ..
+        },
+        BfError::IoError {
+            operation: ob,
+            source: sb,
+            ..
+        },
+    ) = (&a, &b)
+    else {
+        panic!("{a:?} vs {b:?}");
+    };
+    assert_eq!(oa, ob);
+    assert_eq!((sa.kind(), sa.to_string()), (sb.kind(), sb.to_string()));
 }
