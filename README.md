@@ -68,7 +68,7 @@ cargo build --release
 ```
 
 `rust-toolchain.toml` pins the compiler, so `cargo` picks the right one on its
-own. Building against another toolchain needs Rust **1.88** or newer (the code
+own. Building against another toolchain needs Rust **1.95** or newer (the code
 uses let-chains, which stabilized there).
 
 ## Features
