@@ -366,7 +366,12 @@ fn checked_cells_agree_with_the_interpreter() {
         assert_eq!(jit.as_ref().unwrap(), interp.as_ref().unwrap(), "{src}");
     }
     let overflow = "+".repeat(256);
+    // `[-]` then 300 `+`: the optimizer folds `[-]+...` into a constant, and
+    // must stop folding where the constant would pass 255 -- review found
+    // it did not, and all three engines ran the folded program.
+    let cleared_overflow = format!("[-]{}.", "+".repeat(300));
     for (src, what) in [
+        (cleared_overflow.as_str(), "clear then overflow"),
         ("-", "underflow at 0"),
         (overflow.as_str(), "overflow at 255"),
         ("[-]---", "clear then underflow"),
@@ -510,6 +515,11 @@ fn statistics_agree_where_they_are_defined_alike() {
         ),
         (",[.,]", "hello"),
         ("+>+>+>+>+<<<<[>]<.", ""),
+        // Unbalanced bodies ending in a move: the header's re-read at the
+        // new cursor counts, which the JIT once missed.
+        ("+[+>]", ""),
+        (">+[<+>>]", ""),
+        ("++++++++[>++++++++<-]>[.>]", ""),
     ] {
         let program = optimize(&parse(src).unwrap());
         let run = |jit: bool| {
@@ -545,4 +555,166 @@ fn statistics_agree_where_they_are_defined_alike() {
             "{src}: JIT steps are iterations"
         );
     }
+}
+
+/// A guarded run whose guard fails takes the slow path, which must do
+/// everything the run would have done before the failing access -- the
+/// interpreter prints five bytes before its sixth `.` runs off a five-cell
+/// tape -- and then fail with the interpreter's error; or, when the guard was
+/// merely pessimistic, finish the run.
+#[test]
+fn a_failed_guard_replays_the_run_exactly() {
+    let build = || ExecutionConfigBuilder::new().with_memory_size(5).build();
+    for src in [
+        "+.>+.>+.>+.>+.>+.", // six cells touched, the sixth off the tape
+        ">>>>+.<.<.<.<.<.",  // walks left off the tape after five outputs
+        "+>++>+++>++++<<<[-]>[-]>[-]>[-]>[-]>+", // five clears, then a cell too far
+        ",>,>,>,>,>,",       // input into the sixth cell, after five reads
+    ] {
+        let (interp, jit) = both(src, "abcdefgh", build);
+        match (interp, jit) {
+            (Err(a), Err(b)) => same_error(&a, &b, src),
+            (a, b) => panic!("{src}: expected both to fail, got {a:?} / {b:?}"),
+        }
+    }
+    // Pessimistic guard: `,` on the sixth cell with EOF set to leave it alone
+    // touches nothing, so the run completes -- in both engines.
+    let quiet = || {
+        ExecutionConfigBuilder::new()
+            .with_memory_size(5)
+            .with_eof_behavior(EofBehavior::NoChange)
+            .build()
+    };
+    let (interp, jit) = both("+.>+.>+.>+.>+.>,<.", "", quiet);
+    assert_eq!(jit.unwrap(), interp.unwrap());
+}
+
+/// The slow path's output must interleave with the fast path's: bytes
+/// written by a replayed run land in order with everything around it.
+#[test]
+fn slow_path_output_is_in_order() {
+    // Four cells: the body's fourth `.` is off the tape, after three bytes.
+    let build = || ExecutionConfigBuilder::new().with_memory_size(4).build();
+    let src = "+++++[>+.>+.>+.>+.<<<<-]";
+    let (interp, jit) = both(src, "", build);
+    match (interp, jit) {
+        (Err(a), Err(b)) => same_error(&a, &b, src),
+        (a, b) => panic!("{a:?} / {b:?}"),
+    }
+}
+
+/// A guarded loop nest whose guard fails is interpreted whole: iterations
+/// already done, nested loops, output in order, then the interpreter's
+/// error -- or completion, when the guard was pessimistic because the cell
+/// off the tape belongs to a nested loop that never runs.
+#[test]
+fn a_failed_nest_guard_replays_the_nest_exactly() {
+    let build = || ExecutionConfigBuilder::new().with_memory_size(5).build();
+    for src in [
+        "+++[>+++[>+.<-]<-]>>>>+",     // nest fine, then the last `+` off the tape
+        ">>>+++[>+++[>+.<-]<-]",       // inner loop's `.` lands on cell 5
+        "++++[>++++[>+++[>.<-]<-]<-]", // three deep; innermost `.` on cell 3, fine
+        ">>+++[>+.>+.<<-]",            // outer at 2, body touches 3 and 4, fine
+        ">>>+++[>+.>+.<<-]",           // body touches 4 and 5: fails in iteration one
+    ] {
+        let (interp, jit) = both(src, "", build);
+        match (interp, jit) {
+            (Ok(a), Ok(b)) => assert_eq!(a, b, "{src}"),
+            (Err(a), Err(b)) => same_error(&a, &b, src),
+            (a, b) => panic!("{src}: {a:?} / {b:?}"),
+        }
+    }
+}
+
+/// The slow path counts iterations and honours the step limit: a nest whose
+/// guard fails only because of a nested loop that never runs is interpreted
+/// until `--max-steps` stops it, and reports the iterations the JIT counts.
+#[test]
+fn a_limit_hit_inside_the_slow_path_is_reported() {
+    // Outer counter at cell 3 is never decremented; the inner multiply at
+    // cell 4 (zero) never runs, but its target, cell 5, is off the tape.
+    let src = ">>>+[>[>+<-]<]";
+    let config = ExecutionConfigBuilder::new()
+        .with_memory_size(5)
+        .with_max_steps(5000)
+        .build();
+    let program = optimize(&parse(src).unwrap());
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    let err = gyrus_jit::run(&program, &config, &mut i, &mut o, None).unwrap_err();
+    let BfError::StepLimitExceeded { actual_steps, .. } = err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(actual_steps.get(), 5000);
+}
+
+/// Under the unbounded model a nest's guard fails when the tape has not
+/// grown that far yet; the slow path grows it, exactly as the interpreter
+/// does, and both report the same tape afterwards.
+#[test]
+fn a_nest_that_outgrows_the_tape_grows_it_like_the_interpreter() {
+    let build = || {
+        ExecutionConfigBuilder::new()
+            .with_unbounded_memory(4, 100)
+            .unwrap()
+            .build()
+    };
+    let src = "+++[>+>+>+>+>+>+<<<<<<-]>>>>>>.";
+    let program = optimize(&parse(src).unwrap());
+    let run = |jit: bool| {
+        let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+        let stats = if jit {
+            gyrus_jit::run(&program, &build(), &mut i, &mut o, None).unwrap()
+        } else {
+            interpret_optimized_with_io(&program, build(), &mut i, &mut o).unwrap()
+        };
+        (
+            stats.memory_allocated,
+            stats.peak_memory_used,
+            o.output_bytes().to_vec(),
+        )
+    };
+    assert_eq!(run(false), run(true));
+}
+
+/// The tree-walker reports a final flush that fails as an I/O error; so
+/// must the JIT, instead of returning success for bytes that never arrived.
+#[test]
+fn a_failed_flush_is_an_io_error() {
+    struct Unflushable(Vec<u8>);
+    impl gyrus::io::BfOutput for Unflushable {
+        fn write_byte(&mut self, byte: u8) -> std::io::Result<()> {
+            self.0.push(byte);
+            Ok(())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gone"))
+        }
+    }
+    let program = optimize(&parse("+.").unwrap());
+    let config = ExecutionConfigBuilder::new().with_memory_size(10).build();
+    let mut input = StringIo::empty();
+    let mut output = Unflushable(Vec::new());
+    let err = gyrus_jit::run(&program, &config, &mut input, &mut output, None).unwrap_err();
+    match err {
+        BfError::IoError { operation, .. } => assert_eq!(operation, "flushing output"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Hooks are the tree-walker's; a configuration that carries one is refused
+/// rather than run with the hook silently never called.
+#[test]
+fn a_configuration_with_hooks_is_refused() {
+    struct Nop;
+    impl gyrus::hooks::ExecutionHook for Nop {}
+    let program = optimize(&parse("+.").unwrap());
+    let config = ExecutionConfigBuilder::new()
+        .with_memory_size(10)
+        .with_hook(Box::new(Nop))
+        .build();
+    let (mut i, mut o) = (StringIo::empty(), StringIo::empty());
+    assert!(matches!(
+        gyrus_jit::run(&program, &config, &mut i, &mut o, None),
+        Err(BfError::ConfigurationError { .. })
+    ));
 }

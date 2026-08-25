@@ -65,7 +65,7 @@ Runtime errors include:
 - **Execution timeout**: Program took too long to execute
 - **I/O errors**: Problems reading input or writing output
 
-Runtime errors can include **syntax-highlighted source code** showing exactly where the error occurred when using the `--debug` flag:
+Runtime errors can include **syntax-highlighted source code** showing exactly where the error occurred when using the `--debug` flag -- or `--jit`, which locates its errors at no run-time cost:
 
 ```bash
 # Debug mode: errors show source locations
@@ -92,7 +92,7 @@ Attempted to increment cell with value 255, but checked arithmetic prevents over
 - Loop brackets color-coded by nesting depth
 
 **Default mode (fast):**
-By default, errors show detailed messages but without source locations. This is much faster, especially for large programs:
+By default, errors show detailed messages but without source locations. This is much faster, especially for large programs. (`--jit` gives the located form *and* is faster still on long-running programs; see [execution models](execution-models.md#the-jit).)
 
 ```
 Error: Memory pointer out of bounds
@@ -106,9 +106,9 @@ there is not. Try --memory-size 200 or --memory-model unbounded
 - 📚 **Learning**: Understanding how BrainFuck programs execute
 - 🔍 **Development**: Writing and testing new BrainFuck code
 
-**When to skip `--debug` (default):**
+**When to skip `--debug` (default, or `--jit`):**
 - 🚀 **Production runs**: Running known-good programs quickly
-- ⚡ **Large programs**: Mandelbrot, quines, and other complex programs (40x faster)
+- ⚡ **Large programs**: Mandelbrot, quines, and other complex programs (40x faster; `--jit` is faster again and still shows the location)
 - 📊 **Benchmarking**: Measuring program performance
 
 ### Runtime Warnings

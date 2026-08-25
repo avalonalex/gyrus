@@ -356,6 +356,48 @@ Inline simple loop bodies when beneficial.
 
 ---
 
+## The JIT's remaining performance work
+
+The JIT shipped (`gyrus --jit`; its PRD was deleted when it did, as the
+directory's rule says). What is still open is performance, and it belongs in
+this catalogue because every item is an optimization of what the translator
+emits.
+
+**The first round (2026-08-25)**, Measured, interleaved min-of-N on a quiet machine, against the step-2 JIT
+(#15), which had neither statistics nor limits:
+
+| | step-2 | after #16 | statistics opt-in | + nest guards |
+|---|---:|---:|---:|---:|
+| mandelbrot | 939 ms | 1032 ms | 954 ms | 944 ms |
+| hanoi | 160 ms | 206 ms | 163 ms | **135 ms** |
+
+- **Statistics are opt-in** (`Statistics::Cheap`/`Full`; `--verbose` is the
+  only reader). The peak notes and the iteration counter were 5% + 2.5% of
+  mandelbrot and, through the value each loop kept live across itself, 20%
+  of hanoi.
+- **The bounds-check ceiling was measured before building guards**: with
+  every check removed, mandelbrot gains 4.5% and hanoi 28%, the latter
+  almost all compile time from the check blocks. So checks are not where
+  mandelbrot's remaining 1.6× to native lies; that is codegen.
+- **Guards** cover a straight-line run touching three or more cells, and,
+  where it pays, a whole balanced loop nest: the cells a nest touches are the
+  same every iteration, so one two-compare guard before the header replaces
+  every check inside, and the nest compiles check-free. A failed guard calls
+  `bf_slow`, a small interpreter of the same IR in the runtime, which
+  reproduces every effect up to the failing access and then the
+  interpreter's own error -- or finishes the region when the guard was
+  merely pessimistic. Per-run guards alone were neutral (hot accesses live
+  in one- and two-cell runs and loop headers); nest guards are the 18% on
+  hanoi, mostly compile time.
+
+What is left for mandelbrot is the quality of the generated code, not its
+checks: the cell is loaded and stored at every access rather than kept in a
+register across a run, the byte arithmetic goes through extends, and the
+cursor is threaded as a variable through every block. Next: keep the cell
+value in SSA within a run, and read Cranelift's output for a hot loop.
+
+---
+
 ## Tried and failed
 
 Kept so that nobody measures these again. Each has a branch or PR with the

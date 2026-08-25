@@ -377,9 +377,33 @@ fn execute_ir(ir: &[IrInstruction], state: &mut VmState, ...) -> Result<()> {
 - `[-]` (256 loop iterations) → `ClearCell` (1 op): **256x faster**
 - `[->+<]` (N loop iterations) → `MoveValue` (1 op): **Nx faster**
 
-### JIT Compilation (Future)
+### The JIT (`crates/gyrus-jit`)
 
-**Concept**: For hot loops, compile IR to native code using `cranelift`.
+`gyrus --jit` compiles the whole optimized program to one native function
+with Cranelift and runs it. The design is in the crate's module docs; the
+points that matter to the rest of the architecture:
+
+- It consumes `OptimizedProgram` unchanged, so every optimizer fold serves
+  both engines, and honours the program's cell model as the interpreter does.
+- The tape contract is enforced at every access with one compare; a run
+  touching several cells, or a balanced loop nest, gets one guard for all of
+  them and compiles check-free behind it. A failed guard falls back to a small
+  interpreter of the same IR inside the runtime, which reproduces every effect
+  up to the failing access and then the interpreter's own error.
+- Errors are never traps. Each failure site is a cold exit block; the runtime
+  rebuilds the same `BfError` the interpreter would, through the same
+  constructors, and -- because every site knows its instruction -- with a
+  source location, which the optimized interpreter cannot give.
+- Hooks are not run (the JIT refuses a configuration that carries them);
+  statistics are counted only on request (`--verbose`), because counting
+  costs; `--max-steps` counts loop iterations.
+
+The sketch below is what this section said before the JIT existed, kept for
+the record of what changed: hot-loop compilation became whole-program
+compilation, DWARF became per-site instruction indices, and the hook
+callbacks were declined.
+
+**Original concept**: For hot loops, compile IR to native code using `cranelift`.
 
 ```rust
 pub struct JitCompiler {
@@ -403,8 +427,10 @@ impl JitCompiler {
 
 **Challenges**:
 - Safety: Must validate JIT-compiled code doesn't violate memory safety
-- Debugging: JIT code can't have source locations (unless we emit DWARF)
-- Hooks: JIT code needs to call back to hooks at appropriate points
+- Debugging: JIT code can't have source locations (unless we emit DWARF) --
+  as built, every failure site carries its instruction index instead
+- Hooks: JIT code needs to call back to hooks at appropriate points -- as
+  built, it does not, and says so
 
 ### API Changes Needed
 
@@ -458,10 +484,10 @@ pub enum OptLevel {
 - Replace with optimized operations
 - **Estimated effort**: 1-2 weeks
 
-**Phase 3: JIT Compilation** (10-100x improvement for hot code)
-- Integrate `cranelift` for JIT
-- Requires careful safety analysis
-- **Estimated effort**: 4-8 weeks
+**Phase 3: JIT Compilation** -- done (`gyrus --jit`). The 10-100x this
+phase was supposed to bring had mostly been taken by phases 1 and 2 by the
+time it shipped; measured, it is 3x on mandelbrot over the optimized
+interpreter and 1.6x from native.
 
 **Total potential speedup**: 1000-100,000x (approaching native speed for optimizable code)
 
@@ -511,7 +537,8 @@ The current architecture (post-hook refactoring) provides excellent foundations 
 **Next steps**:
 1. Implement interactive debugger hook (no API changes needed)
 2. Add IR layer with instruction fusion (backward compatible)
-3. JIT compilation for hot loops (optional feature flag)
+3. ~~JIT compilation for hot loops (optional feature flag)~~ shipped, as
+   whole-program compilation behind the `jit` feature
 
 The architecture is production-ready and future-proof.
 

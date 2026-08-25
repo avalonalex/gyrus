@@ -575,6 +575,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "gyrus",
+ "rand",
 ]
 
 [[package]]
