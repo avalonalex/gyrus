@@ -1,7 +1,7 @@
 //! Drawing the debugger, and the keys that drive it.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gyrus::hooks::HookDecision;
 use gyrus_tui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -35,49 +35,85 @@ enum Flow {
     Break,
 }
 
+/// Give up on the terminal.
+///
+/// The failure is carried out through `Exit` so `main` can report it, rather
+/// than left on a status line that only the thing which just failed knows how
+/// to draw.
+fn fail(session: &mut Session, error: io::Error) -> HookDecision {
+    session.exit = Some(Exit::Failed(error));
+    HookDecision::Break
+}
+
+/// Wait up to `timeout` for a key and act on it.
+///
+/// `None` means nothing arrived in time — or that the terminal stopped
+/// answering, which the caller finds out about on its next draw.
+fn take_key(session: &mut Session, timeout: Duration) -> Option<Flow> {
+    match event::poll(timeout) {
+        Ok(true) => match event::read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                Some(handle_key(session, key))
+            }
+            Ok(_) => Some(Flow::Stay),
+            Err(_) => None,
+        },
+        _ => None,
+    }
+}
+
 /// Block until the user resumes, restarts, or quits.
 pub fn pause(session: &mut Session) -> HookDecision {
     match interact(session) {
         Ok(Flow::Break) => HookDecision::Break,
         Ok(_) => HookDecision::Continue,
-        Err(error) => {
-            // The terminal is gone: there is nothing left to draw on and no way
-            // to ask what to do about it. Carry the failure out so `main` can
-            // report it, rather than leaving it on a status line that only the
-            // thing which just failed knows how to draw.
-            session.exit = Some(Exit::Failed(error));
-            HookDecision::Break
-        }
+        Err(error) => fail(session, error),
     }
 }
 
 /// Redraw once mid-run and check whether the user wants to interrupt.
 pub fn tick(session: &mut Session) -> HookDecision {
     if let Err(error) = draw(session) {
-        session.exit = Some(Exit::Failed(error));
-        return HookDecision::Break;
+        return fail(session, error);
     }
+    while let Some(flow) = take_key(session, Duration::ZERO) {
+        if flow == Flow::Break {
+            return HookDecision::Break;
+        }
+    }
+    HookDecision::Continue
+}
+
+/// Draw one frame of a paced run, and wait out the gap before the next.
+///
+/// The wait is `event::poll`, not a sleep: at one instruction per second a sleep
+/// would make the debugger ignore the keyboard for a second at a time, so `p`
+/// and `q` would feel broken exactly when someone is most likely to reach for
+/// them. Polling waits the same length and wakes on the first key.
+pub fn paced(session: &mut Session, delay: Duration) -> HookDecision {
+    let deadline = Instant::now() + delay;
     loop {
-        match event::poll(Duration::ZERO) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => break,
+        // At the top of the loop, so a key that changed something is shown
+        // before the wait resumes -- and so there is one draw with one failure
+        // policy rather than two.
+        if let Err(error) = draw(session) {
+            return fail(session, error);
         }
-        match event::read() {
-            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                if handle_key(session, key) == Flow::Break {
-                    return HookDecision::Break;
-                }
-            }
-            Ok(_) => {}
-            Err(_) => break,
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match take_key(session, remaining) {
+            Some(Flow::Break) => return HookDecision::Break,
+            // A key asked for something else -- a step, a run to the cursor,
+            // full speed. Do not sit out the rest of a gap that no longer
+            // applies; that is the unresponsiveness this function exists to
+            // avoid.
+            Some(Flow::Resume) => break,
+            Some(Flow::Stay) => {}
+            // Waited the whole gap without a key: time for the next instruction.
+            None => break,
         }
     }
-    if session.exit.is_some() {
-        HookDecision::Break
-    } else {
-        HookDecision::Continue
-    }
+    session.touch_draw();
+    HookDecision::Continue
 }
 
 /// Show the final state and wait for restart or quit.
@@ -338,12 +374,22 @@ fn run_state_label(session: &Session) -> (String, Color) {
             StopReason::Breakpoint => ("breakpoint".to_string(), theme.breakpoint),
             StopReason::Stepped => ("paused".to_string(), theme.accent),
         },
-        (None, false) => match session.run {
-            RunState::Step => ("paused".to_string(), theme.accent),
-            RunState::Continue => ("running".to_string(), theme.modified),
-            RunState::RunTo(_) => ("running to cursor".to_string(), theme.modified),
-            RunState::Leave { .. } => ("stepping over".to_string(), theme.modified),
-        },
+        (None, false) => {
+            // The pace is composed onto the run state rather than replacing it:
+            // a paced run-to-cursor is still a run to the cursor, and a label
+            // that forgets which of them it is loses the more useful half.
+            let running = match session.run {
+                RunState::Step => return ("paused".to_string(), theme.accent),
+                RunState::Continue => "running",
+                RunState::RunTo(_) => "running to cursor",
+                RunState::Leave { .. } => "stepping over",
+            };
+            let label = match session.pace.is_armed() {
+                true => format!("{running} · {}/s", session.pace.rate()),
+                false => running.to_string(),
+            };
+            (label, theme.modified)
+        }
     }
 }
 
@@ -393,14 +439,18 @@ fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
     let mut hints = match session.run {
         RunState::Step => vec![
             ("space", "step"),
+            ("s", "slow"),
+            ("c", "continue"),
             ("n", "over"),
             ("o", "out"),
-            ("c", "continue"),
             ("g", "to cursor"),
             ("b", "break"),
             ("r", "restart"),
         ],
-        _ => vec![("p", "pause")],
+        _ if session.pace.is_armed() => {
+            vec![("p", "pause"), ("+ -", "speed"), ("c", "full speed")]
+        }
+        _ => vec![("p", "pause"), ("s", "slow")],
     };
     // First, so that it is the last thing a narrow terminal drops. `i` is the
     // one key the program is currently waiting on, and it is otherwise buried
@@ -439,9 +489,17 @@ const HELP: &[Section<'static>] = &[
         "Execution",
         &[
             ("space", "execute one instruction"),
+            ("s", "run in slow motion, so you can watch a loop turn"),
+            (
+                "+ / -",
+                "faster / slower, while it runs or before it starts",
+            ),
             ("n", "step over: run the whole loop, if this is a `[`"),
             ("o", "step out: run to the end of the enclosing loop"),
-            ("c / enter", "continue to the next breakpoint"),
+            (
+                "c / enter",
+                "continue at full speed, to the next breakpoint",
+            ),
             ("g", "run to the cursor"),
             ("p / esc", "pause a running program"),
             ("r", "restart from the beginning"),
@@ -557,7 +615,19 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
 
         // Execution
         KeyCode::Char(' ') => resume(session, RunState::Step),
-        KeyCode::Char('c') | KeyCode::Enter => resume(session, RunState::Continue),
+        KeyCode::Char('c') | KeyCode::Enter => {
+            session.pace.disarm();
+            resume(session, RunState::Continue)
+        }
+        KeyCode::Char('s') => pace_run(session),
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            session.pace.faster();
+            pace_run(session)
+        }
+        KeyCode::Char('-') | KeyCode::Char('_') => {
+            session.pace.slower();
+            pace_run(session)
+        }
         KeyCode::Char('n') => step_over(session),
         KeyCode::Char('o') => step_out(session),
         KeyCode::Char('g') => run_to_cursor(session),
@@ -777,6 +847,31 @@ pub fn parse_output_watch(text: &str) -> Result<Watch, String> {
     };
     byte.map(Watch::Output)
         .ok_or_else(|| format!("{text:?} is not a character, an escape, #0..#255, or \"any\""))
+}
+
+/// Pace the run in progress, or start one.
+///
+/// This is what makes "a constraint on running, not a way of running" true. A
+/// program already running — to the cursor, over a loop — keeps doing that and
+/// only slows down; replacing its run state here would silently discard the
+/// cursor it was heading for. A stopped one starts, which is what `-` means
+/// when nothing is moving: "go, but slowly".
+///
+/// Starting goes through `resume` rather than setting the run state directly,
+/// so it inherits the rest of what resuming means — including that resuming
+/// from a `,` with an empty queue is how the user chooses EOF.
+fn pace_run(session: &mut Session) -> Flow {
+    if session.run != RunState::Step && !session.finished {
+        session.pace.arm();
+        return Flow::Stay;
+    }
+    let flow = resume(session, RunState::Continue);
+    // Only if it actually started: on a finished program `resume` explains
+    // itself and stays put, and arming there would pace whatever came next.
+    if flow == Flow::Resume {
+        session.pace.arm();
+    }
+    flow
 }
 
 /// Whether the instruction about to run is a `,` with nothing queued to read.

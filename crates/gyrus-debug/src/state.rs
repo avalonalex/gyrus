@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gyrus::{ExecutionStats, SourceLocation};
 use gyrus_tui::{CellDisplay, Position, Theme, Tui};
@@ -193,6 +193,87 @@ impl Watches {
             *entry = self.list.iter().any(|watch| watch.matches_output(byte));
         }
         table
+    }
+}
+
+/// The speeds slow motion steps through, in instructions per second.
+///
+/// A ladder rather than a free number: the useful range spans two orders of
+/// magnitude, and nobody wants to type "17". The top is capped where a redraw
+/// per instruction stops being something an eye can follow — past that, `c` is
+/// the answer.
+const PACES: [u32; 6] = [1, 2, 5, 10, 25, 50];
+
+/// The speed slow motion starts at. A rate rather than an index, so inserting a
+/// rung at the bottom of the ladder does not silently change it.
+const DEFAULT_RATE: u32 = 10;
+
+/// How fast a paced run goes, or `None` for as fast as it can.
+///
+/// Deliberately not a [`RunState`]: pacing is a constraint on running, not a
+/// way of running. It applies equally to `Continue`, to a run-to-cursor, and to
+/// stepping over a loop, and breakpoints and watches still stop it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pace {
+    index: usize,
+    /// Whether the run now in progress is paced.
+    ///
+    /// Cleared wherever execution stops, so it means exactly what it says
+    /// rather than "pace the next run, probably". The chosen speed outlives it:
+    /// that is the point of keeping the two apart.
+    armed: bool,
+}
+
+impl Default for Pace {
+    fn default() -> Self {
+        Self {
+            index: PACES
+                .iter()
+                .position(|rate| *rate == DEFAULT_RATE)
+                .expect("DEFAULT_RATE is a rung of the ladder"),
+            armed: false,
+        }
+    }
+}
+
+impl Pace {
+    /// How long to wait between instructions, while a paced run is in progress.
+    pub fn delay(self) -> Option<Duration> {
+        self.armed
+            .then(|| Duration::from_secs_f64(1.0 / f64::from(self.rate())))
+    }
+
+    /// Whether the run in progress is paced.
+    pub fn is_armed(self) -> bool {
+        self.armed
+    }
+
+    /// Pace the run now starting, or the one already under way.
+    pub fn arm(&mut self) {
+        self.armed = true;
+    }
+
+    /// Run at full speed again. Also called wherever execution stops, so a
+    /// paced run does not silently pace whatever is asked for next.
+    pub fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    /// One rung faster. Does not arm: whether to start running is the caller's
+    /// decision, and it is not the same decision on a stopped program as on a
+    /// running one.
+    pub fn faster(&mut self) {
+        self.index = (self.index + 1).min(PACES.len() - 1);
+    }
+
+    /// One rung slower.
+    pub fn slower(&mut self) {
+        self.index = self.index.saturating_sub(1);
+    }
+
+    /// The speed, whether or not a paced run is in progress.
+    pub fn rate(self) -> u32 {
+        PACES[self.index]
     }
 }
 
@@ -439,6 +520,8 @@ pub struct Session {
     pub watches: Watches,
     /// Why execution stopped, set where that is decided.
     pub stop_reason: StopReason,
+    /// How fast a running program is allowed to go.
+    pub pace: Pace,
     pub output: Vec<u8>,
 
     /// Bytes queued for the program's next `,`.
@@ -486,6 +569,7 @@ impl Session {
             breakpoint_revision: 0,
             watches: Watches::default(),
             stop_reason: StopReason::Stepped,
+            pace: Pace::default(),
             output: Vec::new(),
             pending_input: VecDeque::new(),
             consumed_input: Vec::new(),
@@ -525,6 +609,7 @@ impl Session {
             memory: vec![0; memory_size],
             ..Snapshot::default()
         };
+        self.pace.disarm();
         self.modified.clear();
         self.displayed = vec![0; memory_size];
         self.displayed_step = None;
@@ -849,5 +934,67 @@ mod watch_list_tests {
         assert_eq!(watches.revision(), after, "a rejected add is not a change");
         watches.remove(0);
         assert_ne!(watches.revision(), after);
+    }
+}
+
+#[cfg(test)]
+mod pace_tests {
+    use super::*;
+
+    #[test]
+    fn pacing_is_off_until_asked_for() {
+        let pace = Pace::default();
+        assert!(!pace.is_armed());
+        assert_eq!(pace.delay(), None);
+        // The speed exists even while unused, so `s` resumes at what you chose.
+        assert_eq!(pace.rate(), DEFAULT_RATE);
+    }
+
+    #[test]
+    fn the_ladder_stops_at_both_ends() {
+        let mut pace = Pace::default();
+        for _ in 0..20 {
+            pace.faster();
+        }
+        assert_eq!(pace.rate(), *PACES.last().expect("ladder is not empty"));
+        for _ in 0..20 {
+            pace.slower();
+        }
+        assert_eq!(pace.rate(), PACES[0]);
+    }
+
+    #[test]
+    fn changing_speed_does_not_by_itself_start_a_run() {
+        // Whether to start is the caller's decision: on a stopped program `-`
+        // means "go, but slowly", and on a running one it means only "slower".
+        let mut pace = Pace::default();
+        pace.slower();
+        assert!(!pace.is_armed());
+    }
+
+    #[test]
+    fn disarming_keeps_the_speed_for_next_time() {
+        let mut pace = Pace::default();
+        pace.slower();
+        let rate = pace.rate();
+        pace.arm();
+        pace.disarm();
+        assert_eq!(pace.rate(), rate);
+        pace.arm();
+        assert_eq!(pace.rate(), rate);
+    }
+
+    #[test]
+    fn the_delay_is_the_reciprocal_of_the_rate() {
+        let mut pace = Pace::default();
+        pace.arm();
+        let delay = pace.delay().expect("armed");
+        assert!((delay.as_secs_f64() - 1.0 / f64::from(pace.rate())).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_default_rate_is_a_rung_of_the_ladder() {
+        // `Pace::default` panics otherwise, which this states out loud.
+        assert!(PACES.contains(&DEFAULT_RATE));
     }
 }

@@ -133,6 +133,8 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
   everywhere
 - Stops on **what the program prints**, not only on where it is —
   `--break-output '\n'` is a question a positional breakpoint cannot ask
+- Slow motion, for watching a loop turn: `s` runs at a speed you can follow,
+  from one instruction a second to fifty
 - Step over and out of loops, watched cells, queued input, and a restart that
   replays what you typed
 
