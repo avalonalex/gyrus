@@ -38,6 +38,8 @@ file.
   what makes it a test as well as an example.
 - **`variables.bfm`** - named cells and `@to`, around the multiply idiom. Its
   own header makes the case.
+- **`macros.bfm`** - the same idiom as a `@macro` with parameters, used three
+  times.
 
 Both are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them.

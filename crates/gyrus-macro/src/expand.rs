@@ -12,6 +12,9 @@
 //! - `@var NAME at N` -- a named cell, and `@to NAME` to move the cursor
 //!   there: the expander tracks where the cursor is and emits the difference.
 //! - `@here NAME` -- tell the expander where the cursor is without moving it.
+//! - `@macro NAME(a, b) { ... }`, invoked as `@NAME(1, 2)` -- a body expanded
+//!   in place. An argument is evaluated in the caller's scope and bound to the
+//!   parameter, so a number, a constant and a cell all pass the same way.
 //! - `OP{N}` -- repeat `OP` N times, where `OP` is one of `+ - < > . ,` and `N`
 //!   is a number or a defined name. `+{0}` is nothing, which is legal.
 //! - `*` to end of line, and any character that is not a BrainFuck instruction:
@@ -31,8 +34,27 @@
 //! no bundled program has either in its prose -- and it buys the error for the
 //! likeliest typo of all, a space between an instruction and its count.
 //!
-//! Between them, a `.bfm` written today cannot change meaning when `@macro`
-//! and the conditionals arrive.
+//! Between them, a `.bfm` written today cannot change meaning when the
+//! conditionals arrive.
+//!
+//! # Macros are expanded in place
+//!
+//! A macro is not a subroutine: each invocation emits the whole body, so the
+//! cursor tracking, the loop rules and the expansion budget apply to it with
+//! no special case -- which is why `@to` works inside a body and why a body
+//! that moves the cursor makes its enclosing loop unbalanced like any other
+//! movement would.
+//!
+//! A body is a *span of this source* rather than a copy, so invoking a macro
+//! is moving the cursor and scanning to the closing brace. Every position
+//! inside a body is therefore a real position in the file, which is what lets
+//! a macro error point into the definition. Emitted bytes are the other way
+//! round: they name the invocation, because the map holds one position per
+//! byte and a definition used twenty times would not say which of them failed.
+//!
+//! A body sees its own parameters and the file's names, never its caller's,
+//! and cannot declare anything -- a `@define` inside one would run again on
+//! the second invocation and collide with itself.
 //!
 //! # Where the cursor is, and when the expander stops knowing
 //!
@@ -105,13 +127,28 @@ pub fn expand(source: &str) -> Result<Expansion, MacroError> {
     Scanner::new(source).run()
 }
 
+/// A macro definition: its parameters, and where its body is.
+///
+/// The body is a span of the original source rather than a copy of it, so
+/// invoking a macro is moving the cursor, and every position inside a body is
+/// a real position in the file.
+#[derive(Debug, Clone)]
+struct MacroDef {
+    params: Vec<String>,
+    /// Where the body starts, and the offset one past its last character.
+    body_start: SourceLocation,
+    body_end: usize,
+}
+
 /// What a name means. One namespace, so a name means one thing.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Symbol {
     /// A number, usable as a repeat count.
     Constant(u64),
     /// A cell, usable as a `@to` target.
     Variable(i64),
+    /// A body to expand, usable as `@name(...)`.
+    Macro(MacroDef),
 }
 
 impl Symbol {
@@ -119,6 +156,7 @@ impl Symbol {
         match self {
             Symbol::Constant(_) => Kind::Constant,
             Symbol::Variable(_) => Kind::Variable,
+            Symbol::Macro(_) => Kind::Macro,
         }
     }
 }
@@ -153,6 +191,26 @@ struct Scanner {
     chars: Vec<char>,
     at: SourceLocation,
     symbols: HashMap<String, (Symbol, SourceLocation)>,
+    /// A macro's parameters, bound for the length of one invocation.
+    ///
+    /// Only the innermost frame is visible, not a chain: a body sees its own
+    /// parameters and the file's names, and never its caller's. That is what
+    /// makes a macro readable in isolation.
+    parameters: Vec<HashMap<String, (Symbol, SourceLocation)>>,
+    /// Macros currently being expanded, innermost last. A name already here
+    /// is a cycle, and the stack is the chain the error prints.
+    expanding: Vec<String>,
+    /// The offset the current scan began at: zero, or a macro body's first
+    /// character. A directive must start its line, and the start of a body
+    /// counts as one -- otherwise `@macro reset { @clear }` would read its
+    /// own invocation as prose, and only bodies spread over several lines
+    /// could use another macro.
+    boundary: usize,
+    /// Where an emitted byte should say it came from, while expanding a macro.
+    ///
+    /// Set on the outermost invocation only, so every byte points at a line of
+    /// the program rather than into a definition that may be used many times.
+    origin_override: Option<SourceLocation>,
     /// Insertion order, for the "did you mean" list. A HashMap alone would
     /// suggest names in an order that changes between runs.
     defined: Vec<String>,
@@ -173,6 +231,10 @@ impl Scanner {
             chars: source.chars().collect(),
             at: SourceLocation::start(),
             symbols: HashMap::new(),
+            parameters: Vec::new(),
+            expanding: Vec::new(),
+            boundary: 0,
+            origin_override: None,
             defined: Vec::new(),
             position: Position::Known(0),
             net: 0,
@@ -185,7 +247,27 @@ impl Scanner {
     }
 
     fn run(mut self) -> Result<Expansion, MacroError> {
-        while let Some(c) = self.peek() {
+        self.scan_until(self.chars.len())?;
+
+        if let Some(open) = self.open_brackets.first() {
+            return Err(MacroError::UnmatchedOpenBracket {
+                location: open.location,
+            });
+        }
+
+        Ok(Expansion::new(self.source, self.out, self.origins))
+    }
+
+    /// Expand characters up to `end`.
+    ///
+    /// Bounded rather than "to the end of the input" because a macro body is a
+    /// span of this same source: invoking one moves the cursor to the body and
+    /// scans to its closing brace. Nothing is copied, and every position
+    /// inside a body is a real position in the file -- which is what lets a
+    /// macro error point into the definition.
+    fn scan_until(&mut self, end: usize) -> Result<(), MacroError> {
+        while self.at.offset < end {
+            let Some(c) = self.peek() else { break };
             match c {
                 '*' => self.skip_line(),
                 '@' if self.at_line_start() => self.directive()?,
@@ -200,14 +282,7 @@ impl Scanner {
                 _ => self.bump(),
             }
         }
-
-        if let Some(open) = self.open_brackets.first() {
-            return Err(MacroError::UnmatchedOpenBracket {
-                location: open.location,
-            });
-        }
-
-        Ok(Expansion::new(self.source, self.out, self.origins))
+        Ok(())
     }
 
     // ---- character-level helpers -------------------------------------------
@@ -221,7 +296,7 @@ impl Scanner {
     /// Asked only when the cursor is on `@`, which is rare, so walking back to
     /// the newline is cheaper than a flag every `bump` would have to maintain.
     fn at_line_start(&self) -> bool {
-        self.chars[..self.at.offset]
+        self.chars[self.boundary.min(self.at.offset)..self.at.offset]
             .iter()
             .rev()
             .take_while(|&&c| c != '\n')
@@ -322,6 +397,13 @@ impl Scanner {
     /// the movement accounting cannot be applied to some emitters and not
     /// others.
     fn emit_run(&mut self, c: char, count: u64, origin: SourceLocation) -> Result<(), MacroError> {
+        // Bytes made inside a macro say they came from the invocation, not
+        // from the definition. The map holds one position per byte and a
+        // macro gives a byte two, so this is a choice: the invocation is the
+        // line of the program the reader wrote, and a definition used twenty
+        // times would not say which of them failed. Nested invocations keep
+        // the outermost, so no origin ever points inside a body.
+        let origin = self.origin_override.unwrap_or(origin);
         let total = self.out.len().saturating_add(count as usize);
         if total > EXPANSION_LIMIT {
             return Err(MacroError::ExpansionTooLarge {
@@ -461,9 +543,11 @@ impl Scanner {
         name: &str,
         location: SourceLocation,
     ) -> Result<(Symbol, SourceLocation), MacroError> {
-        self.symbols
-            .get(name)
-            .copied()
+        self.parameters
+            .last()
+            .and_then(|frame| frame.get(name))
+            .or_else(|| self.symbols.get(name))
+            .cloned()
             .ok_or_else(|| MacroError::UndefinedSymbol {
                 name: name.to_string(),
                 location,
@@ -541,13 +625,310 @@ impl Scanner {
             Some(Directive::Var) => self.var(location),
             Some(Directive::To) => self.to(location),
             Some(Directive::Here) => self.here(),
+            Some(Directive::Macro) => self.macro_definition(location),
             Some(_) => Err(MacroError::PlannedDirective { name, location }),
+            // Not a directive, so it may be a macro. Checked after the
+            // directives so that no macro can shadow one, and reported as an
+            // unknown directive otherwise -- which is what it looks like.
+            None if self.defines_macro(&name) => self.invoke(name, location),
             None => Err(MacroError::UnknownDirective { name, location }),
+        }
+    }
+
+    fn defines_macro(&self, name: &str) -> bool {
+        matches!(self.symbols.get(name), Some((Symbol::Macro(_), _)))
+    }
+
+    /// A declaration inside a macro body would run again on the next
+    /// invocation and collide with itself, so it is refused where it is
+    /// written rather than on the second call.
+    fn refuse_inside_a_macro(
+        &self,
+        directive: &'static str,
+        location: SourceLocation,
+    ) -> Result<(), MacroError> {
+        if self.expanding.is_empty() {
+            return Ok(());
+        }
+        Err(MacroError::DeclarationInsideMacro {
+            directive,
+            location,
+        })
+    }
+
+    /// `@macro NAME { body }` or `@macro NAME(a, b) { body }`.
+    fn macro_definition(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        self.refuse_inside_a_macro("macro", location)?;
+        self.skip_blanks();
+        let at_name = self.at;
+        let name = self.identifier();
+        if name.is_empty() {
+            return Err(MacroError::MalformedDirective {
+                directive: "macro".to_string(),
+                detail: "expected a name, as in `@macro clear { [-] }`".to_string(),
+                location: at_name,
+            });
+        }
+        if let Some((_, first)) = self.symbols.get(&name) {
+            return Err(MacroError::Redefinition {
+                name,
+                first: *first,
+                location,
+            });
+        }
+
+        let params = self.parameter_list(&name)?;
+
+        self.skip_blanks();
+        if self.peek() != Some('{') {
+            return Err(MacroError::MalformedDirective {
+                directive: "macro".to_string(),
+                detail: format!("expected '{{' to open the body of '{name}'"),
+                location: self.at,
+            });
+        }
+        self.bump();
+        let body_start = self.at;
+        let body_end = self.skip_body(&name, location)?;
+
+        self.declare(
+            name,
+            Symbol::Macro(MacroDef {
+                params,
+                body_start,
+                body_end,
+            }),
+            location,
+        );
+        Ok(())
+    }
+
+    /// `(a, b)` after a macro's name, or nothing.
+    fn parameter_list(&mut self, name: &str) -> Result<Vec<String>, MacroError> {
+        let mut params = Vec::new();
+        if self.peek() != Some('(') {
+            return Ok(params);
+        }
+        self.bump();
+        loop {
+            self.skip_blanks();
+            if self.peek() == Some(')') {
+                self.bump();
+                return Ok(params);
+            }
+            let at_param = self.at;
+            let param = self.identifier();
+            if param.is_empty() {
+                return Err(MacroError::MalformedDirective {
+                    directive: "macro".to_string(),
+                    detail: format!("expected a parameter name for '{name}'"),
+                    location: at_param,
+                });
+            }
+            if params.contains(&param) {
+                return Err(MacroError::MalformedDirective {
+                    directive: "macro".to_string(),
+                    detail: format!("'{name}' already has a parameter called '{param}'"),
+                    location: at_param,
+                });
+            }
+            params.push(param);
+            self.skip_blanks();
+            match self.peek() {
+                Some(',') => self.bump(),
+                Some(')') => {
+                    self.bump();
+                    return Ok(params);
+                }
+                _ => {
+                    return Err(MacroError::MalformedDirective {
+                        directive: "macro".to_string(),
+                        detail: format!("expected ',' or ')' in the parameters of '{name}'"),
+                        location: self.at,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Walk to the `}` that closes a body, and return its offset.
+    ///
+    /// It has to read the body the way the scanner will: a `*` comment can
+    /// contain a brace, and `+{3}` is a repeat count rather than a nested
+    /// body. Getting either wrong would end the body in the wrong place.
+    fn skip_body(&mut self, name: &str, location: SourceLocation) -> Result<usize, MacroError> {
+        let mut depth = 1usize;
+        let mut after_instruction = false;
+        loop {
+            match self.peek() {
+                None => {
+                    return Err(MacroError::MalformedDirective {
+                        directive: "macro".to_string(),
+                        detail: format!("the body of '{name}' is never closed with '}}'"),
+                        location,
+                    });
+                }
+                Some('*') => {
+                    self.skip_line();
+                    after_instruction = false;
+                }
+                Some('{') if after_instruction => {
+                    // A repeat count, not a nested brace.
+                    while self.peek().is_some_and(|c| c != '}' && c != '\n') {
+                        self.bump();
+                    }
+                    if self.peek() == Some('}') {
+                        self.bump();
+                    }
+                    after_instruction = false;
+                }
+                Some('{') => {
+                    depth += 1;
+                    self.bump();
+                    after_instruction = false;
+                }
+                Some('}') => {
+                    depth -= 1;
+                    let end = self.at.offset;
+                    self.bump();
+                    if depth == 0 {
+                        return Ok(end);
+                    }
+                    after_instruction = false;
+                }
+                Some(c) => {
+                    after_instruction = REPEATABLE.contains(&c);
+                    self.bump();
+                }
+            }
+        }
+    }
+
+    /// `@name` or `@name(a, b)` -- expand a macro's body here.
+    fn invoke(&mut self, name: String, location: SourceLocation) -> Result<(), MacroError> {
+        let Some((Symbol::Macro(def), _)) = self.symbols.get(&name).cloned() else {
+            unreachable!("only called when the name is a macro")
+        };
+
+        let arguments = self.argument_list(&name)?;
+        if arguments.len() != def.params.len() {
+            return Err(MacroError::ArgumentCount {
+                name,
+                expected: def.params.len(),
+                actual: arguments.len(),
+                location,
+            });
+        }
+        self.end_of_directive(Directive::Macro)?;
+
+        if self.expanding.contains(&name) {
+            let mut chain = self.expanding.clone();
+            chain.push(name.clone());
+            return Err(MacroError::CircularMacro {
+                name,
+                chain,
+                location,
+            });
+        }
+
+        let frame: HashMap<String, (Symbol, SourceLocation)> =
+            def.params.iter().cloned().zip(arguments).collect();
+
+        // The body is a span of this same source, so expanding it is moving
+        // the cursor and scanning to the brace. Nothing is copied, and a macro
+        // error inside a body points at the body.
+        let resume = self.at;
+        let outer_boundary = self.boundary;
+        let outermost = self.origin_override.is_none();
+        if outermost {
+            self.origin_override = Some(location);
+        }
+        self.parameters.push(frame);
+        self.expanding.push(name);
+        self.at = def.body_start;
+        self.boundary = def.body_start.offset;
+
+        let result = self.scan_until(def.body_end);
+
+        self.expanding.pop();
+        self.parameters.pop();
+        if outermost {
+            self.origin_override = None;
+        }
+        self.boundary = outer_boundary;
+        self.at = resume;
+        result
+    }
+
+    /// `(65, counter)` after an invocation, resolved in the caller's scope.
+    fn argument_list(&mut self, name: &str) -> Result<Vec<(Symbol, SourceLocation)>, MacroError> {
+        let mut arguments = Vec::new();
+        self.skip_blanks();
+        if self.peek() != Some('(') {
+            return Ok(arguments);
+        }
+        self.bump();
+        loop {
+            self.skip_blanks();
+            if self.peek() == Some(')') {
+                self.bump();
+                return Ok(arguments);
+            }
+            let at_argument = self.at;
+            let mut token = String::new();
+            while self
+                .peek()
+                .is_some_and(|c| c != ',' && c != ')' && !c.is_whitespace())
+            {
+                token.push(self.peek().expect("just peeked"));
+                self.bump();
+            }
+            if token.is_empty() {
+                return Err(MacroError::MalformedDirective {
+                    directive: "macro".to_string(),
+                    detail: format!("expected an argument for '@{name}'"),
+                    location: at_argument,
+                });
+            }
+            // A number is a constant; a name is whatever it already means, so
+            // a cell can be passed as readily as a count.
+            let symbol = if token.chars().all(|c| c.is_ascii_digit()) {
+                Symbol::Constant(token.parse().map_err(|_| MacroError::MalformedDirective {
+                    directive: "macro".to_string(),
+                    detail: format!("'{token}' does not fit in a 64-bit number"),
+                    location: at_argument,
+                })?)
+            } else if is_identifier(&token) {
+                self.lookup(&token, at_argument)?.0
+            } else {
+                return Err(MacroError::MalformedDirective {
+                    directive: "macro".to_string(),
+                    detail: format!("'{token}' is neither a number nor a name"),
+                    location: at_argument,
+                });
+            };
+            arguments.push((symbol, at_argument));
+            self.skip_blanks();
+            match self.peek() {
+                Some(',') => self.bump(),
+                Some(')') => {
+                    self.bump();
+                    return Ok(arguments);
+                }
+                _ => {
+                    return Err(MacroError::MalformedDirective {
+                        directive: "macro".to_string(),
+                        detail: format!("expected ',' or ')' in the arguments of '@{name}'"),
+                        location: self.at,
+                    });
+                }
+            }
         }
     }
 
     /// `@var NAME at N` -- name a cell.
     fn var(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        self.refuse_inside_a_macro("var", location)?;
         let name = self.declared_name(Declaration::Var, location)?;
 
         self.skip_blanks();
@@ -722,6 +1103,11 @@ impl Scanner {
         self.skip_blanks();
         match self.peek() {
             None | Some('\n') => Ok(()),
+            // The brace that closes the body we are inside. `scan_until`
+            // stops at it, so leaving it unconsumed is what ends the body --
+            // and without this a one-line `@macro reset { @clear }` would
+            // read its own closing brace as junk after the invocation.
+            Some('}') if self.boundary > 0 => Ok(()),
             Some('*') => {
                 self.skip_line();
                 Ok(())
@@ -744,6 +1130,7 @@ impl Scanner {
     }
 
     fn define(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        self.refuse_inside_a_macro("define", location)?;
         let name = self.declared_name(Declaration::Define, location)?;
         self.skip_blanks();
         let at_value = self.at;
@@ -782,7 +1169,7 @@ mod tests {
     /// origin names must *be* the character emitted. A repeat count makes the
     /// mapping many-to-one -- all 65 of `+{65}` name the same `+` -- which is
     /// the correct answer, not a rounding of it.
-    fn assert_origins_are_exact(source: &str) {
+    pub(super) fn assert_origins_are_exact(source: &str) {
         let expansion = expand(source).expect("expands");
         let chars: Vec<char> = source.chars().collect();
         let mut directions: std::collections::HashMap<usize, char> =
@@ -799,10 +1186,18 @@ mod tests {
                     .iter()
                     .take_while(|c| is_identifier_char(**c))
                     .collect();
+                let emitting_directive =
+                    Directive::from_spelling(&spelling).is_some_and(Directive::emits);
+                let macro_invocation = source.contains(&format!("@macro {spelling}"));
                 assert!(
-                    Directive::from_spelling(&spelling).is_some_and(Directive::emits),
+                    emitting_directive || macro_invocation,
                     "byte {offset} points at @{spelling}, which does not emit"
                 );
+                if macro_invocation {
+                    // A macro emits whatever its body does, so the
+                    // one-direction rule below is only about `@to`.
+                    continue;
+                }
                 assert!(
                     emitted == '>' || emitted == '<',
                     "@to emitted {emitted:?}, which is not a move"
@@ -999,11 +1394,7 @@ mod tests {
 
     #[test]
     fn a_planned_directive_is_refused_rather_than_ignored() {
-        for directive in [
-            "@macro clear { [-] }",
-            "@include \"lib.bfm\"",
-            "@ifdef DEBUG",
-        ] {
+        for directive in ["@include \"lib.bfm\"", "@ifdef DEBUG", "@endif"] {
             let error = expand(directive).unwrap_err();
             assert!(
                 matches!(error, MacroError::PlannedDirective { .. }),
@@ -1325,5 +1716,208 @@ mod tests {
 
         // And the last reachable cell is still fine.
         assert!(expand(&format!("@var edge at {EXPANSION_LIMIT}\n")).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod macro_tests {
+    use super::tests::assert_origins_are_exact;
+    use super::*;
+
+    fn expanded(source: &str) -> String {
+        expand(source)
+            .unwrap_or_else(|e| panic!("{}", e.format_with_source(source)))
+            .brainfuck()
+            .to_string()
+    }
+
+    #[test]
+    fn a_macro_without_parameters_expands_its_body() {
+        assert_eq!(expanded("@macro clear { [-] }\n@clear\n"), "[-]");
+        // And as many times as it is written.
+        assert_eq!(expanded("@macro clear { [-] }\n@clear\n@clear\n"), "[-][-]");
+    }
+
+    #[test]
+    fn a_parameter_is_a_constant_inside_the_body() {
+        assert_eq!(expanded("@macro set(v) { [-]+{v} }\n@set(3)\n"), "[-]+++");
+    }
+
+    #[test]
+    fn several_parameters_bind_in_order() {
+        let source = "@macro pair(a, b) { +{a}>+{b} }\n@pair(2, 3)\n";
+        assert_eq!(expanded(source), "++>+++");
+    }
+
+    #[test]
+    fn an_argument_may_be_a_name_from_the_caller() {
+        // A number, a constant, and a cell all pass the same way -- a
+        // parameter binds whatever the argument already means.
+        let source = "@define THREE 3\n@macro set(v) { +{v} }\n@set(THREE)\n";
+        assert_eq!(expanded(source), "+++");
+
+        let with_cell = "@var a at 0\n@var b at 2\n@macro go(cell) {\n@to cell\n}\n@go(b)\n";
+        assert_eq!(expanded(with_cell), ">>");
+    }
+
+    #[test]
+    fn a_body_may_span_lines_and_hold_directives() {
+        let source = "\
+@var counter at 0
+@var letter at 1
+@macro bump(step) {
+    @to letter
+    +{step}
+    @to counter
+    -
+}
++{2}[
+@bump(3)
+]
+";
+        assert_eq!(expanded(source), "++[>+++<-]");
+    }
+
+    #[test]
+    fn a_macro_may_use_another() {
+        let source = "@macro clear { [-] }\n@macro reset { @clear }\n@reset\n";
+        assert_eq!(expanded(source), "[-]");
+    }
+
+    #[test]
+    fn a_macro_that_uses_itself_is_refused_with_the_chain() {
+        let direct = expand("@macro loop_forever { @loop_forever }\n@loop_forever\n").unwrap_err();
+        assert!(
+            matches!(direct, MacroError::CircularMacro { .. }),
+            "{direct:?}"
+        );
+
+        let indirect = expand("@macro a { @b }\n@macro b { @a }\n@a\n").unwrap_err();
+        let MacroError::CircularMacro { chain, .. } = &indirect else {
+            panic!("expected a cycle, got {indirect:?}");
+        };
+        assert_eq!(chain, &["a".to_string(), "b".to_string(), "a".to_string()]);
+    }
+
+    #[test]
+    fn the_wrong_number_of_arguments_says_how_many_it_wanted() {
+        let error = expand("@macro set(v) { +{v} }\n@set(1, 2)\n").unwrap_err();
+        let MacroError::ArgumentCount {
+            expected, actual, ..
+        } = &error
+        else {
+            panic!("expected an arity error, got {error:?}");
+        };
+        assert_eq!((*expected, *actual), (1, 2));
+
+        let none_given = expand("@macro set(v) { +{v} }\n@set\n").unwrap_err();
+        assert!(
+            matches!(
+                none_given,
+                MacroError::ArgumentCount {
+                    expected: 1,
+                    actual: 0,
+                    ..
+                }
+            ),
+            "{none_given:?}"
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_no_macro_is_still_an_unknown_directive() {
+        assert!(matches!(
+            expand("@wibble\n").unwrap_err(),
+            MacroError::UnknownDirective { .. }
+        ));
+    }
+
+    #[test]
+    fn a_macro_shares_the_one_namespace() {
+        assert!(matches!(
+            expand("@define X 1\n@macro X { + }\n").unwrap_err(),
+            MacroError::Redefinition { .. }
+        ));
+        // And using one where a number belongs says which it is.
+        let error = expand("@macro X { + }\n+{X}\n").unwrap_err();
+        let MacroError::WrongKind { found, .. } = &error else {
+            panic!("expected a kind error, got {error:?}");
+        };
+        assert_eq!(*found, Kind::Macro);
+    }
+
+    #[test]
+    fn a_declaration_inside_a_body_is_refused_where_it_is_written() {
+        // It would run again on the second invocation and collide with
+        // itself, so the second call is the wrong place to find out.
+        for body in ["@define A 1", "@var a at 0", "@macro inner { + }"] {
+            let source = format!("@macro outer {{\n{body}\n}}\n@outer\n");
+            let error = expand(&source).unwrap_err();
+            assert!(
+                matches!(error, MacroError::DeclarationInsideMacro { .. }),
+                "{body}: got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_ends_at_its_own_brace_and_not_a_repeat_counts() {
+        // `+{3}` is a repeat count; its '}' must not close the body.
+        assert_eq!(expanded("@macro three { +{3} }\n@three\n"), "+++");
+        // Nor may a brace inside a comment.
+        assert_eq!(expanded("@macro two { ++ * a } brace\n}\n@two\n"), "++");
+    }
+
+    #[test]
+    fn a_body_that_is_never_closed_says_so() {
+        let error = expand("@macro open {\n+++\n").unwrap_err();
+        let MacroError::MalformedDirective { detail, .. } = &error else {
+            panic!("expected a malformed directive, got {error:?}");
+        };
+        assert!(detail.contains("never closed"), "{detail}");
+    }
+
+    #[test]
+    fn bytes_from_a_macro_point_at_the_invocation() {
+        // The map holds one position per byte and a macro gives a byte two.
+        // The invocation is the line the reader wrote, and a definition used
+        // twenty times would not say which of them failed.
+        let source = "@macro five { +{5} }\n@five\n";
+        let expansion = expand(source).expect("expands");
+        assert_eq!(expansion.brainfuck(), "+++++");
+        for offset in 0..5 {
+            let origin = expansion.origin(offset).expect("an origin");
+            assert_eq!(
+                (origin.line, origin.column),
+                (2, 1),
+                "byte {offset} does not point at the invocation"
+            );
+        }
+
+        // Nested invocations keep the outermost, so no origin points into a
+        // body.
+        let nested =
+            expand("@macro inner { ++ }\n@macro outer { @inner }\n@outer\n").expect("expands");
+        for offset in 0..2 {
+            assert_eq!(nested.origin(offset).expect("an origin").line, 3);
+        }
+    }
+
+    #[test]
+    fn the_cursor_is_tracked_through_a_body() {
+        // A macro is expanded inline, so movement inside one counts towards
+        // the loop balance like any other. Nothing special is needed for it.
+        let unbalanced = "@var a at 0\n@var b at 1\n@macro step { > }\n+[\n@step\n@to b\n]\n";
+        let error = expand(unbalanced).unwrap_err();
+        assert!(
+            matches!(error, MacroError::MovingInsideUnbalancedLoop { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn origins_survive_macros() {
+        assert_origins_are_exact("@macro five { +{5} }\n@five\n@five\n");
+        assert_origins_are_exact("@var a at 0\n@var b at 3\n@macro go {\n@to b\n}\n@go\n");
     }
 }

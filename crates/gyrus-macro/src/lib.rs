@@ -40,6 +40,12 @@
 //!
 //! [>]                      * a scan: the expander loses track of the cursor
 //! @here letter             * tell it where the scan landed, emitting nothing
+//!
+//! @macro bump(by) {        * a body, expanded in place wherever it is used
+//!     @to letter
+//!     +{by}
+//! }
+//! @bump(STEP)
 //! ```
 //!
 //! Naming cells is the part that earns the feature. Manual pointer arithmetic
@@ -53,9 +59,9 @@
 //! checked. `@here` is the only construct here that can silently produce a
 //! wrong program.
 //!
-//! `@macro` and the conditionals are designed but not built; they are rejected
-//! by name rather than treated as comments, so a `.bfm` written today cannot
-//! change meaning when they arrive.
+//! `@include` and the conditionals are designed but not built; they are
+//! rejected by name rather than treated as comments, so a `.bfm` written today
+//! cannot change meaning when they arrive.
 //!
 //! ## Example
 //!

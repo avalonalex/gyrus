@@ -32,9 +32,10 @@ the development compiler.
 - **gyrus-macro** (`crates/gyrus-macro/`): the `.bfm` macro preprocessor —
   expands macro source to pure BrainFuck and carries an origin map, so runtime
   errors name the `.bfm` rather than the expansion. Written entirely against
-  `gyrus`'s public API, as the debugger was. `@define`, `OP{N}`, and
-  `@var`/`@to`/`@here` with static cursor tracking; `@macro` and the CLI wiring
-  are not built. See `docs/architecture.md`
+  `gyrus`'s public API, as the debugger was. `@define`, `OP{N}`,
+  `@var`/`@to`/`@here` with static cursor tracking, and `@macro` with
+  parameters; `@include`, the conditionals and the CLI wiring are not built.
+  See `docs/architecture.md`
 - **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
   `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
   read the same cases. Not a product crate; nothing depends on it outside
@@ -673,9 +674,10 @@ debug symbols, the string-to-BrainFuck compiler, the program generator, the
 code, or anything beyond the idea.
 
 **Being built**: the macro preprocessor (`gyrus-macro`). `@define`, repeat
-counts, `@var`/`@to`/`@here` with cursor tracking, and the source map all work
-— a runtime error in a `.bfm` reports the line and column somebody wrote.
-`@macro`, the conditionals, and the CLI wiring are not there yet.
+counts, `@var`/`@to`/`@here` with cursor tracking, `@macro` with parameters,
+and the source map all work — a runtime error in a `.bfm` reports the line and
+column somebody wrote. `@include`, the conditionals, and the CLI wiring are not
+there yet.
 `PRD/macro-preprocessor-design.md` holds what is still to be decided;
 `docs/architecture.md` describes what the crate does.
 

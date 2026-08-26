@@ -94,3 +94,14 @@ fn the_variables_example_prints_hi() {
     );
     assert_eq!(printed, "Hi");
 }
+
+/// Macros end to end, and the point of them: the same idiom three times over,
+/// written once. Pinned by its output, like the variables example.
+#[test]
+fn the_macros_example_prints_hi() {
+    let (brainfuck, printed) = run("programs/macros/macros.bfm", 100_000);
+    assert_eq!(printed, "Hi!");
+    // A macro is not a subroutine: each invocation expands in place, so the
+    // three multiply loops are all there in the output.
+    assert_eq!(brainfuck.matches('[').count(), 6, "{brainfuck}");
+}

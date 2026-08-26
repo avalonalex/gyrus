@@ -1,0 +1,31 @@
+* One idiom, named once and used three times.
+*
+* Every letter here is built the same way: put a count in one cell, loop, add
+* to another, print, clear. Written out that is fifteen or so instructions per
+* character, and the third copy is where a typo hides. Written as a macro it
+* is one line per letter, and the numbers are the only thing that varies.
+*
+* Expands to the same BrainFuck either way -- a macro is not a subroutine.
+* What it saves is the writing and the reading, which for BrainFuck is most of
+* the difficulty.
+
+@var counter at 0
+@var letter  at 1
+
+@macro emit(times, step) {
+    @to counter
+    +{times}
+    [
+        @to letter
+        +{step}
+        @to counter
+        -
+    ]
+    @to letter
+    .
+    [-]
+}
+
+@emit(8, 9)     * 8 x 9  = 72,  'H'
+@emit(7, 15)    * 7 x 15 = 105, 'i'
+@emit(3, 11)    * 3 x 11 = 33,  '!'

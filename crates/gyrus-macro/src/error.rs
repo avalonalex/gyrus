@@ -21,6 +21,7 @@ use thiserror::Error;
 pub enum Kind {
     Constant,
     Variable,
+    Macro,
 }
 
 impl std::fmt::Display for Kind {
@@ -28,6 +29,7 @@ impl std::fmt::Display for Kind {
         f.write_str(match self {
             Kind::Constant => "constant",
             Kind::Variable => "variable",
+            Kind::Macro => "macro",
         })
     }
 }
@@ -114,6 +116,28 @@ pub enum MacroError {
         loop_at: SourceLocation,
     },
 
+    #[error("'@{name}' takes {expected} argument(s) at {location}, given {actual}")]
+    ArgumentCount {
+        name: String,
+        expected: usize,
+        actual: usize,
+        location: SourceLocation,
+    },
+
+    #[error("'@{name}' expands itself at {location}")]
+    CircularMacro {
+        name: String,
+        /// The invocations in flight, outermost first.
+        chain: Vec<String>,
+        location: SourceLocation,
+    },
+
+    #[error("'@{directive}' cannot appear inside a macro body, at {location}")]
+    DeclarationInsideMacro {
+        directive: &'static str,
+        location: SourceLocation,
+    },
+
     #[error("Unmatched '[' at {location}")]
     UnmatchedOpenBracket { location: SourceLocation },
 
@@ -178,6 +202,9 @@ impl MacroError {
             | MacroError::MovingInsideUnbalancedLoop { location, .. }
             | MacroError::UnmatchedOpenBracket { location }
             | MacroError::UnmatchedCloseBracket { location }
+            | MacroError::ArgumentCount { location, .. }
+            | MacroError::CircularMacro { location, .. }
+            | MacroError::DeclarationInsideMacro { location, .. }
             | MacroError::CellTooFar { location, .. }
             | MacroError::RepeatTooLarge { location, .. }
             | MacroError::ExpansionTooLarge { location, .. } => *location,
@@ -254,6 +281,7 @@ impl MacroError {
                 match found {
                     Kind::Constant => format!("`+{{{name}}}` uses its value as a repeat count"),
                     Kind::Variable => format!("`@to {name}` moves the cursor to it"),
+                    Kind::Macro => format!("`@{name}` expands it"),
                 }
             )),
             MacroError::PositionUnknown { lost_at, .. } => Some(format!(
@@ -276,6 +304,28 @@ impl MacroError {
             MacroError::UnmatchedCloseBracket { .. } => {
                 Some("This ']' closes a loop that was never opened.".to_string())
             }
+            MacroError::ArgumentCount {
+                name, expected, ..
+            } => Some(match expected {
+                0 => format!("`@{name}` takes none, so write it without parentheses."),
+                _ => format!(
+                    "Its parameters were named when it was defined; `@{name}` needs {expected} \
+                     of them, separated by commas."
+                ),
+            }),
+            MacroError::CircularMacro { chain, .. } => Some(format!(
+                "Expanding {} would not terminate. A macro cannot use itself, directly or \
+                 through another.",
+                chain
+                    .iter()
+                    .map(|n| format!("@{n}"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            )),
+            MacroError::DeclarationInsideMacro { directive, .. } => Some(format!(
+                "A macro body expands once per invocation, so an `@{directive}` in one would \
+                 declare the same name again on the second. Move it above the macro."
+            )),
             MacroError::CellTooFar { limit, .. } => Some(format!(
                 "Reaching cell N costs N moves, so a cell past {limit} is one no program could \
                  move to. It usually means the constant it came from is not the number it \
@@ -456,10 +506,10 @@ mod tests {
     #[test]
     fn a_planned_directive_says_so_rather_than_calling_itself_unknown() {
         let error = MacroError::PlannedDirective {
-            name: "macro".to_string(),
+            name: "include".to_string(),
             location: SourceLocation::new(1, 1, 0),
         };
-        let rendered = strip_ansi(&error.format_with_source("@macro clear { [-] }\n"));
+        let rendered = strip_ansi(&error.format_with_source("@include \"stdlib.bfm\"\n"));
         assert!(rendered.contains("not implemented yet"), "{rendered}");
         assert!(rendered.contains("@define"), "{rendered}");
     }
