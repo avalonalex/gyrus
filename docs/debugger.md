@@ -62,7 +62,9 @@ table the key handler uses.
 | `home` / `end` | jump to the start or the end |
 | `m` | memory display: hex, decimal, ASCII |
 | `f` | follow the pointer on or off |
-| `w` / `W` | watch a cell / stop watching one |
+| `w` | watch a cell |
+| `O` | stop before the program prints something |
+| `W` | remove the selected watch |
 | `G` | scroll memory to a cell address |
 | `L` | move the cursor to a source line |
 
@@ -164,6 +166,44 @@ A marker with no instruction after it is reported rather than silently dropped.
 The two claims above about bundled programs — `char.bf`'s trailing marker and
 `calc.bf`'s four — are checked by a test rather than left to rot, since both
 would break silently the moment either file were edited.
+
+## Watching what the program prints
+
+A breakpoint says *where* to stop. An output watch says *what has to happen*:
+
+```bash
+gyrus-debug program.bf --break-output any     # before anything is printed
+gyrus-debug program.bf --break-output W       # before a W is printed
+gyrus-debug program.bf --break-output '\n'    # before each line ends
+gyrus-debug program.bf --break-output '#10'   # the same, by byte value
+```
+
+`O` does the same from inside, and both land in the watch panel beside the
+cells, where `W` removes them and a `●` marks the ones that stop execution
+rather than only being shown:
+
+```
+┌ Watch ───────────────────────────────┐
+│›   cell[2]     72                    │
+│  ● output      any byte              │
+│  ● output 'W'  byte 87               │
+└──────────────────────────────────────┘
+```
+
+Execution stops **before** the `.`, like everywhere else here. The tape still
+holds the byte about to be printed — which is the state that explains it — and
+one `space` shows it land in the output panel. The header reads `output watch`
+so a stop in the middle of a `continue` says which kind it was.
+
+A value is one character (`W`, and `1` is the digit rather than byte one), the
+word `any`, an escape (`\n`, `\t`, `\r`, `\0`), or `#N` for a byte value from
+`#0` to `#255`. A cell holds one byte, so a multi-byte character is refused
+rather than silently never matching.
+
+This is the answer to "run until it prints something wrong", which a positional
+breakpoint cannot express: on `hello_world.bf`, `--break-output '\n'` stops on
+the very last instruction of the program, and finding that by eye would mean
+setting a breakpoint on each of its twelve `.` characters in turn.
 
 ## Stepping over and out
 

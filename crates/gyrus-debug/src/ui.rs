@@ -10,10 +10,12 @@ use gyrus_tui::ratatui::layout::Rect;
 use gyrus_tui::ratatui::style::Color;
 use gyrus_tui::{
     CellDisplay, Header, HelpOverlay, MemoryView, OutputView, Overlay, Panes, Section, SourceView,
-    StatusBar, WatchEntry, WatchList, clamp_scroll, follow_pointer, follow_scroll,
+    StatusBar, WatchEntry, WatchList, cell_under, clamp_scroll, follow_pointer, follow_scroll,
 };
 
-use crate::state::{Exit, Focus, Modal, Note, Outcome, Prompt, PromptKind, RunState, Session};
+use crate::state::{
+    Exit, Focus, Modal, Note, Outcome, Prompt, PromptKind, RunState, Session, Watch,
+};
 
 /// How wide the source column is, as a percentage.
 const SOURCE_PERCENT: u16 = 58;
@@ -249,7 +251,7 @@ fn draw(session: &mut Session) -> io::Result<()> {
         if panes.right_bottom.height > 0 {
             frame.render_widget(
                 WatchList::new(&watches, theme)
-                    .empty_hint("none — press w to add one")
+                    .empty_hint("none — w watches a cell, O stops on output")
                     .selected(if watches.is_empty() {
                         None
                     } else {
@@ -331,6 +333,9 @@ fn run_state_label(session: &Session) -> (String, Color) {
         // line is cleared by the next keypress, and the user is then looking at
         // a stopped program with no indication of why it stopped.
         (None, false) if needs_input(session) => ("needs input".to_string(), theme.modified),
+        (None, false) if stopped_on_output(session) => {
+            ("output watch".to_string(), theme.breakpoint)
+        }
         (None, false) if session.at_breakpoint() => ("breakpoint".to_string(), theme.breakpoint),
         (None, false) => match session.run {
             RunState::Step => ("paused".to_string(), theme.accent),
@@ -409,10 +414,17 @@ fn watch_entries(session: &Session) -> Vec<WatchEntry> {
     session
         .watches
         .iter()
-        .map(|&address| WatchEntry {
-            address,
-            value: session.snapshot.memory.get(address).copied(),
-            changed: session.modified.contains(&address),
+        .map(|watch| match watch {
+            Watch::Cell(address) => WatchEntry::shown(
+                watch.label(),
+                cell_under(&session.snapshot.memory, *address as isize)
+                    .map_or_else(|| "off tape".to_string(), |byte| byte.to_string()),
+            )
+            .changed(session.modified.contains(address)),
+            Watch::AnyOutput => WatchEntry::shown(watch.label(), "any byte").stopping(true),
+            Watch::Output(byte) => {
+                WatchEntry::shown(watch.label(), format!("byte {byte}")).stopping(true)
+            }
         })
         .collect()
 }
@@ -455,7 +467,11 @@ const HELP: &[Section<'static>] = &[
             ("m", "memory display: hex, decimal, ASCII"),
             ("f", "follow the pointer on or off"),
             ("w", "watch a cell"),
-            ("W", "stop watching the selected cell"),
+            (
+                "O",
+                "stop before the program prints — anything, or one byte",
+            ),
+            ("W", "remove the selected watch"),
             ("G", "scroll memory to a cell address"),
             ("L", "move the cursor to a source line"),
         ],
@@ -611,10 +627,17 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
                 session.note("nothing is being watched", Note::Warn);
             } else {
                 let index = session.ui.watch_selected.min(session.watches.len() - 1);
-                let address = session.watches.remove(index);
+                let watch = session.watches.remove(index);
                 session.ui.watch_selected = index.min(session.watches.len().saturating_sub(1));
-                session.note(format!("stopped watching cell[{address}]"), Note::Info);
+                session.note(format!("stopped watching {}", watch.label()), Note::Info);
             }
+            Flow::Stay
+        }
+        KeyCode::Char('O') => {
+            session.ui.prompt = Some(Prompt {
+                kind: PromptKind::OutputWatch,
+                buffer: String::new(),
+            });
             Flow::Stay
         }
         KeyCode::Char('G') => {
@@ -690,6 +713,44 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
         }
         _ => Flow::Stay,
     }
+}
+
+/// Read a `--break-output`-style value: `any`, one character, an escape, or `#N`.
+pub fn parse_output_watch(text: &str) -> Result<Watch, String> {
+    if text.eq_ignore_ascii_case("any") || text.is_empty() {
+        return Ok(Watch::AnyOutput);
+    }
+    // A single character means that character, so `1` is the digit one. Byte
+    // values need `#`, which keeps the two unambiguous in both directions.
+    let mut chars = text.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next()) {
+        let mut buffer = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buffer);
+        if encoded.len() == 1 {
+            return Ok(Watch::Output(encoded.as_bytes()[0]));
+        }
+        return Err(format!("{ch:?} is not a single byte"));
+    }
+    let byte = match text {
+        "\\n" => Some(b'\n'),
+        "\\t" => Some(b'\t'),
+        "\\r" => Some(b'\r'),
+        "\\0" => Some(0),
+        _ => text.strip_prefix('#').and_then(|n| n.parse::<u8>().ok()),
+    };
+    byte.map(Watch::Output)
+        .ok_or_else(|| format!("{text:?} is not a character, an escape, #0..#255, or \"any\""))
+}
+
+/// Whether execution is stopped before a `.` that a watch is waiting for.
+fn stopped_on_output(session: &Session) -> bool {
+    session.snapshot.location.is_some()
+        && matches!(
+            session.program.instruction_at(session.snapshot.index),
+            Some(gyrus::Instruction::Output)
+        )
+        && cell_under(&session.snapshot.memory, session.snapshot.pointer)
+            .is_some_and(|byte| session.output_stops(byte))
 }
 
 /// Whether the instruction about to run is a `,` with nothing queued to read.
@@ -776,13 +837,31 @@ fn apply_prompt(session: &mut Session, prompt: Prompt) {
     let text = prompt.buffer.trim().to_string();
     match prompt.kind {
         PromptKind::Watch => match text.parse::<usize>() {
-            Ok(address) if !session.watches.contains(&address) => {
-                session.watches.push(address);
-                session.watches.sort_unstable();
-                session.note(format!("watching cell[{address}]"), Note::Info);
+            Ok(address) => {
+                let watch = Watch::Cell(address);
+                if session.add_watch(watch) {
+                    session.note(format!("watching {}", watch.label()), Note::Info);
+                } else {
+                    session.note(format!("already watching {}", watch.label()), Note::Warn);
+                }
             }
-            Ok(address) => session.note(format!("already watching cell[{address}]"), Note::Warn),
             Err(_) => session.note(format!("not a cell address: {text:?}"), Note::Error),
+        },
+        PromptKind::OutputWatch => match parse_output_watch(&text) {
+            Ok(watch) => {
+                if session.add_watch(watch) {
+                    session.note(
+                        format!("stopping before {} — W removes it", watch.label()),
+                        Note::Info,
+                    );
+                } else {
+                    session.note(
+                        format!("already stopping before {}", watch.label()),
+                        Note::Warn,
+                    );
+                }
+            }
+            Err(why) => session.note(why, Note::Error),
         },
         PromptKind::GotoCell => match text.parse::<usize>() {
             Ok(address) => {
@@ -899,5 +978,43 @@ pub fn parse_display(name: &str) -> Option<CellDisplay> {
         "decimal" | "dec" => Some(CellDisplay::Decimal),
         "ascii" => Some(CellDisplay::Ascii),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn any_is_the_word_and_the_empty_answer() {
+        assert_eq!(parse_output_watch("any").unwrap(), Watch::AnyOutput);
+        assert_eq!(parse_output_watch("ANY").unwrap(), Watch::AnyOutput);
+        assert_eq!(parse_output_watch("").unwrap(), Watch::AnyOutput);
+    }
+
+    #[test]
+    fn one_character_means_that_character() {
+        // Including a digit: `1` is the character, and `#49` is the byte.
+        assert_eq!(parse_output_watch("W").unwrap(), Watch::Output(b'W'));
+        assert_eq!(parse_output_watch("1").unwrap(), Watch::Output(b'1'));
+        assert_eq!(parse_output_watch(" ").unwrap(), Watch::Output(b' '));
+    }
+
+    #[test]
+    fn escapes_and_byte_values_reach_the_bytes_you_cannot_type() {
+        assert_eq!(parse_output_watch("\\n").unwrap(), Watch::Output(b'\n'));
+        assert_eq!(parse_output_watch("\\t").unwrap(), Watch::Output(b'\t'));
+        assert_eq!(parse_output_watch("\\0").unwrap(), Watch::Output(0));
+        assert_eq!(parse_output_watch("#10").unwrap(), Watch::Output(10));
+        assert_eq!(parse_output_watch("#255").unwrap(), Watch::Output(255));
+    }
+
+    #[test]
+    fn what_cannot_be_one_byte_is_refused() {
+        assert!(parse_output_watch("#256").is_err());
+        assert!(parse_output_watch("hello").is_err());
+        // A cell holds one byte, so a multi-byte character can never be printed
+        // by a single `.`.
+        assert!(parse_output_watch("é").is_err());
     }
 }

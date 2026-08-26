@@ -64,6 +64,57 @@ impl Focus {
     }
 }
 
+/// Something the debugger is keeping an eye on.
+///
+/// Two kinds, and the difference is whether reaching it stops the program: a
+/// cell is only ever shown, while an output condition is a breakpoint expressed
+/// in terms of what the program does rather than where it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watch {
+    /// Show this cell's value on every pause.
+    Cell(usize),
+    /// Stop before the program prints anything at all.
+    AnyOutput,
+    /// Stop before the program prints this byte.
+    Output(u8),
+}
+
+impl Watch {
+    /// Whether reaching this stops execution.
+    pub fn stops(self) -> bool {
+        !matches!(self, Watch::Cell(_))
+    }
+
+    /// Whether a `.` about to print `byte` satisfies this.
+    pub fn matches_output(self, byte: u8) -> bool {
+        match self {
+            Watch::Cell(_) => false,
+            Watch::AnyOutput => true,
+            Watch::Output(wanted) => wanted == byte,
+        }
+    }
+
+    /// How it reads in the watch panel.
+    pub fn label(self) -> String {
+        match self {
+            Watch::Cell(address) => format!("cell[{address}]"),
+            Watch::AnyOutput => "output".to_string(),
+            Watch::Output(byte) => format!("output {}", describe_byte(byte)),
+        }
+    }
+}
+
+/// A byte as someone would say it: `'W'`, or `#10` when it does not print.
+pub fn describe_byte(byte: u8) -> String {
+    match byte {
+        b'\n' => "'\\n'".to_string(),
+        b'\t' => "'\\t'".to_string(),
+        b'\r' => "'\\r'".to_string(),
+        0x20..=0x7e => format!("'{}'", byte as char),
+        _ => format!("#{byte}"),
+    }
+}
+
 /// How prominently to draw a transient message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Note {
@@ -221,6 +272,8 @@ pub struct Prompt {
 pub enum PromptKind {
     /// Add a watch on a cell address.
     Watch,
+    /// Add a stop condition on what the program prints.
+    OutputWatch,
     /// Scroll the memory panel to a cell address.
     GotoCell,
     /// Move the cursor to a source line.
@@ -234,6 +287,7 @@ impl PromptKind {
     pub fn label(self) -> &'static str {
         match self {
             PromptKind::Watch => "watch cell",
+            PromptKind::OutputWatch => "stop before printing (a character, any, \\n, or #10)",
             PromptKind::GotoCell => "go to cell",
             PromptKind::GotoLine => "go to line",
             PromptKind::Input => "input (queued for the next `,`)",
@@ -284,7 +338,7 @@ pub struct Session {
     /// Bumped whenever `breakpoints` changes.
     breakpoint_revision: u64,
 
-    pub watches: Vec<usize>,
+    pub watches: Vec<Watch>,
     pub output: Vec<u8>,
 
     /// Bytes queued for the program's next `,`.
@@ -511,6 +565,35 @@ impl Session {
                 .is_some_and(|position| self.breakpoints.contains(&position))
     }
 
+    /// Whether a `.` printing `byte` should stop execution.
+    pub fn output_stops(&self, byte: u8) -> bool {
+        self.watches.iter().any(|watch| watch.matches_output(byte))
+    }
+
+    /// Whether any watch stops on output at all.
+    ///
+    /// Checked first on the hot path, so a program with only cell watches pays
+    /// nothing for the feature.
+    pub fn watches_output(&self) -> bool {
+        self.watches.iter().any(|watch| watch.stops())
+    }
+
+    /// Add a watch, unless it is already there. Returns whether it was new.
+    pub fn add_watch(&mut self, watch: Watch) -> bool {
+        if self.watches.contains(&watch) {
+            return false;
+        }
+        self.watches.push(watch);
+        // Cells first, then output conditions: the cells are a table to read and
+        // the conditions are a list of rules, and interleaving them reads badly.
+        self.watches.sort_by_key(|watch| match watch {
+            Watch::Cell(address) => (0, *address),
+            Watch::AnyOutput => (1, 0),
+            Watch::Output(byte) => (1, usize::from(*byte) + 1),
+        });
+        true
+    }
+
     /// The instruction the user's cursor names, snapping to the nearest one on
     /// the cursor's line.
     pub fn cursor_instruction(&self) -> Option<(Position, usize)> {
@@ -557,5 +640,42 @@ mod tests {
         // Otherwise `,` silently takes the EOF branch in the middle of a
         // `continue`, and the user never learns their input was needed.
         assert!(should_pause(RunState::Continue, false, 4, true));
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+
+    #[test]
+    fn only_output_watches_stop_execution() {
+        assert!(!Watch::Cell(3).stops());
+        assert!(Watch::AnyOutput.stops());
+        assert!(Watch::Output(b'W').stops());
+    }
+
+    #[test]
+    fn an_output_watch_matches_the_byte_it_names() {
+        assert!(Watch::AnyOutput.matches_output(0));
+        assert!(Watch::AnyOutput.matches_output(b'W'));
+        assert!(Watch::Output(b'W').matches_output(b'W'));
+        assert!(!Watch::Output(b'W').matches_output(b'w'));
+        assert!(!Watch::Cell(0).matches_output(b'W'));
+    }
+
+    #[test]
+    fn a_byte_reads_as_a_character_when_it_has_one() {
+        assert_eq!(describe_byte(b'W'), "'W'");
+        assert_eq!(describe_byte(b' '), "' '");
+        assert_eq!(describe_byte(b'\n'), "'\\n'");
+        assert_eq!(describe_byte(0), "#0");
+        assert_eq!(describe_byte(200), "#200");
+    }
+
+    #[test]
+    fn labels_say_what_is_being_watched() {
+        assert_eq!(Watch::Cell(12).label(), "cell[12]");
+        assert_eq!(Watch::AnyOutput.label(), "output");
+        assert_eq!(Watch::Output(b'\n').label(), "output '\\n'");
     }
 }

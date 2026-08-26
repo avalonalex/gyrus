@@ -27,7 +27,7 @@ use gyrus_tui::TerminalGuard;
 
 use hook::{DebugInput, DebugOutput, DebuggerHook, Shared};
 use program::Program;
-use state::{Exit, Note, Outcome, RunState, Session};
+use state::{Exit, Note, Outcome, RunState, Session, Watch};
 
 #[derive(Parser)]
 #[command(name = "gyrus-debug")]
@@ -92,6 +92,11 @@ struct Cli {
     #[arg(long, conflicts_with = "marker")]
     no_markers: bool,
 
+    /// Stop before the program prints this: `any`, one character, `\n`, or
+    /// `#10` for a byte value. Repeatable
+    #[arg(long = "break-output", value_name = "VALUE")]
+    break_output: Vec<String>,
+
     /// Start running instead of stopping at the first instruction
     #[arg(long)]
     run: bool,
@@ -125,6 +130,11 @@ fn run() -> Result<(), String> {
     // prints an error instead of flashing an empty screen at it.
     build_config(&cli, None)?;
     let marker = marker_char(&cli)?;
+    let output_watches: Vec<Watch> = cli
+        .break_output
+        .iter()
+        .map(|value| ui::parse_output_watch(value).map_err(|why| format!("Error: {why}")))
+        .collect::<Result<_, _>>()?;
     let breakpoints: Vec<(usize, usize)> = cli
         .breakpoints
         .iter()
@@ -141,6 +151,9 @@ fn run() -> Result<(), String> {
         apply_breakpoint(&mut session, position)?;
     }
     apply_markers(marker, &mut session);
+    for watch in output_watches {
+        session.add_watch(watch);
+    }
     let initial_run = if cli.run {
         RunState::Continue
     } else {
@@ -432,6 +445,7 @@ mod tests {
             input: input.map(str::to_owned),
             input_file: file.map(PathBuf::from),
             breakpoints: Vec::new(),
+            break_output: Vec::new(),
             marker: '@',
             no_markers: false,
             run: false,

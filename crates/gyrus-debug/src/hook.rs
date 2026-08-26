@@ -12,6 +12,7 @@ use std::time::Duration;
 use gyrus::Instruction;
 use gyrus::hooks::{ExecutionHook, HookContext, HookDecision, LoopInfo};
 use gyrus::io::{BfInput, BfOutput};
+use gyrus_tui::cell_under;
 
 use crate::state::{RunState, Session, should_pause};
 use crate::ui;
@@ -59,6 +60,9 @@ pub struct DebuggerHook {
     stops: Vec<bool>,
     /// The `breakpoint_revision` `stops` was built from.
     stops_revision: u64,
+    /// Whether any watch stops on output, so a program with none pays only a
+    /// `matches!` per instruction for the feature.
+    watches_output: bool,
 }
 
 impl DebuggerHook {
@@ -71,15 +75,22 @@ impl DebuggerHook {
             exiting: false,
             stops: Vec::new(),
             stops_revision: u64::MAX,
+            watches_output: false,
         };
         let guard = lock(&hook.session);
-        let snapshot = (guard.run, guard.exit.is_some(), guard.breakpoint_revision());
+        let snapshot = (
+            guard.run,
+            guard.exit.is_some(),
+            guard.breakpoint_revision(),
+            guard.watches_output(),
+        );
         let bitmap = guard.breakpoint_bitmap();
         drop(guard);
         hook.run = snapshot.0;
         hook.exiting = snapshot.1;
         hook.stops = bitmap;
         hook.stops_revision = snapshot.2;
+        hook.watches_output = snapshot.3;
         hook
     }
 
@@ -87,6 +98,7 @@ impl DebuggerHook {
     fn sync(&mut self, session: &Session) {
         self.run = session.run;
         self.exiting = session.exit.is_some();
+        self.watches_output = session.watches_output();
         if self.stops_revision != session.breakpoint_revision() {
             self.stops = session.breakpoint_bitmap();
             self.stops_revision = session.breakpoint_revision();
@@ -104,6 +116,13 @@ impl DebuggerHook {
             // Rare enough in a hot loop that a lock costs nothing here.
             let starving = lock(&self.session).starving_for_input();
             should_pause(self.run, at_breakpoint, index, starving)
+        } else if self.watches_output && matches!(instruction, Instruction::Output) {
+            // Stop *before* the `.`, like everything else here: the tape still
+            // holds the byte about to be printed, which is the state that
+            // explains it. One `space` then shows it land in the output panel.
+            let printing = cell_under(context.memory(), context.pointer().0);
+            let watched = printing.is_some_and(|byte| lock(&self.session).output_stops(byte));
+            watched || should_pause(self.run, at_breakpoint, index, false)
         } else {
             should_pause(self.run, at_breakpoint, index, false)
         };
