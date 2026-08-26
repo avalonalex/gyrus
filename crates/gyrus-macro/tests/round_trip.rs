@@ -147,9 +147,9 @@ fn the_scan_example_finds_its_way_back() {
 
 /// An array of records walked by a scan, with its fields named.
 ///
-/// The shape large BrainFuck programs are built from: mandelbrot's tape is
-/// records of nine cells navigated by 124 scan loops, and the standard BF
-/// library's array idiom is the same with a stride of two. A scan stops
+/// The shape large BrainFuck programs are built from -- mandelbrot's tape and
+/// the standard BF library's array idiom are both this, at different strides;
+/// `scripts/check-mandelbrot-claims.py` measures the first. A scan stops
 /// wherever the data says, so the cursor's cell is unknowable -- but it moved
 /// a whole record each time, so which field it is on is not.
 #[test]

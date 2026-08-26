@@ -37,6 +37,26 @@ impl std::fmt::Display for Kind {
     }
 }
 
+/// What a name was wanted for. Not a [`Kind`], because `@to` accepts two of
+/// them and naming only one of those in the message describes a rule the
+/// expander does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wanted {
+    /// A number, for a repeat count or a value.
+    Constant,
+    /// Somewhere to move to: a cell, or a field of a record.
+    Target,
+}
+
+impl std::fmt::Display for Wanted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Wanted::Constant => "constant",
+            Wanted::Target => "cell or field",
+        })
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum MacroError {
@@ -99,7 +119,7 @@ pub enum MacroError {
     WrongKind {
         name: String,
         found: Kind,
-        wanted: Kind,
+        wanted: Wanted,
         location: SourceLocation,
         declared: SourceLocation,
     },
@@ -119,8 +139,8 @@ pub enum MacroError {
     OnlyOffsetKnown {
         name: String,
         location: SourceLocation,
-        /// The `@here` that put the cursor in a record.
-        established: SourceLocation,
+        /// Where the cursor came to be in a record.
+        entered: SourceLocation,
     },
 
     #[error("'@to {name}' at {location} is an offset, and the cursor is not inside a record")]
@@ -212,7 +232,7 @@ impl MacroError {
     pub(crate) fn wrong_kind(
         name: &str,
         found: Kind,
-        wanted: Kind,
+        wanted: Wanted,
         location: SourceLocation,
         declared: SourceLocation,
     ) -> Self {
@@ -334,11 +354,11 @@ impl MacroError {
                  is a scan -- and it is only a problem for `@to`. Say `@here NAME` once you \
                  know where the scan landed."
             )),
-            MacroError::OnlyOffsetKnown { established, .. } => Some(format!(
-                "The `@here` at {established} said which field of a record the cursor was on, \
-                 not which cell of the tape -- which is the point of it, since a scan stops \
-                 wherever the data says. Only `@field` names are reachable from there; a \
-                 `@var` needs a `@here` naming one."
+            MacroError::OnlyOffsetKnown { entered, .. } => Some(format!(
+                "At {entered} the cursor came to be inside a record, which fixes which field \
+                 it is on and not which cell of the tape -- a scan stops wherever the data \
+                 says. Only `@field` names are reachable from there; a `@var` needs a `@here` \
+                 naming one."
             )),
             MacroError::NotInARecord { name, .. } => Some(format!(
                 "'{name}' is an offset within a record, so it needs a record to be an offset \
@@ -391,7 +411,7 @@ impl MacroError {
             )),
             MacroError::DeclarationInsideMacro { directive, .. } => Some(format!(
                 "A macro body expands once per invocation, so an `@{directive}` in one would \
-                 declare the same name again on the second. Move it above the macro."
+                 run again on the second and collide with itself. Move it above the macro."
             )),
             MacroError::CellAlreadyChosen { other, .. } => Some(format!(
                 "'{other}' was declared without a cell, so the expander picked that one on the \

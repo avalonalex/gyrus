@@ -230,6 +230,7 @@ scripts/check-readme-commands.py   # every flag the docs use really exists
 scripts/check-doc-links.py         # every relative Markdown link resolves
 scripts/check-examples.sh          # every example runs, not just compiles
 scripts/check-tape-access.py       # the tape is indexed only where the contract is enforced
+scripts/check-mandelbrot-claims.py # the measurements the macro design rests on
 ```
 
 `check-examples.sh` runs each example rather than only building it, because

@@ -186,8 +186,8 @@ refused, because `[>]` is ordinary BrainFuck.
 whose body moves by a whole number of records loses the cursor's *cell* but
 keeps which *field* of a record it is on — so `@field` names stay reachable
 across a scan, which is how an array is walked in every large BrainFuck
-program. mandelbrot's tape is records of nine cells and 124 of its loops are
-that scan. See `expand.rs`'s module documentation for the rules.
+program. `scripts/check-mandelbrot-claims.py` measures how much of one.
+See `expand.rs`'s module documentation for the rules.
 
 ## The optimized interpreter
 

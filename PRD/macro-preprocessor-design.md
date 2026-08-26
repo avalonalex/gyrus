@@ -145,16 +145,13 @@ phase-1 language is complete, and so is the oracle generator that was the
 stated reason for building it -- see `docs/testing.md`. What remains is
 plumbing: nothing can run a `.bfm` from a terminal yet.
 
-**Beyond the scoped language**, `@stride` and `@field` were added after
-measuring what a mandelbrot-scale program actually needs. 35% of mandelbrot's
-686 loops are textually unbalanced and 124 of them are one of two scans over
-an array of nine-cell records, so `@to` naming a cell was unusable in the only
-part of such a program that matters. A field is an offset rather than a cell,
-and a loop moving by whole records keeps it. What is still missing for work at
-that scale, in order: **address arithmetic** (`@to base + i * STRIDE` -- there
-are no expressions, and bfmacro has none either), and **multi-cell variables**,
-which 16-bit arithmetic needs and which the original design anticipated with a
-`size` field it never used.
+**Still missing for work at mandelbrot's scale**, in order: **address
+arithmetic** (`@to base + i * STRIDE` -- there are no expressions, and bfmacro
+has none either) and **multi-cell variables**, which 16-bit arithmetic needs
+and which this design anticipated with a `size` field it never used. What
+`@stride` and `@field` are and why they exist is in `docs/architecture.md` and
+in the commit that added them; the measurements behind them are checked by
+`scripts/check-mandelbrot-claims.py`.
 
 **A decision `@include` would force.** The origin map holds one position per
 emitted byte against one source, which `@macro` fits by policy -- a byte names

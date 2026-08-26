@@ -89,8 +89,8 @@
 //!    wherever the data says -- but which *field* of a record the cursor is on
 //!    is exactly what it was, because every iteration moved a whole one. This
 //!    is the case `@stride` exists for, and the case nearly all of a large
-//!    BrainFuck program is: mandelbrot's tape is records of nine cells and 124
-//!    of its loops are `[>>>>>>>>>]` or its mirror.
+//!    BrainFuck program is -- `scripts/check-mandelbrot-claims.py` measures
+//!    how much of one.
 //! 3. **Anywhere else.** Nothing survives. That is not an error by itself,
 //!    because such loops are ordinary; the next `@to` is the error, and it
 //!    names both itself and the loop that lost the position.
@@ -113,8 +113,9 @@
 //!
 //! `@here NAME` re-establishes a position without emitting anything, for the
 //! case rule 3 exists for -- and, naming a field rather than a cell, it is
-//! also how a program says it is inside a record at all: after `[<]` the programmer knows where the cursor
-//! landed and the expander cannot. It is trusted rather than checked -- the
+//! also how a program says it is inside a record at all. After `[<]` the
+//! programmer knows where the cursor landed and the expander cannot. It is
+//! trusted rather than checked -- the
 //! one construct here that can silently produce a wrong program -- and it is
 //! the price of `@to` and scan loops coexisting at all.
 //!
@@ -137,7 +138,7 @@ use std::rc::Rc;
 use gyrus::SourceLocation;
 
 use crate::directive::{Declaration, Directive};
-use crate::error::{Kind, MacroError};
+use crate::error::{Kind, MacroError, Wanted};
 use crate::source_map::Expansion;
 
 /// The most instructions one repeat count may emit.
@@ -217,6 +218,17 @@ impl Symbol {
     }
 }
 
+/// Whether two positions are the same place, ignoring how each came to be
+/// known. Used to decide whether a `@here` inside a loop body leaves the exit
+/// ambiguous, where only the place matters.
+fn same_place(a: Position, b: Position) -> bool {
+    match (a, b) {
+        (Position::Known(x), Position::Known(y)) => x == y,
+        (Position::Relative { offset: x, .. }, Position::Relative { offset: y, .. }) => x == y,
+        _ => false,
+    }
+}
+
 /// What a `@to` was told to move to.
 #[derive(Debug, Clone, Copy)]
 enum Target {
@@ -236,12 +248,12 @@ enum Position {
     /// data says, so the cell cannot be known -- but it moved by a whole
     /// record each time, so the *offset within* a record is exactly what it
     /// was. That is the position an array walked by scan loops is always in,
-    /// which is most of what a large BrainFuck program does: mandelbrot's
-    /// tape is records of nine cells and 124 of its loops are that scan.
+    /// which is most of what a large BrainFuck program does.
     Relative {
         offset: i64,
-        /// The `@here` that said so, for the error when a `@var` is wanted.
-        established: SourceLocation,
+        /// Where the cursor came to be in a record: a `@here` naming a
+        /// field, or the loop that walked whole records.
+        entered: SourceLocation,
     },
     /// Lost by a loop whose body did not return the cursor where it found it.
     /// Carries that loop's `[`, so an error can name the cause and not only
@@ -284,6 +296,22 @@ struct OpenLoop {
     /// unbalanced -- so it stole the blame from the scan that actually lost
     /// the position, and it refused a net-zero body that used `@here`.
     net_at_entry: i64,
+    /// Where the cursor was when the body was entered, for deciding whether a
+    /// `@here` inside it leaves the exit ambiguous.
+    entry_position: Position,
+    /// Whether a `@here` inside this body said where the cursor is. A loop may
+    /// run zero times, so such a claim holds only if the body also leaves the
+    /// cursor where it found it.
+    here_inside: bool,
+    /// Whether the emitted `>` and `<` in this body are what actually happens.
+    ///
+    /// They are not, once a nested loop moves by something other than whole
+    /// records: that loop runs a number of times nobody knows, so its
+    /// contribution is unknown, while the emitted count sees its body once.
+    /// Without this the rule below reads `[ @to a @to m [>] >{2} ]` as moving
+    /// three cells and lets the `@to` through -- right on the first iteration
+    /// and wrong on every one after, which is what it exists to prevent.
+    movement_certain: bool,
     /// The first `@to` inside this body that named a cell. In a body that
     /// moves at all, such a `@to` is wrong from the second iteration.
     cell_to_inside: Option<SourceLocation>,
@@ -545,21 +573,22 @@ impl Scanner {
         self.net = self.net.saturating_add(delta);
         self.position = match self.position {
             Position::Known(at) => Position::Known(at.saturating_add(delta)),
-            Position::Relative {
-                offset,
-                established,
-            } => Position::Relative {
+            Position::Relative { offset, entered } => Position::Relative {
                 // Reduced within the record, because the offset says *which
                 // field*, not how far the cursor has travelled. Moving one
                 // whole record forward from field 0 is field 0 again, and it
-                // is that fact the scan rule below depends on.
-                offset: match self.stride {
-                    Some((stride, _)) if stride > 0 => {
-                        offset.saturating_add(delta).rem_euclid(stride)
-                    }
-                    _ => offset.saturating_add(delta),
-                },
-                established,
+                // is that fact the scan rule depends on.
+                //
+                // A relative position implies a stride: it can only come from
+                // a field, only `@field` makes one, and that refuses to run
+                // before `@stride`, which refuses a size of zero. Saying so
+                // with `expect` states the invariant; a fallback arm would
+                // hide it and leave an offset outside the record if it ever
+                // broke.
+                offset: offset
+                    .saturating_add(delta)
+                    .rem_euclid(self.stride.expect("a relative position implies a stride").0),
+                entered,
             },
             unknown => unknown,
         };
@@ -617,6 +646,9 @@ impl Scanner {
             self.open_brackets.push(OpenLoop {
                 location: origin,
                 net_at_entry: self.net,
+                entry_position: self.position,
+                here_inside: false,
+                movement_certain: true,
                 cell_to_inside: None,
                 field_to_inside: None,
             });
@@ -629,52 +661,61 @@ impl Scanner {
         self.emit_run(c, 1, origin)?;
 
         let moved = self.net - open.net_at_entry;
-        if moved != 0 {
-            // A body that moves by a whole number of records leaves the
-            // offset within a record exactly as it found it. That is what a
-            // scan over an array is, and without this rule every one of them
-            // would lose the position and need a `@here` after it.
-            let whole_records = self
-                .stride
-                .is_some_and(|(stride, _)| stride > 0 && moved % stride == 0);
+        let stride = self.stride.map(|(size, _)| size);
+        // `movement_certain` is the difference between what was emitted and
+        // what happens: a nested loop runs an unknown number of times, so only
+        // one that moves by whole records (or not at all) leaves the count
+        // meaningful.
+        let balanced = open.movement_certain && moved == 0;
+        let whole_records = open.movement_certain && stride.is_some_and(|size| moved % size == 0);
 
-            // Rule 3 in this module's documentation: not knowable before this
-            // bracket, which is why it is reported here. A `@to` naming a cell
-            // is wrong in any body that moves; one naming a field survives a
-            // body that moves by whole records, because the offset it is
-            // relative to is the same on every iteration.
-            let wrong = match (open.cell_to_inside, open.field_to_inside) {
-                (Some(to), _) => Some(to),
-                (None, Some(to)) if !whole_records => Some(to),
-                _ => None,
-            };
-            if let Some(to) = wrong {
-                return Err(MacroError::MovingInsideUnbalancedLoop {
-                    location: to,
-                    loop_at: open.location,
-                });
-            }
-
-            self.position = match self.position {
-                // The offset survives; the cell was never known.
-                relative @ Position::Relative { .. } if whole_records => relative,
-                // Only the loop that *first* lost the position is worth
-                // naming: re-tagging on every later one would point the user
-                // at a symptom rather than the cause.
-                Position::Known(_) | Position::Relative { .. } => Position::Unknown(open.location),
-                unknown => unknown,
-            };
-        }
-
-        // A `@to` in a nested body is inside this one too.
-        if let Some(parent) = self.open_brackets.last_mut() {
-            if let Some(to) = open.cell_to_inside {
-                parent.cell_to_inside.get_or_insert(to);
-            }
-            if let Some(to) = open.field_to_inside {
-                parent.field_to_inside.get_or_insert(to);
+        // What this loop contributes to an enclosing body's count. Whole
+        // records k times is still whole records; anything else is unknown,
+        // and every loop still open has to stop trusting its own total.
+        if !(balanced || whole_records) {
+            for parent in &mut self.open_brackets {
+                parent.movement_certain = false;
             }
         }
+
+        // Rule 3 in this module's documentation: not knowable before this
+        // bracket, which is why it is reported here. A `@to` naming a cell is
+        // wrong in any body that moves; one naming a field survives a body
+        // that moves by whole records, because the offset it is relative to is
+        // the same on every iteration.
+        let wrong = match (open.cell_to_inside, open.field_to_inside) {
+            (Some(to), _) if !balanced => Some(to),
+            (_, Some(to)) if !whole_records => Some(to),
+            _ => None,
+        };
+        if let Some(to) = wrong {
+            return Err(MacroError::MovingInsideUnbalancedLoop {
+                location: to,
+                loop_at: open.location,
+            });
+        }
+
+        // A `@here` inside the body says where the cursor is *if the body
+        // ran*. A loop may run zero times, so the claim holds only where the
+        // body also leaves the cursor where it found it.
+        let ambiguous = open.here_inside && !same_place(self.position, open.entry_position);
+
+        self.position = match self.position {
+            _ if ambiguous => Position::Unknown(open.location),
+            here if balanced => here,
+            // Rule 2: the cell is gone, the offset within a record is not.
+            // From a known cell that offset is arithmetic; from a known offset
+            // it is unchanged.
+            Position::Known(cell) if whole_records => Position::Relative {
+                offset: cell.rem_euclid(stride.expect("whole records needs a stride")),
+                entered: open.location,
+            },
+            relative @ Position::Relative { .. } if whole_records => relative,
+            // Only the loop that *first* lost the position is worth naming:
+            // re-tagging on every later one would point at a symptom.
+            Position::Known(_) | Position::Relative { .. } => Position::Unknown(open.location),
+            unknown => unknown,
+        };
         Ok(())
     }
 
@@ -750,7 +791,7 @@ impl Scanner {
             (other, declared) => Err(MacroError::wrong_kind(
                 name,
                 other.kind(),
-                Kind::Constant,
+                Wanted::Constant,
                 location,
                 declared,
             )),
@@ -765,7 +806,7 @@ impl Scanner {
             (other, declared) => Err(MacroError::wrong_kind(
                 name,
                 other.kind(),
-                Kind::Variable,
+                Wanted::Target,
                 location,
                 declared,
             )),
@@ -1219,7 +1260,7 @@ impl Scanner {
                 let at_value = self.at;
                 let cell = self.number_or_name(
                     Directive::Var,
-                    Declaration::Var.missing_value(&name),
+                    || Declaration::Var.missing_value(&name),
                     at_value,
                 )?;
                 // Reaching cell N costs N moves, so a cell past the expansion
@@ -1279,7 +1320,7 @@ impl Scanner {
         let at_value = self.at;
         let size = self.number_or_name(
             Directive::Stride,
-            "expected a record size, as in `@stride 9`".to_string(),
+            || "expected a record size, as in `@stride 9`".to_string(),
             at_value,
         )?;
         if size == 0 || size > EXPANSION_LIMIT as u64 {
@@ -1324,7 +1365,7 @@ impl Scanner {
         let at_value = self.at;
         let offset = self.number_or_name(
             Directive::Field,
-            Declaration::Field.missing_value(&name),
+            || Declaration::Field.missing_value(&name),
             at_value,
         )?;
         if offset >= stride as u64 {
@@ -1372,7 +1413,7 @@ impl Scanner {
         if name.is_empty() {
             return Err(malformed(
                 directive.spelling(),
-                "expected the name of a cell declared with @var".to_string(),
+                "expected the name of a cell or a field, from `@var` or `@field`".to_string(),
                 at_name,
             ));
         }
@@ -1400,11 +1441,11 @@ impl Scanner {
             (Target::Cell(cell), Position::Known(here)) => (here, cell),
             (Target::Field(offset), Position::Relative { offset: here, .. }) => (here, offset),
             // Each kind needs the position the other one has.
-            (Target::Cell(_), Position::Relative { established, .. }) => {
+            (Target::Cell(_), Position::Relative { entered, .. }) => {
                 return Err(MacroError::OnlyOffsetKnown {
                     name,
                     location,
-                    established,
+                    entered,
                 });
             }
             (Target::Field(_), Position::Known(_)) => {
@@ -1428,13 +1469,19 @@ impl Scanner {
     /// `@here NAME` -- assert where the cursor is, emitting nothing.
     fn here(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         let (_, target) = self.cell_operand(Directive::Here)?;
+        // Inside a loop body this is a claim about where the cursor is *if the
+        // body ran*, and a loop may run no times at all. The `]` decides
+        // whether that leaves the exit ambiguous.
+        for open in &mut self.open_brackets {
+            open.here_inside = true;
+        }
         self.position = match target {
             Target::Cell(cell) => Position::Known(cell),
             // Which field of a record, not which cell of the tape -- which is
             // the point, since a scan stops wherever the data says.
             Target::Field(offset) => Position::Relative {
                 offset,
-                established: location,
+                entered: location,
             },
         };
         Ok(())
@@ -1498,7 +1545,7 @@ impl Scanner {
     fn number_or_name(
         &mut self,
         directive: Directive,
-        missing: String,
+        missing: impl Fn() -> String,
         at_value: SourceLocation,
     ) -> Result<u64, MacroError> {
         let token = self.token(char::is_whitespace).text;
@@ -1506,7 +1553,7 @@ impl Scanner {
         match classify(&token) {
             Operand::Number(value) => Ok(value),
             Operand::Name(named) => self.resolve(named, at_value),
-            Operand::Empty => Err(malformed(spelling, missing, at_value)),
+            Operand::Empty => Err(malformed(spelling, missing(), at_value)),
             Operand::Bad(detail) => Err(malformed(spelling, detail, at_value)),
         }
     }
@@ -1553,7 +1600,7 @@ impl Scanner {
         let at_value = self.at;
         let value = self.number_or_name(
             Directive::Define,
-            Declaration::Define.missing_value(&name),
+            || Declaration::Define.missing_value(&name),
             at_value,
         )?;
         self.end_of_directive(Directive::Define)?;
@@ -2194,13 +2241,13 @@ mod tests {
         let MacroError::WrongKind { found, wanted, .. } = &as_count else {
             panic!("expected a kind error, got {as_count:?}");
         };
-        assert_eq!((*found, *wanted), (Kind::Variable, Kind::Constant));
+        assert_eq!((*found, *wanted), (Kind::Variable, Wanted::Constant));
 
         let as_cell = expand("@define X 3\n@to X\n").unwrap_err();
         let MacroError::WrongKind { found, wanted, .. } = &as_cell else {
             panic!("expected a kind error, got {as_cell:?}");
         };
-        assert_eq!((*found, *wanted), (Kind::Constant, Kind::Variable));
+        assert_eq!((*found, *wanted), (Kind::Constant, Wanted::Target));
 
         // And the two share a namespace, so this is a redefinition.
         assert!(matches!(
@@ -2935,12 +2982,24 @@ mod relative_addressing {
     #[test]
     fn a_scan_still_loses_a_cell_even_when_it_keeps_a_field() {
         // Whole records preserve the *offset*. They say nothing about which
-        // record, so an absolute position is gone as it always was.
+        // record, so the cell is gone -- and the error says exactly that
+        // rather than the vaguer "position not known", because after such a
+        // loop the offset genuinely is known.
         let source = format!("{RECORD}@var v at 7\n@to v\n[\n>{{3}}\n]\n@to v\n");
         let error = expand(&source).unwrap_err();
         assert!(
-            matches!(error, MacroError::PositionUnknown { .. }),
+            matches!(error, MacroError::OnlyOffsetKnown { .. }),
             "{error:?}"
+        );
+
+        // And a field *is* reachable, without a `@here`: the cursor was at a
+        // known cell and the body moved whole records, so which field it is on
+        // is arithmetic. 7 is offset 1, so reaching field 2 is one step.
+        let reachable = format!("{RECORD}@var v at 7\n@to v\n[\n>{{3}}\n]\n@to two\n");
+        assert!(
+            expanded(&reachable).ends_with('>'),
+            "{}",
+            expanded(&reachable)
         );
     }
 
@@ -2981,6 +3040,82 @@ mod relative_addressing {
             panic!("expected a kind error, got {error:?}");
         };
         assert_eq!(*found, Kind::Field);
+    }
+
+    /// Emitted moves are not movement once a nested loop is involved.
+    ///
+    /// A scan runs a number of times nobody knows, so a body containing one
+    /// moves by an unknown amount however its `>` and `<` count up. Reading
+    /// the emitted total as the real one let the whole-records rule admit a
+    /// `@to` that is right on the first iteration and wrong on every one
+    /// after -- exactly what that rule exists to prevent.
+    #[test]
+    fn a_nested_scan_makes_the_count_mean_nothing() {
+        // Emitted: 1 - 1 + 1 + 2 = 3, a whole record. Actual: the scan's
+        // length plus two, which is not.
+        let source = format!("{RECORD}@here marker\n[\n@to one\n@to marker\n[>]\n>{{2}}\n]\n");
+        let error = expand(&source).unwrap_err();
+        assert!(
+            matches!(error, MacroError::MovingInsideUnbalancedLoop { .. }),
+            "{error:?}"
+        );
+
+        // The same for a body that emits nothing net. This one was wrong
+        // before records existed at all: `moved == 0` was read as balanced.
+        let cells = "@var v at 0\n@var w at 1\n@to v\n[\n@to w\n@to v\n[>]\n<\n]\n";
+        let error = expand(cells).unwrap_err();
+        assert!(
+            matches!(error, MacroError::MovingInsideUnbalancedLoop { .. }),
+            "{error:?}"
+        );
+
+        // A nested loop that moves by whole records is fine, because k of
+        // them is still whole records.
+        let nested = format!("{RECORD}@here marker\n[\n@to one\n@to marker\n[>{{3}}]\n>{{3}}\n]\n");
+        assert!(expand(&nested).is_ok(), "{:?}", expand(&nested).err());
+    }
+
+    /// A `@here` inside a loop describes where the cursor is if the body ran.
+    #[test]
+    fn a_here_inside_a_body_does_not_escape_a_loop_that_may_not_run() {
+        let source = format!(
+            "{RECORD}@var v at 5\n@to v\n[\n@here marker\n@to two\n@to marker\n>{{3}}\n]\n@to one\n"
+        );
+        let error = expand(&source).unwrap_err();
+        assert!(
+            matches!(error, MacroError::PositionUnknown { .. }),
+            "{error:?}"
+        );
+
+        // One that leaves the cursor where it found it is not ambiguous:
+        // both the zero-iteration and the k-iteration answers agree.
+        let agrees =
+            format!("{RECORD}@here marker\n[\n@here marker\n@to one\n@to marker\n]\n@to two\n");
+        assert!(expand(&agrees).is_ok(), "{:?}", expand(&agrees).err());
+    }
+
+    /// Rule 2 as the module documents it: from a *known cell* too, not only
+    /// from a known offset. Which field cell 7 is on with a stride of three is
+    /// arithmetic, and a loop over whole records does not change it.
+    #[test]
+    fn a_known_cell_becomes_a_known_field_across_a_scan() {
+        let source = format!("{RECORD}@var v at 7\n@to v\n[\n>{{3}}\n]\n@to two\n");
+        // 7 is offset 1; field `two` is offset 2; one step.
+        assert!(
+            expanded(&source).ends_with(">>>]>"),
+            "{}",
+            expanded(&source)
+        );
+    }
+
+    #[test]
+    fn a_to_wants_a_cell_or_a_field_and_says_both() {
+        let error = expand("@define C 3\n@to C\n").unwrap_err();
+        let MacroError::WrongKind { wanted, .. } = &error else {
+            panic!("expected a kind error, got {error:?}");
+        };
+        assert_eq!(*wanted, Wanted::Target);
+        assert!(error.to_string().contains("cell or field"), "{error}");
     }
 
     #[test]

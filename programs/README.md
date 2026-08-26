@@ -48,7 +48,8 @@ file.
   only way back. Also cells the expander chose and letters written as letters.
 
 - **`records.bfm`** - an array of records walked by a scan, with `@stride` and
-  `@field` naming the parts, and never a cell named at all.
+  `@field` naming the parts. Only the array's head is a cell; everything inside
+  the loop is a field, so the record size is one edit.
 
 - **`compare.bfm`** - the equality test from the
   [esolangs idiom catalogue](https://esolangs.org/wiki/Brainfuck_algorithms),
