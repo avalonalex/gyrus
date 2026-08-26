@@ -124,6 +124,20 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("Macros are nested {depth} deep at {location}, past the limit of {limit}")]
+    MacroTooDeep {
+        depth: usize,
+        limit: usize,
+        location: SourceLocation,
+    },
+
+    #[error("Expanding this used {invocations} macro invocations, past the limit of {limit}")]
+    TooManyInvocations {
+        invocations: u64,
+        limit: u64,
+        location: SourceLocation,
+    },
+
     #[error("'@{name}' expands itself at {location}")]
     CircularMacro {
         name: String,
@@ -202,6 +216,8 @@ impl MacroError {
             | MacroError::MovingInsideUnbalancedLoop { location, .. }
             | MacroError::UnmatchedOpenBracket { location }
             | MacroError::UnmatchedCloseBracket { location }
+            | MacroError::MacroTooDeep { location, .. }
+            | MacroError::TooManyInvocations { location, .. }
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
             | MacroError::DeclarationInsideMacro { location, .. }
@@ -304,6 +320,19 @@ impl MacroError {
             MacroError::UnmatchedCloseBracket { .. } => {
                 Some("This ']' closes a loop that was never opened.".to_string())
             }
+            MacroError::MacroTooDeep { .. } => Some(
+                "A macro that uses itself is caught by name, but a long enough chain of \
+                 different macros is not -- and expansion is recursive, so a deep enough one \
+                 would exhaust the stack rather than report anything."
+                    .to_string(),
+            ),
+            MacroError::TooManyInvocations { .. } => Some(
+                "Macros that expand to nothing still cost time to expand, and a handful of \
+                 macros that each invoke another twice reach billions of invocations in a \
+                 few lines. The emitted-instruction budget cannot see that, because nothing \
+                 is emitted."
+                    .to_string(),
+            ),
             MacroError::ArgumentCount {
                 name, expected, ..
             } => Some(match expected {

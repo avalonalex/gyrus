@@ -41,7 +41,7 @@ file.
 - **`macros.bfm`** - the same idiom as a `@macro` with parameters, used three
   times.
 
-Both are load-bearing rather than illustrative:
+All three are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them.
 
 There is no `gyrus`-side way to run these yet; they go through the library.
