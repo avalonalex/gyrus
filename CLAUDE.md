@@ -33,8 +33,9 @@ the development compiler.
   expands macro source to pure BrainFuck and carries an origin map, so runtime
   errors name the `.bfm` rather than the expansion. Written entirely against
   `gyrus`'s public API, as the debugger was. `@define`, `OP{N}`,
-  `@var`/`@to`/`@here` with static cursor tracking, and `@macro` with
-  parameters; `@include`, the conditionals and the CLI wiring are not built.
+  `@var`/`@to`/`@here` with static cursor tracking, `@stride`/`@field` for
+  record-relative addressing, and `@macro` with parameters; `@include`, the
+  conditionals and the CLI wiring are not built.
   See `docs/architecture.md`
 - **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
   `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
@@ -675,8 +676,9 @@ code, or anything beyond the idea.
 
 **Being built**: the macro preprocessor (`gyrus-macro`). The scoped language is
 complete — `@define`, repeat counts, `@var`/`@to`/`@here` with cursor tracking,
-`@macro` with parameters — and so is the source map, so a runtime error in a
-`.bfm` reports the line and column somebody wrote. Its oracle generator
+`@stride`/`@field` for arrays of records walked by scan loops, and `@macro`
+with parameters — and so is the source map, so a runtime error in a `.bfm`
+reports the line and column somebody wrote. Its oracle generator
 (`tests/oracle.rs`) is the second thing in the repository that proves
 correctness rather than agreement between engines. `@include`, the
 conditionals, and the CLI wiring are not there yet.

@@ -180,8 +180,14 @@ map holds one position per byte.
 
 **Cursor tracking is measured in movement, not position.** A loop body that
 does not return the cursor leaves the position unknown rather than being
-refused, because `[>]` is ordinary BrainFuck. See `expand.rs`'s module
-documentation for the three rules that follow from that.
+refused, because `[>]` is ordinary BrainFuck.
+
+**A record's stride is what a scan preserves.** With `@stride` declared, a loop
+whose body moves by a whole number of records loses the cursor's *cell* but
+keeps which *field* of a record it is on — so `@field` names stay reachable
+across a scan, which is how an array is walked in every large BrainFuck
+program. mandelbrot's tape is records of nine cells and 124 of its loops are
+that scan. See `expand.rs`'s module documentation for the rules.
 
 ## The optimized interpreter
 

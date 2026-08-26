@@ -21,6 +21,8 @@ use thiserror::Error;
 pub enum Kind {
     Constant,
     Variable,
+    /// An offset within a record, rather than a cell of the tape.
+    Field,
     Macro,
 }
 
@@ -29,6 +31,7 @@ impl std::fmt::Display for Kind {
         f.write_str(match self {
             Kind::Constant => "constant",
             Kind::Variable => "variable",
+            Kind::Field => "field",
             Kind::Macro => "macro",
         })
     }
@@ -107,6 +110,23 @@ pub enum MacroError {
         location: SourceLocation,
         /// The `[` of the loop that lost it.
         lost_at: SourceLocation,
+    },
+
+    #[error(
+        "'@to {name}' at {location} needs the cursor's cell, and only its offset in a record \
+         is known"
+    )]
+    OnlyOffsetKnown {
+        name: String,
+        location: SourceLocation,
+        /// The `@here` that put the cursor in a record.
+        established: SourceLocation,
+    },
+
+    #[error("'@to {name}' at {location} is an offset, and the cursor is not inside a record")]
+    NotInARecord {
+        name: String,
+        location: SourceLocation,
     },
 
     #[error("'@to' at {location} is inside a loop that does not put the cursor back")]
@@ -218,6 +238,8 @@ impl MacroError {
             | MacroError::StrayBrace { location, .. }
             | MacroError::WrongKind { location, .. }
             | MacroError::PositionUnknown { location, .. }
+            | MacroError::OnlyOffsetKnown { location, .. }
+            | MacroError::NotInARecord { location, .. }
             | MacroError::MovingInsideUnbalancedLoop { location, .. }
             | MacroError::UnmatchedOpenBracket { location }
             | MacroError::UnmatchedCloseBracket { location }
@@ -302,7 +324,7 @@ impl MacroError {
                 // have needed a special case here.
                 match found {
                     Kind::Constant => format!("`+{{{name}}}` uses its value as a repeat count"),
-                    Kind::Variable => format!("`@to {name}` moves the cursor to it"),
+                    Kind::Variable | Kind::Field => format!("`@to {name}` moves the cursor to it"),
                     Kind::Macro => format!("`@{name}` expands it"),
                 }
             )),
@@ -311,6 +333,16 @@ impl MacroError {
                  where it ends up depends on the data. That is ordinary BrainFuck -- `[>]` \
                  is a scan -- and it is only a problem for `@to`. Say `@here NAME` once you \
                  know where the scan landed."
+            )),
+            MacroError::OnlyOffsetKnown { established, .. } => Some(format!(
+                "The `@here` at {established} said which field of a record the cursor was on, \
+                 not which cell of the tape -- which is the point of it, since a scan stops \
+                 wherever the data says. Only `@field` names are reachable from there; a \
+                 `@var` needs a `@here` naming one."
+            )),
+            MacroError::NotInARecord { name, .. } => Some(format!(
+                "'{name}' is an offset within a record, so it needs a record to be an offset \
+                 into. `@here {name}` says the cursor is on that field of one."
             )),
             MacroError::MovingInsideUnbalancedLoop { loop_at, .. } => Some(format!(
                 "The loop at {loop_at} leaves the cursor somewhere other than it found it, \

@@ -145,6 +145,17 @@ phase-1 language is complete, and so is the oracle generator that was the
 stated reason for building it -- see `docs/testing.md`. What remains is
 plumbing: nothing can run a `.bfm` from a terminal yet.
 
+**Beyond the scoped language**, `@stride` and `@field` were added after
+measuring what a mandelbrot-scale program actually needs. 35% of mandelbrot's
+686 loops are textually unbalanced and 124 of them are one of two scans over
+an array of nine-cell records, so `@to` naming a cell was unusable in the only
+part of such a program that matters. A field is an offset rather than a cell,
+and a loop moving by whole records keeps it. What is still missing for work at
+that scale, in order: **address arithmetic** (`@to base + i * STRIDE` -- there
+are no expressions, and bfmacro has none either), and **multi-cell variables**,
+which 16-bit arithmetic needs and which the original design anticipated with a
+`size` field it never used.
+
 **A decision `@include` would force.** The origin map holds one position per
 emitted byte against one source, which `@macro` fits by policy -- a byte names
 the invocation, not the definition -- but a second *file* it cannot express at
@@ -1148,6 +1159,15 @@ unmeasurable here or a different project.
 ## Related Work
 
 ### Similar Systems
+- **The esolangs idiom catalogue**
+  (<https://esolangs.org/wiki/Brainfuck_algorithms>) and the standard BF
+  library (<https://esoteric.sange.fi/brainfuck/bf-source/lib/>). Worth reading
+  as a fitness test rather than a reference: the catalogue writes its idioms in
+  a notation where names are cells and juxtaposition is movement, which is what
+  `@var` and `@to` are, so they transcribe line for line --
+  `programs/macros/compare.bfm` is one of them, unaltered. The library's array
+  idiom is a stride of two walked by `[>>]`, which is what `@stride` and
+  `@field` are for.
 - **bfmacro** (Frans Faase, Tufts) - Original inspiration.
   <https://www.cs.tufts.edu/~couch/bfmacro/bfmacro/>. Worth reading before
   designing anything further here: it reached the same static-pointer-tracking
