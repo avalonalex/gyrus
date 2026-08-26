@@ -81,8 +81,15 @@ pub enum Watch {
 
 impl Watch {
     /// Whether reaching this stops execution.
+    ///
+    /// Exhaustive rather than a negated `matches!`: a display-only kind added
+    /// later would otherwise default to stopping, drawing a `●` beside a row
+    /// that never stops anything and making the hook watch output for nothing.
     pub fn stops(self) -> bool {
-        !matches!(self, Watch::Cell(_))
+        match self {
+            Watch::Cell(_) => false,
+            Watch::AnyOutput | Watch::Output(_) => true,
+        }
     }
 
     /// Whether a `.` about to print `byte` satisfies this.
@@ -99,20 +106,29 @@ impl Watch {
         match self {
             Watch::Cell(address) => format!("cell[{address}]"),
             Watch::AnyOutput => "output".to_string(),
-            Watch::Output(byte) => format!("output {}", describe_byte(byte)),
+            Watch::Output(byte) => format!("output {}", gyrus_tui::describe_byte(byte)),
         }
     }
 }
 
-/// A byte as someone would say it: `'W'`, or `#10` when it does not print.
-pub fn describe_byte(byte: u8) -> String {
-    match byte {
-        b'\n' => "'\\n'".to_string(),
-        b'\t' => "'\\t'".to_string(),
-        b'\r' => "'\\r'".to_string(),
-        0x20..=0x7e => format!("'{}'", byte as char),
-        _ => format!("#{byte}"),
-    }
+/// Why execution stopped.
+///
+/// Recorded where the decision is made rather than reconstructed afterwards.
+/// Working it out again from the snapshot answers "could something have stopped
+/// here", which is a different question: stepping onto a `.` that an output
+/// watch names is a step, not a watch, and a breakpoint on such a `.` is a
+/// breakpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// A step, a run-to-cursor arriving, or the stop before the first
+    /// instruction.
+    Stepped,
+    /// A breakpoint on this instruction.
+    Breakpoint,
+    /// An output watch matched the byte this `.` is about to print.
+    OutputWatch,
+    /// A `,` with nothing queued to read.
+    NeedsInput,
 }
 
 /// How prominently to draw a transient message.
@@ -339,6 +355,10 @@ pub struct Session {
     breakpoint_revision: u64,
 
     pub watches: Vec<Watch>,
+    /// Bumped whenever `watches` changes, so the hook knows to rebuild.
+    watch_revision: u64,
+    /// Why execution stopped, set where that is decided.
+    pub stop_reason: StopReason,
     pub output: Vec<u8>,
 
     /// Bytes queued for the program's next `,`.
@@ -385,6 +405,8 @@ impl Session {
             breakpoints: BTreeSet::new(),
             breakpoint_revision: 0,
             watches: Vec::new(),
+            watch_revision: 0,
+            stop_reason: StopReason::Stepped,
             output: Vec::new(),
             pending_input: VecDeque::new(),
             consumed_input: Vec::new(),
@@ -556,29 +578,38 @@ impl Session {
         self.message = Some((message.into(), kind));
     }
 
-    /// Whether execution is stopped on a breakpoint.
-    pub fn at_breakpoint(&self) -> bool {
-        self.snapshot.location.is_some()
-            && self
-                .program
-                .position(self.snapshot.index)
-                .is_some_and(|position| self.breakpoints.contains(&position))
+    /// How many times the watches have changed.
+    pub fn watch_revision(&self) -> u64 {
+        self.watch_revision
     }
 
-    /// Whether a `.` printing `byte` should stop execution.
-    pub fn output_stops(&self, byte: u8) -> bool {
-        self.watches.iter().any(|watch| watch.matches_output(byte))
+    /// One entry per byte value: whether a `.` printing it should stop.
+    ///
+    /// A table rather than a predicate because the hook consults it on every
+    /// `.` executed, and walking the watch list there would reintroduce the
+    /// per-instruction work this hook was restructured to remove.
+    pub fn output_stop_table(&self) -> [bool; 256] {
+        // Built from `Watch::matches_output` rather than re-deriving the rule,
+        // so the table and the definition cannot drift. Two hundred and
+        // fifty-six passes over a handful of watches, once per watch change.
+        let mut table = [false; 256];
+        for (byte, entry) in table.iter_mut().enumerate() {
+            let byte = byte as u8;
+            *entry = self.watches.iter().any(|watch| watch.matches_output(byte));
+        }
+        table
     }
 
     /// Whether any watch stops on output at all.
-    ///
-    /// Checked first on the hot path, so a program with only cell watches pays
-    /// nothing for the feature.
     pub fn watches_output(&self) -> bool {
         self.watches.iter().any(|watch| watch.stops())
     }
 
-    /// Add a watch, unless it is already there. Returns whether it was new.
+    /// Add a watch and select it, unless it is already there.
+    ///
+    /// Selecting it matters: the list is kept sorted, so a watch added at the
+    /// end of the list is rarely at the end of the display, and `W` would
+    /// otherwise remove whatever happened to sit at the old selection.
     pub fn add_watch(&mut self, watch: Watch) -> bool {
         if self.watches.contains(&watch) {
             return false;
@@ -591,7 +622,22 @@ impl Session {
             Watch::AnyOutput => (1, 0),
             Watch::Output(byte) => (1, usize::from(*byte) + 1),
         });
+        self.watch_revision += 1;
+        if let Some(index) = self.watches.iter().position(|w| *w == watch) {
+            self.ui.watch_selected = index;
+        }
         true
+    }
+
+    /// Remove the watch at `index`, keeping the selection in range.
+    pub fn remove_watch(&mut self, index: usize) -> Option<Watch> {
+        if index >= self.watches.len() {
+            return None;
+        }
+        let watch = self.watches.remove(index);
+        self.watch_revision += 1;
+        self.ui.watch_selected = index.min(self.watches.len().saturating_sub(1));
+        Some(watch)
     }
 
     /// The instruction the user's cursor names, snapping to the nearest one on
@@ -664,18 +710,123 @@ mod watch_tests {
     }
 
     #[test]
-    fn a_byte_reads_as_a_character_when_it_has_one() {
-        assert_eq!(describe_byte(b'W'), "'W'");
-        assert_eq!(describe_byte(b' '), "' '");
-        assert_eq!(describe_byte(b'\n'), "'\\n'");
-        assert_eq!(describe_byte(0), "#0");
-        assert_eq!(describe_byte(200), "#200");
-    }
-
-    #[test]
     fn labels_say_what_is_being_watched() {
         assert_eq!(Watch::Cell(12).label(), "cell[12]");
         assert_eq!(Watch::AnyOutput.label(), "output");
         assert_eq!(Watch::Output(b'\n').label(), "output '\\n'");
+    }
+}
+
+#[cfg(test)]
+mod session_watch_tests {
+    use super::*;
+    use crate::program::Program;
+    use gyrus_tui::{TerminalGuard, Tui};
+    use std::path::PathBuf;
+
+    /// A session with no terminal behind it.
+    ///
+    /// `Session` owns a `Tui` because the hook draws through it; these tests
+    /// only touch the watch list, so the terminal is never used. `TerminalGuard`
+    /// is not entered — this builds the backend directly against a sink.
+    fn session() -> Session {
+        let program = Program::from_source(PathBuf::from("t.bf"), "+.>.").expect("parses");
+        Session::new(Arc::new(program), test_terminal(), 32)
+    }
+
+    fn test_terminal() -> Tui {
+        use gyrus_tui::ratatui::Terminal;
+        use gyrus_tui::ratatui::backend::CrosstermBackend;
+        // Never drawn to in these tests; `TerminalGuard` is what would put a
+        // real terminal in raw mode, and it is deliberately not used here.
+        let _ = TerminalGuard::enter;
+        Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("backend")
+    }
+
+    #[test]
+    fn cells_sort_before_output_conditions() {
+        let mut session = session();
+        assert!(session.add_watch(Watch::Output(b'W')));
+        assert!(session.add_watch(Watch::Cell(5)));
+        assert!(session.add_watch(Watch::AnyOutput));
+        assert!(session.add_watch(Watch::Cell(1)));
+        assert_eq!(
+            session.watches,
+            vec![
+                Watch::Cell(1),
+                Watch::Cell(5),
+                Watch::AnyOutput,
+                Watch::Output(b'W'),
+            ]
+        );
+    }
+
+    #[test]
+    fn adding_a_watch_selects_it_so_the_next_w_removes_the_right_one() {
+        // The list is kept sorted, so a watch added last is rarely displayed
+        // last -- and `W` acts on the selection.
+        let mut session = session();
+        session.add_watch(Watch::Cell(10));
+        session.add_watch(Watch::Output(b'\n'));
+        let selected = session.watches[session.ui.watch_selected];
+        assert_eq!(selected, Watch::Output(b'\n'));
+        assert_eq!(
+            session.remove_watch(session.ui.watch_selected),
+            Some(selected)
+        );
+        assert_eq!(session.watches, vec![Watch::Cell(10)]);
+    }
+
+    #[test]
+    fn adding_the_same_watch_twice_does_nothing_the_second_time() {
+        let mut session = session();
+        assert!(session.add_watch(Watch::AnyOutput));
+        assert!(!session.add_watch(Watch::AnyOutput));
+        assert_eq!(session.watches.len(), 1);
+    }
+
+    #[test]
+    fn removing_past_the_end_is_not_a_panic() {
+        let mut session = session();
+        assert_eq!(session.remove_watch(0), None);
+    }
+
+    #[test]
+    fn the_stop_table_says_exactly_which_bytes_stop() {
+        let mut session = session();
+        assert!(session.output_stop_table().iter().all(|stop| !stop));
+        assert!(!session.watches_output());
+
+        // A cell watch is display-only and must not switch the feature on.
+        session.add_watch(Watch::Cell(0));
+        assert!(!session.watches_output());
+        assert!(session.output_stop_table().iter().all(|stop| !stop));
+
+        session.add_watch(Watch::Output(b'W'));
+        assert!(session.watches_output());
+        let table = session.output_stop_table();
+        assert!(table[usize::from(b'W')]);
+        assert!(!table[usize::from(b'w')]);
+        assert_eq!(table.iter().filter(|stop| **stop).count(), 1);
+
+        session.add_watch(Watch::AnyOutput);
+        assert!(session.output_stop_table().iter().all(|stop| *stop));
+    }
+
+    #[test]
+    fn the_revision_moves_only_when_the_watches_do() {
+        let mut session = session();
+        let start = session.watch_revision();
+        session.add_watch(Watch::AnyOutput);
+        assert_ne!(session.watch_revision(), start);
+        let after = session.watch_revision();
+        session.add_watch(Watch::AnyOutput);
+        assert_eq!(
+            session.watch_revision(),
+            after,
+            "a rejected add is not a change"
+        );
+        session.remove_watch(0);
+        assert_ne!(session.watch_revision(), after);
     }
 }

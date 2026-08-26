@@ -203,7 +203,7 @@ rather than silently never matching.
 This is the answer to "run until it prints something wrong", which a positional
 breakpoint cannot express: on `hello_world.bf`, `--break-output '\n'` stops on
 the very last instruction of the program, and finding that by eye would mean
-setting a breakpoint on each of its twelve `.` characters in turn.
+setting a breakpoint on each of its thirteen `.` characters in turn.
 
 ## Stepping over and out
 

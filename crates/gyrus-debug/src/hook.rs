@@ -14,7 +14,7 @@ use gyrus::hooks::{ExecutionHook, HookContext, HookDecision, LoopInfo};
 use gyrus::io::{BfInput, BfOutput};
 use gyrus_tui::cell_under;
 
-use crate::state::{RunState, Session, should_pause};
+use crate::state::{RunState, Session, StopReason, should_pause};
 use crate::ui;
 
 /// How often the screen refreshes while a program runs freely.
@@ -63,34 +63,35 @@ pub struct DebuggerHook {
     /// Whether any watch stops on output, so a program with none pays only a
     /// `matches!` per instruction for the feature.
     watches_output: bool,
+    /// One entry per byte value: whether printing it stops execution. A table
+    /// rather than a walk of the watch list, and cached rather than locked, for
+    /// the same reason the breakpoint bitmap is.
+    output_stops: [bool; 256],
+    /// The `watch_revision` the table was built from.
+    watch_revision: u64,
 }
 
 impl DebuggerHook {
     /// A hook driving `session`.
     pub fn new(session: Shared) -> Self {
+        let shared = Arc::clone(&session);
         let mut hook = Self {
             session,
             since_poll: 0,
             run: RunState::Step,
             exiting: false,
             stops: Vec::new(),
+            // `u64::MAX` cannot be a real revision, so the first `sync` builds
+            // both caches. That is why this can just call `sync` rather than
+            // repeating its body field by field.
             stops_revision: u64::MAX,
             watches_output: false,
+            output_stops: [false; 256],
+            watch_revision: u64::MAX,
         };
-        let guard = lock(&hook.session);
-        let snapshot = (
-            guard.run,
-            guard.exit.is_some(),
-            guard.breakpoint_revision(),
-            guard.watches_output(),
-        );
-        let bitmap = guard.breakpoint_bitmap();
+        let guard = lock(&shared);
+        hook.sync(&guard);
         drop(guard);
-        hook.run = snapshot.0;
-        hook.exiting = snapshot.1;
-        hook.stops = bitmap;
-        hook.stops_revision = snapshot.2;
-        hook.watches_output = snapshot.3;
         hook
     }
 
@@ -103,31 +104,61 @@ impl DebuggerHook {
             self.stops = session.breakpoint_bitmap();
             self.stops_revision = session.breakpoint_revision();
         }
+        if self.watch_revision != session.watch_revision() {
+            self.output_stops = session.output_stop_table();
+            self.watch_revision = session.watch_revision();
+        }
+    }
+
+    /// Why this instruction should stop, if it should.
+    ///
+    /// One place, so the header can report the reason instead of guessing at it
+    /// afterwards from a snapshot that cannot tell a step onto a `.` from an
+    /// output watch firing on the same `.`.
+    fn stop_reason(
+        &self,
+        instruction: &Instruction,
+        context: &HookContext,
+        index: usize,
+    ) -> Option<StopReason> {
+        if self.stops.get(index).copied().unwrap_or(false) {
+            return Some(StopReason::Breakpoint);
+        }
+        if matches!(instruction, Instruction::Input) {
+            // Rare enough in a hot loop that a lock costs nothing here, and the
+            // queue is drained by `DebugInput` while the program runs, so it is
+            // the one input to the rule that cannot be cached.
+            if lock(&self.session).starving_for_input() {
+                return Some(StopReason::NeedsInput);
+            }
+        }
+        if self.watches_output && matches!(instruction, Instruction::Output) {
+            // A cursor off the tape reads as zero because that is what the
+            // unbounded model is about to print there; under the fixed model the
+            // next thing that happens is an out-of-bounds error, and stopping
+            // just before it is a help rather than a lie.
+            let byte = cell_under(context.memory(), context.pointer().0).unwrap_or(0);
+            if self.output_stops[usize::from(byte)] {
+                return Some(StopReason::OutputWatch);
+            }
+        }
+        should_pause(self.run, false, index, false).then_some(StopReason::Stepped)
     }
 
     /// Called once for every instruction, just before it executes.
     fn reach(&mut self, instruction: &Instruction, context: &HookContext) -> HookDecision {
         let index = context.instruction_index();
-        let at_breakpoint = self.stops.get(index).copied().unwrap_or(false);
 
-        let stop = if self.exiting {
-            true
-        } else if matches!(instruction, Instruction::Input) {
-            // Rare enough in a hot loop that a lock costs nothing here.
-            let starving = lock(&self.session).starving_for_input();
-            should_pause(self.run, at_breakpoint, index, starving)
-        } else if self.watches_output && matches!(instruction, Instruction::Output) {
-            // Stop *before* the `.`, like everything else here: the tape still
-            // holds the byte about to be printed, which is the state that
-            // explains it. One `space` then shows it land in the output panel.
-            let printing = cell_under(context.memory(), context.pointer().0);
-            let watched = printing.is_some_and(|byte| lock(&self.session).output_stops(byte));
-            watched || should_pause(self.run, at_breakpoint, index, false)
+        // Stop *before* the instruction, output watches included: the tape still
+        // holds the byte a `.` is about to print, which is the state that
+        // explains it, and one `space` then shows it land in the output panel.
+        let reason = if self.exiting {
+            Some(StopReason::Stepped)
         } else {
-            should_pause(self.run, at_breakpoint, index, false)
+            self.stop_reason(instruction, context, index)
         };
 
-        if !stop {
+        if reason.is_none() {
             self.since_poll += 1;
             if self.since_poll < POLL_INTERVAL {
                 return HookDecision::Continue;
@@ -156,6 +187,9 @@ impl DebuggerHook {
         let shared = Arc::clone(&self.session);
         let mut session = lock(&shared);
         observe(&mut session, context, true);
+        if let Some(reason) = reason {
+            session.stop_reason = reason;
+        }
         session.touch_draw();
         let decision = ui::pause(&mut session);
         self.sync(&session);

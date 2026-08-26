@@ -26,18 +26,18 @@ pub struct WatchEntry {
 }
 
 impl WatchEntry {
-    /// A row that only displays something.
-    pub fn shown(label: impl Into<String>, value: impl Into<String>) -> Self {
+    /// A row showing `label` and `value`. Displayed only, until
+    /// [`Self::stopping`] says otherwise.
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             value: value.into(),
             changed: false,
-            stops: true,
+            stops: false,
         }
-        .stopping(false)
     }
 
-    /// A row whose condition stops execution.
+    /// Whether reaching this row's condition stops execution.
     pub fn stopping(mut self, stops: bool) -> Self {
         self.stops = stops;
         self

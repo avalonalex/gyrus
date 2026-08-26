@@ -14,7 +14,7 @@ use gyrus_tui::{
 };
 
 use crate::state::{
-    Exit, Focus, Modal, Note, Outcome, Prompt, PromptKind, RunState, Session, Watch,
+    Exit, Focus, Modal, Note, Outcome, Prompt, PromptKind, RunState, Session, StopReason, Watch,
 };
 
 /// How wide the source column is, as a percentage.
@@ -251,7 +251,7 @@ fn draw(session: &mut Session) -> io::Result<()> {
         if panes.right_bottom.height > 0 {
             frame.render_widget(
                 WatchList::new(&watches, theme)
-                    .empty_hint("none — w watches a cell, O stops on output")
+                    .empty_hint("none — w cell, O output")
                     .selected(if watches.is_empty() {
                         None
                     } else {
@@ -332,11 +332,12 @@ fn run_state_label(session: &Session) -> (String, Color) {
         // Waiting for input is a state, not an event: a message on the status
         // line is cleared by the next keypress, and the user is then looking at
         // a stopped program with no indication of why it stopped.
-        (None, false) if needs_input(session) => ("needs input".to_string(), theme.modified),
-        (None, false) if stopped_on_output(session) => {
-            ("output watch".to_string(), theme.breakpoint)
-        }
-        (None, false) if session.at_breakpoint() => ("breakpoint".to_string(), theme.breakpoint),
+        (None, false) if session.run == RunState::Step => match session.stop_reason {
+            StopReason::NeedsInput => ("needs input".to_string(), theme.modified),
+            StopReason::OutputWatch => ("output watch".to_string(), theme.breakpoint),
+            StopReason::Breakpoint => ("breakpoint".to_string(), theme.breakpoint),
+            StopReason::Stepped => ("paused".to_string(), theme.accent),
+        },
         (None, false) => match session.run {
             RunState::Step => ("paused".to_string(), theme.accent),
             RunState::Continue => ("running".to_string(), theme.modified),
@@ -415,15 +416,15 @@ fn watch_entries(session: &Session) -> Vec<WatchEntry> {
         .watches
         .iter()
         .map(|watch| match watch {
-            Watch::Cell(address) => WatchEntry::shown(
+            Watch::Cell(address) => WatchEntry::new(
                 watch.label(),
                 cell_under(&session.snapshot.memory, *address as isize)
                     .map_or_else(|| "off tape".to_string(), |byte| byte.to_string()),
             )
             .changed(session.modified.contains(address)),
-            Watch::AnyOutput => WatchEntry::shown(watch.label(), "any byte").stopping(true),
+            Watch::AnyOutput => WatchEntry::new(watch.label(), "any byte").stopping(true),
             Watch::Output(byte) => {
-                WatchEntry::shown(watch.label(), format!("byte {byte}")).stopping(true)
+                WatchEntry::new(watch.label(), format!("byte {byte}")).stopping(true)
             }
         })
         .collect()
@@ -627,9 +628,9 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
                 session.note("nothing is being watched", Note::Warn);
             } else {
                 let index = session.ui.watch_selected.min(session.watches.len() - 1);
-                let watch = session.watches.remove(index);
-                session.ui.watch_selected = index.min(session.watches.len().saturating_sub(1));
-                session.note(format!("stopped watching {}", watch.label()), Note::Info);
+                if let Some(watch) = session.remove_watch(index) {
+                    session.note(format!("stopped watching {}", watch.label()), Note::Info);
+                }
             }
             Flow::Stay
         }
@@ -742,17 +743,6 @@ pub fn parse_output_watch(text: &str) -> Result<Watch, String> {
         .ok_or_else(|| format!("{text:?} is not a character, an escape, #0..#255, or \"any\""))
 }
 
-/// Whether execution is stopped before a `.` that a watch is waiting for.
-fn stopped_on_output(session: &Session) -> bool {
-    session.snapshot.location.is_some()
-        && matches!(
-            session.program.instruction_at(session.snapshot.index),
-            Some(gyrus::Instruction::Output)
-        )
-        && cell_under(&session.snapshot.memory, session.snapshot.pointer)
-            .is_some_and(|byte| session.output_stops(byte))
-}
-
 /// Whether the instruction about to run is a `,` with nothing queued to read.
 fn needs_input(session: &Session) -> bool {
     session.snapshot.location.is_some()
@@ -834,7 +824,14 @@ fn handle_prompt_key(session: &mut Session, key: KeyEvent) -> Flow {
 }
 
 fn apply_prompt(session: &mut Session, prompt: Prompt) {
-    let text = prompt.buffer.trim().to_string();
+    // Not trimmed for an output watch: a single space is a byte someone might
+    // reasonably want to stop on, and trimming would turn it into the empty
+    // answer, which means "any byte" -- silently, and with a note that reads
+    // like confirmation.
+    let text = match prompt.kind {
+        PromptKind::OutputWatch => prompt.buffer.clone(),
+        _ => prompt.buffer.trim().to_string(),
+    };
     match prompt.kind {
         PromptKind::Watch => match text.parse::<usize>() {
             Ok(address) => {
