@@ -37,6 +37,21 @@ pub fn printable(byte: u8, placeholder: char) -> char {
     }
 }
 
+/// A byte as someone would say it: `'W'`, `'\n'`, or `#200` when it does not
+/// print.
+///
+/// Beside [`printable`] because it asks the same question about the same range,
+/// and two answers to that in two crates would eventually disagree.
+pub fn describe_byte(byte: u8) -> String {
+    match byte {
+        b'\n' => "'\\n'".to_string(),
+        b'\t' => "'\\t'".to_string(),
+        b'\r' => "'\\r'".to_string(),
+        byte if printable(byte, '\0') != '\0' => format!("'{}'", byte as char),
+        _ => format!("#{byte}"),
+    }
+}
+
 /// Cells whose value differs between two tapes.
 ///
 /// Handles `after` being longer, which is what an unbounded tape that just grew
@@ -75,6 +90,15 @@ mod tests {
         assert_eq!(printable(b' ', '.'), ' ');
         assert_eq!(printable(0x7f, '.'), '.');
         assert_eq!(printable(0, '·'), '·');
+    }
+
+    #[test]
+    fn a_byte_reads_as_a_character_when_it_has_one() {
+        assert_eq!(describe_byte(b'W'), "'W'");
+        assert_eq!(describe_byte(b' '), "' '");
+        assert_eq!(describe_byte(b'\n'), "'\\n'");
+        assert_eq!(describe_byte(0), "#0");
+        assert_eq!(describe_byte(200), "#200");
     }
 
     #[test]

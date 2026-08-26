@@ -422,6 +422,16 @@ mod tests {
         let calc = Program::load(&root.join("programs/third-party/advanced/calc.bf"))
             .expect("calc.bf parses");
         assert_eq!(calc.markers('@').0.len(), 4, "calc.bf's @ count");
+
+        // docs/debugger.md counts hello_world.bf's `.` characters to argue that
+        // an output watch beats setting a breakpoint on each of them. It shipped
+        // saying twelve.
+        let hello = Program::load(&root.join("programs/basic/hello_world.bf"))
+            .expect("hello_world.bf parses");
+        let prints = (0..hello.instruction_count())
+            .filter(|index| matches!(hello.instruction_at(*index), Some(Instruction::Output)))
+            .count();
+        assert_eq!(prints, 13, "hello_world.bf's `.` count");
     }
 
     #[test]

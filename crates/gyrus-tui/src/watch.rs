@@ -8,15 +8,46 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::theme::Theme;
 
-/// One watched cell, resolved against the current tape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One row of the watch panel, already resolved to text.
+///
+/// Deliberately not a cell address: what a caller watches is its own business.
+/// The debugger watches cells and output bytes, and this panel only needs to
+/// know how wide the labels are.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchEntry {
-    /// Cell address on the tape.
-    pub address: usize,
-    /// Current value, or `None` when the address is past the end of the tape.
-    pub value: Option<u8>,
-    /// Whether the value changed since the previous pause.
+    /// What is being watched, e.g. `cell[3]` or `output`.
+    pub label: String,
+    /// Its current value, e.g. `72` or `any byte`.
+    pub value: String,
+    /// Whether the value changed since the previous frame.
     pub changed: bool,
+    /// Whether reaching this stops execution, as opposed to only being shown.
+    pub stops: bool,
+}
+
+impl WatchEntry {
+    /// A row showing `label` and `value`. Displayed only, until
+    /// [`Self::stopping`] says otherwise.
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            changed: false,
+            stops: false,
+        }
+    }
+
+    /// Whether reaching this row's condition stops execution.
+    pub fn stopping(mut self, stops: bool) -> Self {
+        self.stops = stops;
+        self
+    }
+
+    /// Mark the value as having just changed.
+    pub fn changed(mut self, changed: bool) -> Self {
+        self.changed = changed;
+        self
+    }
 }
 
 /// The watch panel.
@@ -70,6 +101,12 @@ impl Widget for WatchList<'_> {
                 self.theme.dim_style(),
             ))]
         } else {
+            let width = self
+                .entries
+                .iter()
+                .map(|entry| entry.label.chars().count())
+                .max()
+                .unwrap_or(0);
             self.entries
                 .iter()
                 .enumerate()
@@ -79,10 +116,6 @@ impl Widget for WatchList<'_> {
                     } else {
                         " "
                     };
-                    let value = match entry.value {
-                        Some(byte) => format!("{byte}"),
-                        None => "off tape".to_string(),
-                    };
                     let value_style = if entry.changed {
                         Style::default()
                             .fg(self.theme.modified)
@@ -90,13 +123,24 @@ impl Widget for WatchList<'_> {
                     } else {
                         Style::default().fg(self.theme.title)
                     };
-                    Line::from(vec![
-                        Span::styled(
-                            format!("{marker} cell[{}] = ", entry.address),
-                            self.theme.dim_style(),
-                        ),
-                        Span::styled(value, value_style),
-                    ])
+                    let mut spans =
+                        vec![Span::styled(format!("{marker} "), self.theme.dim_style())];
+                    // A dot for the rows that stop execution, so a panel holding
+                    // both kinds says which is which without a legend.
+                    if entry.stops {
+                        spans.push(Span::styled(
+                            "● ",
+                            Style::default().fg(self.theme.breakpoint),
+                        ));
+                    } else {
+                        spans.push(Span::raw("  "));
+                    }
+                    spans.push(Span::styled(
+                        format!("{:<width$}  ", entry.label),
+                        self.theme.dim_style(),
+                    ));
+                    spans.push(Span::styled(entry.value.clone(), value_style));
+                    Line::from(spans)
                 })
                 .collect()
         };

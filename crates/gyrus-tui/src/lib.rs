@@ -44,7 +44,7 @@ mod test_utils;
 pub mod theme;
 pub mod watch;
 
-pub use cells::{cell_under, changed_cells, points_at, printable};
+pub use cells::{cell_under, changed_cells, describe_byte, points_at, printable};
 pub use help::{HelpOverlay, Section};
 pub use layout::{LessonPanes, Panes, centered, lesson_panes, panes};
 pub use memory::{CellDisplay, MemoryView, follow_pointer};
