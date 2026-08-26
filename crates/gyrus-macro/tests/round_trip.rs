@@ -69,3 +69,40 @@ fn the_expansion_prints_hello_world() {
 
     assert_eq!(output.output_string(), "Hello World!\n");
 }
+
+/// Named cells end to end: expand, run, and check what it printed.
+///
+/// `hello_world.bfm` proves the expander against a program that already
+/// exists. This one has no `.bf` twin -- it is written the way a `.bfm` would
+/// be written from scratch, with the cursor moved by name -- so what pins it
+/// down is its output.
+#[test]
+fn the_variables_example_prints_hi() {
+    let bfm = read("programs/macros/variables.bfm");
+    let expansion =
+        gyrus_macro::expand(&bfm).unwrap_or_else(|e| panic!("{}", e.format_with_source(&bfm)));
+
+    // The multiply idiom, which is also what the optimizer folds into a
+    // MultiplyAdd -- so this exercises a shape worth exercising.
+    assert_eq!(
+        expansion.brainfuck(),
+        "++++++++[>+++++++++<-]>.+++++++++++++++++++++++++++++++++."
+    );
+
+    let (instructions, expanded) = parse_with_debug(expansion.brainfuck()).expect("parses");
+    let debug_info = expansion.remap(&expanded);
+    let (mut input, mut output) = (StringIo::empty(), StringIo::empty());
+    interpret_with_io(
+        &instructions,
+        ExecutionConfigBuilder::new()
+            .with_memory_size(30_000)
+            .with_max_steps(100_000)
+            .build(),
+        &mut input,
+        &mut output,
+        Some(&debug_info),
+    )
+    .expect("runs");
+
+    assert_eq!(output.output_string(), "Hi");
+}

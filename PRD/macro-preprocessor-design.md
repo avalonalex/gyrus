@@ -94,6 +94,31 @@ after a `@define` — and a discarded `]` went on to report an unmatched `[` tha
 the source plainly matched. Refusing is the only acceptable behaviour: quietly
 dropping code somebody wrote is the one thing a preprocessor must not do.
 
+**The pointer-tracking hazard, settled.** This was the open question before
+`@to`, and the first answer written down here -- require every loop body to
+have net-zero movement -- was wrong. It would ban `[>]`, the ordinary scan
+idiom, which no BrainFuck preprocessor can afford to do. What shipped instead
+distinguishes three cases:
+
+1. A body that returns the cursor where it found it changes nothing.
+2. A body that does not leaves the position *unknown*. Not an error: such
+   loops are normal. The next `@to` is the error, and it names both itself and
+   the loop that lost the position.
+3. A `@to` *inside* an unbalanced body is an error, reported at the `]` --
+   which is the first point at which whether the body balances is known. Its
+   first iteration would emit the right movement and every later one the
+   wrong movement, which is the worst way for this to fail.
+
+`@here NAME` re-establishes a position without emitting anything, for the case
+rule 2 exists for. It is trusted rather than checked -- the one construct in
+the language that can silently produce a wrong program -- and it is the price
+of `@to` and scan loops coexisting at all. Without it, no program containing
+`[<]`, which includes `hello_world`, could use a variable after one.
+
+**`NegativePointer` is dropped.** The design lists it; it predates the tape
+contract, under which movement off the tape is legal and only *access* is
+checked. An expander stricter than the interpreter would be its own trap.
+
 **Brackets are balanced in the expander, not left to the parser.** The parser
 would catch an unbalanced `[`, but it renders the source context into the error
 at parse time, so the position the user sees would be a column in generated
@@ -127,9 +152,8 @@ document keeps only what is still to be decided or built. A running inventory
 of shipped behaviour is exactly the thing this directory deleted twelve
 thousand lines of.
 
-**Not built**, in the order the plan wants them: `@var`/`@to` with pointer
-tracking, `@macro` with parameters, the oracle generator, `gyrus-tool expand`,
-and `gyrus` accepting `.bfm`.
+**Not built**, in the order the plan wants them: `@macro` with parameters, the
+oracle generator, `gyrus-tool expand`, and `gyrus` accepting `.bfm`.
 
 **A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
 `DebugInfo` carries locations but not loop metadata, because `LoopMetadata`
@@ -144,16 +168,6 @@ every instruction of `+{65}` shares a column.
 
 `crates/gyrus-macro/tests/source_locations.rs` asserts the loss, so closing it
 shows up as a failing test rather than as nobody noticing.
-
-### The hazard to settle before `@to`
-
-Static pointer tracking and BrainFuck loops. At `[` the expander knows the
-pointer; at `]` it is wherever the body left it, after an unknown number of
-iterations. If the body's net movement is zero the position is knowable;
-otherwise it is not, and every `@to` after that loop emits wrong code —
-silently, producing a program that runs and prints garbage. The intended answer
-is to require net-zero movement in any loop body and reject otherwise with a
-located error, but it is a decision to take deliberately rather than discover.
 
 ## Overview
 

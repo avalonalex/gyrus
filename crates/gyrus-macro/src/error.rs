@@ -15,7 +15,27 @@ use thiserror::Error;
 ///
 /// Naming them separately is worth five lines: `@var` is a reasonable thing to
 /// type, and "unknown directive" would be a lie about why it failed.
-pub(crate) const PLANNED: &[&str] = &["var", "to", "macro", "include", "ifdef", "ifndef", "endif"];
+pub(crate) const PLANNED: &[&str] = &["macro", "include", "ifdef", "ifndef", "endif"];
+
+/// What a name was declared to be.
+///
+/// A pair of `&'static str` would do the same job in prose, but two of them
+/// plus an advice string made `MacroError` large enough that returning it by
+/// value was worth a lint. This is one byte and reads better at the use site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Constant,
+    Variable,
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Kind::Constant => "constant",
+            Kind::Variable => "variable",
+        })
+    }
+}
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -75,6 +95,30 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("'{name}' is a {found}, not a {wanted}, at {location}")]
+    WrongKind {
+        name: String,
+        found: Kind,
+        wanted: Kind,
+        location: SourceLocation,
+        declared: SourceLocation,
+    },
+
+    #[error("The cursor's position is not known at {location}, so '@to {name}' cannot move to it")]
+    PositionUnknown {
+        name: String,
+        location: SourceLocation,
+        /// The `[` of the loop that lost it.
+        lost_at: SourceLocation,
+    },
+
+    #[error("'@to' at {location} is inside a loop that does not put the cursor back")]
+    MovingInsideUnbalancedLoop {
+        location: SourceLocation,
+        /// The `[` of the loop in question.
+        loop_at: SourceLocation,
+    },
+
     #[error("Unmatched '[' at {location}")]
     UnmatchedOpenBracket { location: SourceLocation },
 
@@ -110,6 +154,9 @@ impl MacroError {
             | MacroError::BadRepeatCount { location, .. }
             | MacroError::RepeatNotRepeatable { location, .. }
             | MacroError::StrayBrace { location, .. }
+            | MacroError::WrongKind { location, .. }
+            | MacroError::PositionUnknown { location, .. }
+            | MacroError::MovingInsideUnbalancedLoop { location, .. }
             | MacroError::UnmatchedOpenBracket { location }
             | MacroError::UnmatchedCloseBracket { location }
             | MacroError::RepeatTooLarge { location, .. }
@@ -170,6 +217,33 @@ impl MacroError {
             MacroError::StrayBrace { .. } => {
                 Some("There is no repeat count open here for a '}' to close.".to_string())
             }
+            MacroError::WrongKind {
+                name,
+                found,
+                wanted,
+                declared,
+                ..
+            } => Some(format!(
+                "'{name}' was declared a {found} at {declared}. {}.",
+                match wanted {
+                    // Say what the *other* spelling would have done, since
+                    // whichever was written, the other one was meant.
+                    Kind::Constant => format!("`@to {name}` moves the cursor to it"),
+                    Kind::Variable => format!("`+{{{name}}}` uses its value as a repeat count"),
+                }
+            )),
+            MacroError::PositionUnknown { lost_at, .. } => Some(format!(
+                "The loop at {lost_at} does not put the cursor back where it found it, so \
+                 where it ends up depends on the data. That is ordinary BrainFuck -- `[>]` \
+                 is a scan -- and it is only a problem for `@to`. Say `@here NAME` once you \
+                 know where the scan landed."
+            )),
+            MacroError::MovingInsideUnbalancedLoop { loop_at, .. } => Some(format!(
+                "The loop at {loop_at} leaves the cursor somewhere other than it found it, \
+                 so this `@to` would emit the right movement on the first iteration and the \
+                 wrong movement on every one after. Move the cursor with '>' and '<' inside \
+                 a loop like this, or make the body put the cursor back."
+            )),
             MacroError::UnmatchedOpenBracket { .. } => Some(
                 "Every '[' needs a matching ']'. This is checked before expansion so the \
                  position is the one you wrote."

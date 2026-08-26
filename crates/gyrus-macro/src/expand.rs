@@ -9,6 +9,11 @@
 //!
 //! - `@define NAME VALUE` -- a named constant. `VALUE` is a decimal number or
 //!   a name defined earlier. Definition precedes use: one pass, as `cpp` has.
+//! - `@var NAME at N` -- a named cell, and `@to NAME` to move the cursor there.
+//!   The expander tracks where the cursor is and emits the difference, which
+//!   is the abstraction that earns the feature: manual pointer arithmetic is
+//!   what makes hand-written BrainFuck unmaintainable past a few dozen cells.
+//! - `@here NAME` -- tell the expander where the cursor is without moving it.
 //! - `OP{N}` -- repeat `OP` N times, where `OP` is one of `+ - < > . ,` and `N`
 //!   is a number or a defined name. `+{0}` is nothing, which is legal.
 //! - `*` to end of line, and any character that is not a BrainFuck instruction:
@@ -31,6 +36,35 @@
 //! Between them, a `.bfm` written today cannot change meaning when `@var`,
 //! `@to` and `@macro` arrive.
 //!
+//! # Where the cursor is, and when the expander stops knowing
+//!
+//! `@to` needs a static cursor position, and BrainFuck loops are where that
+//! breaks: at `[` the position is known, but at `]` the cursor is wherever the
+//! body left it, after a number of iterations nobody knows. Three rules, and
+//! the first two are the whole design:
+//!
+//! 1. A loop whose body returns the cursor where it found it changes nothing.
+//!    The position after it is the position before it.
+//! 2. A loop whose body does not -- `[>]`, the ordinary scan idiom -- leaves
+//!    the position *unknown*. That is not an error by itself, because such
+//!    loops are entirely normal BrainFuck. The next `@to` is the error, and it
+//!    names both itself and the loop that lost the position.
+//! 3. A `@to` *inside* an unbalanced body is an error, reported at the `]`.
+//!    Its first iteration would be right and every later one wrong, which is
+//!    the worst way for this to fail. Whether the body balances is not known
+//!    until the `]`, which is why the check lives there.
+//!
+//! `@here NAME` re-establishes a position without emitting anything, for the
+//! case rule 2 exists for: after `[<]` the programmer knows where the cursor
+//! landed and the expander cannot. It is trusted rather than checked -- the
+//! one construct here that can silently produce a wrong program -- and it is
+//! the price of `@to` and scan loops coexisting at all.
+//!
+//! A tracked position may go negative, and that is not an error. Movement off
+//! the tape is legal under gyrus's tape contract; only *access* is checked.
+//! The original design listed a `NegativePointer` error, which predates that
+//! contract and would contradict it.
+//!
 //! # Brackets are checked here
 //!
 //! `gyrus`'s parser would catch an unbalanced `[`, but it would catch it in the
@@ -43,7 +77,7 @@ use std::collections::HashMap;
 
 use gyrus::SourceLocation;
 
-use crate::error::{MacroError, PLANNED};
+use crate::error::{Kind, MacroError, PLANNED};
 use crate::source_map::Expansion;
 
 /// The most instructions one repeat count may emit.
@@ -72,17 +106,55 @@ pub fn expand(source: &str) -> Result<Expansion, MacroError> {
     Scanner::new(source).run()
 }
 
+/// What a name means. One namespace, so a name means one thing.
+#[derive(Debug, Clone, Copy)]
+enum Symbol {
+    /// A number, usable as a repeat count.
+    Constant(u64),
+    /// A cell, usable as a `@to` target.
+    Variable(i64),
+}
+
+impl Symbol {
+    fn kind(&self) -> Kind {
+        match self {
+            Symbol::Constant(_) => Kind::Constant,
+            Symbol::Variable(_) => Kind::Variable,
+        }
+    }
+}
+
+/// Where the cursor is during expansion, when the expander can still say.
+#[derive(Debug, Clone, Copy)]
+enum Position {
+    Known(i64),
+    /// Lost by a loop whose body did not return the cursor where it found it.
+    /// Carries that loop's `[`, so an error can name the cause and not only
+    /// the symptom.
+    Unknown(SourceLocation),
+}
+
+/// A `[` whose `]` has not been reached.
+struct OpenLoop {
+    location: SourceLocation,
+    entry: Position,
+    /// The first `@to` inside this body. Its presence is what makes an
+    /// unbalanced body an error rather than merely a loss of position.
+    to_inside: Option<SourceLocation>,
+}
+
 struct Scanner {
     source: String,
     chars: Vec<char>,
     at: SourceLocation,
-    constants: HashMap<String, (u64, SourceLocation)>,
+    symbols: HashMap<String, (Symbol, SourceLocation)>,
     /// Insertion order, for the "did you mean" list. A HashMap alone would
     /// suggest names in an order that changes between runs.
     defined: Vec<String>,
+    position: Position,
     out: String,
     origins: Vec<SourceLocation>,
-    open_brackets: Vec<SourceLocation>,
+    open_brackets: Vec<OpenLoop>,
 }
 
 impl Scanner {
@@ -91,8 +163,9 @@ impl Scanner {
             source: source.to_string(),
             chars: source.chars().collect(),
             at: SourceLocation::start(),
-            constants: HashMap::new(),
+            symbols: HashMap::new(),
             defined: Vec::new(),
+            position: Position::Known(0),
             out: String::new(),
             origins: Vec::new(),
             open_brackets: Vec::new(),
@@ -116,9 +189,9 @@ impl Scanner {
             }
         }
 
-        if let Some(location) = self.open_brackets.first() {
+        if let Some(open) = self.open_brackets.first() {
             return Err(MacroError::UnmatchedOpenBracket {
-                location: *location,
+                location: open.location,
             });
         }
 
@@ -217,7 +290,21 @@ impl Scanner {
         for _ in 0..count {
             self.emit(c, origin);
         }
+        // A literal '>' or '<' moves the cursor just as `@to` does, so the
+        // tracked position has to follow it or the two cannot be mixed.
+        self.step(match c {
+            '>' => count as i64,
+            '<' => -(count as i64),
+            _ => 0,
+        });
         Ok(())
+    }
+
+    /// Move the tracked position, if there still is one.
+    fn step(&mut self, delta: i64) {
+        if let Position::Known(at) = self.position {
+            self.position = Position::Known(at + delta);
+        }
     }
 
     fn bracket(&mut self, c: char) -> Result<(), MacroError> {
@@ -230,11 +317,47 @@ impl Scanner {
             });
         }
         if c == '[' {
-            self.open_brackets.push(origin);
-        } else if self.open_brackets.pop().is_none() {
-            return Err(MacroError::UnmatchedCloseBracket { location: origin });
+            self.open_brackets.push(OpenLoop {
+                location: origin,
+                entry: self.position,
+                to_inside: None,
+            });
+            self.emit(c, origin);
+            return Ok(());
         }
+
+        let Some(open) = self.open_brackets.pop() else {
+            return Err(MacroError::UnmatchedCloseBracket { location: origin });
+        };
         self.emit(c, origin);
+
+        let balanced = match (open.entry, self.position) {
+            (Position::Known(before), Position::Known(after)) => before == after,
+            // The position was already unknown on the way in, so the body
+            // cannot restore anything the expander could use.
+            _ => false,
+        };
+
+        if !balanced {
+            // Reported here rather than at the `@to` itself, because whether
+            // the body balances is not known until this bracket. Its first
+            // iteration would emit the right movement and every later one the
+            // wrong movement, which is the worst way for this to fail.
+            if let Some(to) = open.to_inside {
+                return Err(MacroError::MovingInsideUnbalancedLoop {
+                    location: to,
+                    loop_at: open.location,
+                });
+            }
+            self.position = Position::Unknown(open.location);
+        }
+
+        // A `@to` in a nested body is inside this one too.
+        if let (Some(to), Some(parent)) = (open.to_inside, self.open_brackets.last_mut())
+            && parent.to_inside.is_none()
+        {
+            parent.to_inside = Some(to);
+        }
         Ok(())
     }
 
@@ -302,16 +425,49 @@ impl Scanner {
         Ok(count)
     }
 
-    fn resolve(&self, name: &str, location: SourceLocation) -> Result<u64, MacroError> {
-        self.constants
+    /// A name's entry, or an undefined-symbol error naming what is in scope.
+    fn lookup(
+        &self,
+        name: &str,
+        location: SourceLocation,
+    ) -> Result<(Symbol, SourceLocation), MacroError> {
+        self.symbols
             .get(name)
-            .map(|(value, _)| *value)
+            .copied()
             .ok_or_else(|| MacroError::UndefinedSymbol {
                 name: name.to_string(),
                 location,
                 defined: self.defined.clone(),
                 defined_later: self.defined_later(name),
             })
+    }
+
+    /// A name used where a number is wanted.
+    fn resolve(&self, name: &str, location: SourceLocation) -> Result<u64, MacroError> {
+        match self.lookup(name, location)? {
+            (Symbol::Constant(value), _) => Ok(value),
+            (other, declared) => Err(MacroError::WrongKind {
+                name: name.to_string(),
+                found: other.kind(),
+                wanted: Kind::Constant,
+                location,
+                declared,
+            }),
+        }
+    }
+
+    /// A name used where a cell is wanted.
+    fn resolve_cell(&self, name: &str, location: SourceLocation) -> Result<i64, MacroError> {
+        match self.lookup(name, location)? {
+            (Symbol::Variable(cell), _) => Ok(cell),
+            (other, declared) => Err(MacroError::WrongKind {
+                name: name.to_string(),
+                found: other.kind(),
+                wanted: Kind::Variable,
+                location,
+                declared,
+            }),
+        }
     }
 
     /// Whether a later line defines `name`.
@@ -325,7 +481,11 @@ impl Scanner {
             .iter()
             .collect();
         rest.lines().any(|line| {
-            let Some(tail) = line.trim_start().strip_prefix("@define") else {
+            let trimmed = line.trim_start();
+            let Some(tail) = trimmed
+                .strip_prefix("@define")
+                .or_else(|| trimmed.strip_prefix("@var"))
+            else {
                 return false;
             };
             let tail = tail.trim_start();
@@ -346,8 +506,12 @@ impl Scanner {
                 location,
             });
         }
-        if name == "define" {
-            return self.define(location);
+        match name.as_str() {
+            "define" => return self.define(location),
+            "var" => return self.var(location),
+            "to" => return self.to(location),
+            "here" => return self.here(location),
+            _ => {}
         }
         if PLANNED.contains(&name.as_str()) {
             return Err(MacroError::PlannedDirective { name, location });
@@ -355,31 +519,149 @@ impl Scanner {
         Err(MacroError::UnknownDirective { name, location })
     }
 
-    fn define(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+    /// `@var NAME at N` -- name a cell.
+    fn var(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        let name = self.declared_name("var", location)?;
+
+        self.skip_blanks();
+        let at_keyword = self.at;
+        if self.identifier() != "at" {
+            return Err(MacroError::MalformedDirective {
+                directive: "var".to_string(),
+                detail: format!("expected `at`, as in `@var {name} at 0`"),
+                location: at_keyword,
+            });
+        }
+
+        self.skip_blanks();
+        let at_value = self.at;
+        let cell = self.number_or_name("var", &name, at_value)?;
+        let cell = i64::try_from(cell).map_err(|_| MacroError::MalformedDirective {
+            directive: "var".to_string(),
+            detail: format!("cell {cell} is further along the tape than any tape goes"),
+            location: at_value,
+        })?;
+
+        self.end_of_directive("var")?;
+        self.declare(name, Symbol::Variable(cell), location);
+        Ok(())
+    }
+
+    /// `@to NAME` -- move the cursor to a named cell.
+    fn to(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         self.skip_blanks();
         let at_name = self.at;
         let name = self.identifier();
         if name.is_empty() {
             return Err(MacroError::MalformedDirective {
-                directive: "define".to_string(),
-                detail: "expected a name, as in `@define CHAR_A 65`".to_string(),
+                directive: "to".to_string(),
+                detail: "expected the name of a cell declared with @var".to_string(),
                 location: at_name,
             });
         }
+        let target = self.resolve_cell(&name, at_name)?;
+        self.end_of_directive("to")?;
 
-        // Before resolving the value, not after: a redefinition whose value is
-        // also wrong should report the redefinition, or the user fixes the
-        // value and only then learns the name was taken.
-        if let Some((_, first)) = self.constants.get(&name) {
+        // Inside a loop body, remember that a `@to` happened: if the body
+        // turns out not to restore the cursor, this is the error, and the `]`
+        // is where that becomes knowable.
+        if let Some(open) = self.open_brackets.last_mut()
+            && open.to_inside.is_none()
+        {
+            open.to_inside = Some(location);
+        }
+
+        let Position::Known(here) = self.position else {
+            let Position::Unknown(lost_at) = self.position else {
+                unreachable!("Known was just matched against")
+            };
+            return Err(MacroError::PositionUnknown {
+                name,
+                location,
+                lost_at,
+            });
+        };
+
+        let delta = target - here;
+        let (step, count) = if delta >= 0 {
+            ('>', delta)
+        } else {
+            ('<', -delta)
+        };
+        let total = self.out.len().saturating_add(count as usize);
+        if total > EXPANSION_LIMIT {
+            return Err(MacroError::ExpansionTooLarge {
+                emitted: total,
+                limit: EXPANSION_LIMIT,
+                location,
+            });
+        }
+        for _ in 0..count {
+            self.emit(step, location);
+        }
+        self.position = Position::Known(target);
+        Ok(())
+    }
+
+    /// `@here NAME` -- assert where the cursor is, emitting nothing.
+    fn here(&mut self, _location: SourceLocation) -> Result<(), MacroError> {
+        self.skip_blanks();
+        let at_name = self.at;
+        let name = self.identifier();
+        if name.is_empty() {
+            return Err(MacroError::MalformedDirective {
+                directive: "here".to_string(),
+                detail: "expected the name of a cell declared with @var".to_string(),
+                location: at_name,
+            });
+        }
+        let cell = self.resolve_cell(&name, at_name)?;
+        self.end_of_directive("here")?;
+        self.position = Position::Known(cell);
+        Ok(())
+    }
+
+    // ---- pieces the directives share ---------------------------------------
+
+    /// The name a declaration is declaring, checked for redefinition.
+    ///
+    /// Before any value is resolved, so a redefinition whose value is also
+    /// wrong reports the redefinition rather than costing two round trips.
+    fn declared_name(
+        &mut self,
+        directive: &str,
+        location: SourceLocation,
+    ) -> Result<String, MacroError> {
+        self.skip_blanks();
+        let at_name = self.at;
+        let name = self.identifier();
+        if name.is_empty() {
+            return Err(MacroError::MalformedDirective {
+                directive: directive.to_string(),
+                detail: match directive {
+                    "var" => "expected a name, as in `@var counter at 0`".to_string(),
+                    _ => "expected a name, as in `@define CHAR_A 65`".to_string(),
+                },
+                location: at_name,
+            });
+        }
+        if let Some((_, first)) = self.symbols.get(&name) {
             return Err(MacroError::Redefinition {
                 name,
                 first: *first,
                 location,
             });
         }
+        Ok(name)
+    }
 
-        self.skip_blanks();
-        let at_value = self.at;
+    /// A decimal number or the name of a constant.
+    fn number_or_name(
+        &mut self,
+        directive: &str,
+        name: &str,
+        at_value: SourceLocation,
+    ) -> Result<u64, MacroError> {
         let mut token = String::new();
         while let Some(c) = self.peek() {
             if c.is_whitespace() {
@@ -391,52 +673,68 @@ impl Scanner {
 
         if token.is_empty() {
             return Err(MacroError::MalformedDirective {
-                directive: "define".to_string(),
-                detail: format!("expected a value for '{name}', as in `@define {name} 65`"),
+                directive: directive.to_string(),
+                detail: match directive {
+                    "var" => format!("expected a cell for '{name}', as in `@var {name} at 0`"),
+                    _ => format!("expected a value for '{name}', as in `@define {name} 65`"),
+                },
                 location: at_value,
             });
         }
 
-        let value = if token.chars().all(|c| c.is_ascii_digit()) {
+        if token.chars().all(|c| c.is_ascii_digit()) {
             token
                 .parse::<u64>()
                 .map_err(|_| MacroError::MalformedDirective {
-                    directive: "define".to_string(),
+                    directive: directive.to_string(),
                     detail: format!("'{token}' does not fit in a 64-bit number"),
                     location: at_value,
-                })?
+                })
         } else if is_identifier(&token) {
-            self.resolve(&token, at_value)?
+            self.resolve(&token, at_value)
         } else {
-            return Err(MacroError::MalformedDirective {
-                directive: "define".to_string(),
+            Err(MacroError::MalformedDirective {
+                directive: directive.to_string(),
                 detail: format!("'{token}' is neither a number nor a name"),
                 location: at_value,
-            });
-        };
+            })
+        }
+    }
 
-        // A directive owns the rest of its line, and says so rather than
-        // dropping what follows. Skipping silently discarded any instruction
-        // written after the value -- and a discarded ']' went on to blame a
-        // '[' that the source plainly matched.
+    /// A directive owns the rest of its line, and says so rather than dropping
+    /// what follows. Skipping silently discarded any instruction written after
+    /// it -- and a discarded ']' went on to blame a '[' the source matched.
+    fn end_of_directive(&mut self, directive: &str) -> Result<(), MacroError> {
         self.skip_blanks();
         match self.peek() {
-            None | Some('\n') => {}
-            Some('*') => self.skip_line(),
-            Some(c) => {
-                return Err(MacroError::MalformedDirective {
-                    directive: "define".to_string(),
-                    detail: format!(
-                        "'{c}' follows the value. A @define takes the rest of its line: \
-                         move this to a line of its own, or start a comment with '*'"
-                    ),
-                    location: self.at,
-                });
+            None | Some('\n') => Ok(()),
+            Some('*') => {
+                self.skip_line();
+                Ok(())
             }
+            Some(c) => Err(MacroError::MalformedDirective {
+                directive: directive.to_string(),
+                detail: format!(
+                    "'{c}' follows it. A @{directive} takes the rest of its line: \
+                     move this to a line of its own, or start a comment with '*'"
+                ),
+                location: self.at,
+            }),
         }
+    }
 
-        self.constants.insert(name.clone(), (value, location));
+    fn declare(&mut self, name: String, symbol: Symbol, at: SourceLocation) {
+        self.symbols.insert(name.clone(), (symbol, at));
         self.defined.push(name);
+    }
+
+    fn define(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        let name = self.declared_name("define", location)?;
+        self.skip_blanks();
+        let at_value = self.at;
+        let value = self.number_or_name("define", &name, at_value)?;
+        self.end_of_directive("define")?;
+        self.declare(name, Symbol::Constant(value), location);
         Ok(())
     }
 }
@@ -476,11 +774,26 @@ mod tests {
             let origin = expansion
                 .origin(offset)
                 .unwrap_or_else(|| panic!("byte {offset} has no origin"));
-            assert_eq!(
-                chars[origin.offset], emitted,
-                "byte {offset} ({emitted}) points at {:?} in the macro source",
-                chars[origin.offset]
-            );
+            // `@to` is the one construct that emits an instruction not
+            // written literally, so its bytes point at the directive that
+            // generated them. Everything else still points at itself.
+            if chars[origin.offset] == '@' {
+                let head: String = chars[origin.offset..].iter().take(3).collect();
+                assert_eq!(
+                    head, "@to",
+                    "byte {offset} points at a directive that does not emit"
+                );
+                assert!(
+                    emitted == '>' || emitted == '<',
+                    "@to emitted {emitted:?}, which is not a move"
+                );
+            } else {
+                assert_eq!(
+                    chars[origin.offset], emitted,
+                    "byte {offset} ({emitted}) points at {:?} in the macro source",
+                    chars[origin.offset]
+                );
+            }
             // The line and column must agree with the offset, or a caret lands
             // on the wrong character even though the offset is right.
             let before: String = chars[..origin.offset].iter().collect();
@@ -654,7 +967,11 @@ mod tests {
 
     #[test]
     fn a_planned_directive_is_refused_rather_than_ignored() {
-        for directive in ["@var x at 0", "@to x", "@macro clear { [-] }"] {
+        for directive in [
+            "@macro clear { [-] }",
+            "@include \"lib.bfm\"",
+            "@ifdef DEBUG",
+        ] {
             let error = expand(directive).unwrap_err();
             assert!(
                 matches!(error, MacroError::PlannedDirective { .. }),
@@ -748,5 +1065,159 @@ mod tests {
             expand("@define A\n").unwrap_err(),
             MacroError::MalformedDirective { .. }
         ));
+    }
+
+    // ---- pointer tracking ----------------------------------------------
+
+    #[test]
+    fn to_emits_the_difference_between_where_it_is_and_where_it_is_going() {
+        assert_eq!(expanded("@var a at 0\n@var b at 3\n@to b\n"), ">>>");
+        assert_eq!(
+            expanded("@var a at 0\n@var b at 3\n@to b\n@to a\n"),
+            ">>><<<"
+        );
+        // Already there: nothing to emit.
+        assert_eq!(expanded("@var a at 2\n@var b at 2\n@to a\n@to b\n"), ">>");
+    }
+
+    #[test]
+    fn a_literal_move_is_tracked_too() {
+        // Otherwise `>` and `@to` could not be mixed in one program, which is
+        // most of what a partial rewrite looks like.
+        assert_eq!(expanded("@var a at 0\n@var b at 3\n>\n@to b\n"), ">>>");
+        assert_eq!(
+            expanded("@var a at 0\n@var b at 3\n>{5}\n@to b\n"),
+            ">>>>><<"
+        );
+    }
+
+    #[test]
+    fn a_balanced_loop_leaves_the_position_where_it_found_it() {
+        // `>+<-` returns the cursor, so the expander can keep counting.
+        assert_eq!(
+            expanded("@var a at 0\n@var b at 2\n+[>+<-]\n@to b\n"),
+            "+[>+<-]>>"
+        );
+    }
+
+    #[test]
+    fn to_may_be_used_inside_a_loop_that_puts_the_cursor_back() {
+        let source = "@var a at 0\n@var b at 2\n+[\n@to b\n+\n@to a\n-\n]\n";
+        assert_eq!(expanded(source), "+[>>+<<-]");
+    }
+
+    #[test]
+    fn an_unbalanced_loop_loses_the_position_without_being_an_error() {
+        // `[>]` is the ordinary scan idiom. Losing track is the correct
+        // outcome; refusing to expand would ban the idiom outright.
+        assert_eq!(expanded("@var a at 0\n+[>]\n"), "+[>]");
+
+        // It becomes an error only when something needs the position.
+        let error = expand("@var a at 0\n@var b at 5\n+[>]\n@to b\n").unwrap_err();
+        let MacroError::PositionUnknown {
+            name,
+            location,
+            lost_at,
+        } = &error
+        else {
+            panic!("expected an unknown position, got {error:?}");
+        };
+        assert_eq!(name, "b");
+        assert_eq!(location.line, 4, "the error is at the @to");
+        assert_eq!(lost_at.line, 3, "and it names the loop that lost it");
+    }
+
+    #[test]
+    fn here_re_establishes_a_position_a_scan_lost() {
+        // The escape hatch, and the reason it exists: after `[>]` the
+        // programmer knows where the cursor landed and the expander cannot.
+        // It emits nothing and is trusted.
+        assert_eq!(
+            expanded("@var a at 0\n@var b at 5\n@var c at 7\n+[>]\n@here b\n@to c\n"),
+            "+[>]>>"
+        );
+    }
+
+    #[test]
+    fn to_inside_an_unbalanced_loop_is_refused_at_the_bracket() {
+        // The first iteration would emit the right movement and every one
+        // after it the wrong movement -- the worst way for this to fail, and
+        // not knowable until the ']'.
+        let source = "@var a at 0\n@var b at 2\n+[\n>\n@to b\n<-\n]\n";
+        let error = expand(source).unwrap_err();
+        let MacroError::MovingInsideUnbalancedLoop { location, loop_at } = &error else {
+            panic!("expected a move inside an unbalanced loop, got {error:?}");
+        };
+        assert_eq!(location.line, 5, "the error names the @to");
+        assert_eq!(loop_at.line, 3, "and the loop that made it wrong");
+    }
+
+    #[test]
+    fn a_to_in_a_nested_body_is_inside_the_outer_one_too() {
+        // The inner loop balances; the outer does not. The `@to` is still
+        // inside something unbalanced, and has to be caught.
+        let source = "@var a at 0\n@var b at 1\n+[\n@to b\n@to a\n[-]\n>\n]\n";
+        let error = expand(source).unwrap_err();
+        assert!(
+            matches!(error, MacroError::MovingInsideUnbalancedLoop { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_name_means_one_thing() {
+        let as_count = expand("@var x at 3\n+{x}\n").unwrap_err();
+        let MacroError::WrongKind { found, wanted, .. } = &as_count else {
+            panic!("expected a kind error, got {as_count:?}");
+        };
+        assert_eq!((*found, *wanted), (Kind::Variable, Kind::Constant));
+
+        let as_cell = expand("@define X 3\n@to X\n").unwrap_err();
+        let MacroError::WrongKind { found, wanted, .. } = &as_cell else {
+            panic!("expected a kind error, got {as_cell:?}");
+        };
+        assert_eq!((*found, *wanted), (Kind::Constant, Kind::Variable));
+
+        // And the two share a namespace, so this is a redefinition.
+        assert!(matches!(
+            expand("@define X 3\n@var X at 1\n").unwrap_err(),
+            MacroError::Redefinition { .. }
+        ));
+    }
+
+    #[test]
+    fn a_var_says_what_it_expected() {
+        for source in ["@var\n", "@var x\n", "@var x 0\n", "@var x at\n"] {
+            assert!(
+                matches!(
+                    expand(source).unwrap_err(),
+                    MacroError::MalformedDirective { .. }
+                ),
+                "{source:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cell_may_be_named_by_a_constant() {
+        assert_eq!(
+            expanded("@define TOP 4\n@var a at 0\n@var b at TOP\n@to b\n"),
+            ">>>>"
+        );
+    }
+
+    #[test]
+    fn moving_left_of_the_tape_is_not_an_error_here() {
+        // Movement off the tape is legal under gyrus's tape contract -- only
+        // access is checked -- so the expander does not invent a stricter
+        // rule than the interpreter has. The design's `NegativePointer` error
+        // predates that contract.
+        assert_eq!(expanded("@var a at 0\n<{3}\n@to a\n"), "<<<>>>");
+    }
+
+    #[test]
+    fn origins_survive_the_new_directives() {
+        assert_origins_are_exact("@var a at 0\n@var b at 3\n@to b\n+\n@to a\n");
+        assert_origins_are_exact("@var a at 0\n@var b at 2\n+[\n@to b\n+\n@to a\n-\n]\n");
     }
 }
