@@ -37,6 +37,9 @@
 //!
 //! @to counter              * the expander emits the movement
 //! +{STEP}                  * repeat an instruction
+//!
+//! [>]                      * a scan: the expander loses track of the cursor
+//! @here letter             * tell it where the scan landed, emitting nothing
 //! ```
 //!
 //! Naming cells is the part that earns the feature. Manual pointer arithmetic
@@ -45,8 +48,10 @@
 //! cannot: move a variable and the program still works.
 //!
 //! Tracking the cursor statically runs into loops, which is the whole design
-//! problem -- see [`expand`] for the three rules and why `[>]` is allowed to
-//! lose the position rather than be refused.
+//! problem -- see [`expand`] for the three rules, why `[>]` is allowed to lose
+//! the position rather than be refused, and why `@here` is trusted rather than
+//! checked. `@here` is the only construct here that can silently produce a
+//! wrong program.
 //!
 //! `@macro` and the conditionals are designed but not built; they are rejected
 //! by name rather than treated as comments, so a `.bfm` written today cannot

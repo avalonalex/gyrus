@@ -94,26 +94,14 @@ after a `@define` — and a discarded `]` went on to report an unmatched `[` tha
 the source plainly matched. Refusing is the only acceptable behaviour: quietly
 dropping code somebody wrote is the one thing a preprocessor must not do.
 
-**The pointer-tracking hazard, settled.** This was the open question before
-`@to`, and the first answer written down here -- require every loop body to
-have net-zero movement -- was wrong. It would ban `[>]`, the ordinary scan
-idiom, which no BrainFuck preprocessor can afford to do. What shipped instead
-distinguishes three cases:
-
-1. A body that returns the cursor where it found it changes nothing.
-2. A body that does not leaves the position *unknown*. Not an error: such
-   loops are normal. The next `@to` is the error, and it names both itself and
-   the loop that lost the position.
-3. A `@to` *inside* an unbalanced body is an error, reported at the `]` --
-   which is the first point at which whether the body balances is known. Its
-   first iteration would emit the right movement and every later one the
-   wrong movement, which is the worst way for this to fail.
-
-`@here NAME` re-establishes a position without emitting anything, for the case
-rule 2 exists for. It is trusted rather than checked -- the one construct in
-the language that can silently produce a wrong program -- and it is the price
-of `@to` and scan loops coexisting at all. Without it, no program containing
-`[<]`, which includes `hello_world`, could use a variable after one.
+**The pointer-tracking hazard is resolved, and the first answer here was
+wrong.** This document said: require every loop body to have net-zero
+movement. That bans `[>]`, the ordinary scan idiom, which is not a trade a
+BrainFuck preprocessor can make. What shipped distinguishes a body that
+returns the cursor, a body that does not and so loses the position, and a
+`@to` inside the latter. The rules live in one place, `expand.rs`'s module
+documentation, and the reasoning is in the commit that changed them; repeating
+either here would be a third copy to keep in sync.
 
 **`NegativePointer` is dropped.** The design lists it; it predates the tape
 contract, under which movement off the tape is legal and only *access* is

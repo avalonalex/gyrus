@@ -13,8 +13,8 @@ use thiserror::Error;
 
 /// Directives the design has a plan for but the expander does not implement.
 ///
-/// Naming them separately is worth five lines: `@var` is a reasonable thing to
-/// type, and "unknown directive" would be a lie about why it failed.
+/// Naming them separately is worth five lines: `@macro` is a reasonable thing
+/// to type, and "unknown directive" would be a lie about why it failed.
 pub(crate) const PLANNED: &[&str] = &["macro", "include", "ifdef", "ifndef", "endif"];
 
 /// What a name was declared to be.
@@ -36,6 +36,14 @@ impl std::fmt::Display for Kind {
         })
     }
 }
+
+/// What the expander understands, for the hints that have to say so.
+///
+/// One copy, because three error messages name it and they drifted apart
+/// once already: two of them went on advertising `@define` alone after `@var`
+/// and `@to` shipped, so a mistyped `@too` was told `@to` did not exist.
+const DIRECTIVES: &str =
+    "The expander understands @define, @var, @to and @here, plus repeat counts like +{N}.";
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -194,14 +202,14 @@ impl MacroError {
                 }
             }),
             MacroError::PlannedDirective { name, .. } => Some(format!(
-                "@{name} is part of the design but not built yet. \
-                 Today the expander understands @define and repeat counts like +{{N}}."
+                "@{name} is part of the design but not built yet. {DIRECTIVES}"
             )),
-            MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => Some(
-                "The expander understands @define. A directive must start its line; \
-                 an '@' anywhere else is an ordinary comment character."
-                    .to_string(),
-            ),
+            MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => {
+                Some(format!(
+                    "{DIRECTIVES} A directive must start its line; an '@' anywhere else is \
+                     an ordinary comment character."
+                ))
+            }
             MacroError::Redefinition { first, .. } => Some(format!(
                 "It was first defined at {first}. A symbol is defined once, so that a name means one thing."
             )),
