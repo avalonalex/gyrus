@@ -119,10 +119,37 @@ question you actually have: the output is wrong at some character, and you want
 the tape as it was just before that character was produced. Execution stops
 *before* the `.`, so the cell holding it is still there to look at.
 
-Inside the debugger the same thing is `w`, which takes either kind of watch —
-`3` for a cell, `out W` to stop when a W is printed.
+**Once you are inside**, seven keys cover most of it:
 
-[The debugger](debugger.md) has the key list and the rest.
+| | |
+|---|---|
+| `space` | execute one instruction |
+| `c` | run to the next breakpoint |
+| `n` / `o` | step over a loop / step out of one |
+| `b` | breakpoint at the cursor |
+| `w` | watch something |
+| `?` | everything else |
+| `q` | leave |
+
+`w` is the one worth knowing properly, because it takes both kinds of watch, and
+you spell them the way the panel displays them back:
+
+```
+3          watch cell 3 — shown at every stop, never stops anything
+out        stop before anything is printed
+out W      stop before a W is printed
+out \n     stop before each line ends
+```
+
+A bare number is a cell; `out` and whatever follows it is a condition on output.
+So `5` watches cell 5 and `out 5` stops on the digit. Everything you set with
+`w` lasts as long as the session, and a `●` beside a row marks the ones that
+stop rather than only being shown.
+
+The same conditions are available before you start, as `--break-output`, which
+is how you put one in a script or a bug report.
+
+[The debugger](debugger.md) has the full key list and the rest.
 
 ## When it is slow
 
