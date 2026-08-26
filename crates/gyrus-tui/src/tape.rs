@@ -13,6 +13,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::cells::{points_at, printable};
 use crate::theme::Theme;
 
 /// Characters each cell column takes, including its trailing space.
@@ -26,7 +27,6 @@ pub struct TapeStrip<'a> {
     changed: Option<&'a HashSet<usize>>,
     title: String,
     offset: usize,
-    show_chars: bool,
 }
 
 impl<'a> TapeStrip<'a> {
@@ -39,7 +39,6 @@ impl<'a> TapeStrip<'a> {
             changed: None,
             title: "Tape".to_string(),
             offset: 0,
-            show_chars: true,
         }
     }
 
@@ -61,34 +60,21 @@ impl<'a> TapeStrip<'a> {
         self
     }
 
-    /// Whether to show the character each value stands for.
-    pub fn show_chars(mut self, show: bool) -> Self {
-        self.show_chars = show;
-        self
-    }
-
     /// How many cells fit in `area`, after the row labels.
     pub fn capacity(area: Rect) -> usize {
         (area.width.saturating_sub(2) as usize).saturating_sub(7) / CELL
     }
 
     /// Scroll just enough to keep the pointer's cell visible.
+    ///
+    /// A strip is a hex dump one cell wide, so this is
+    /// [`follow_pointer`](crate::follow_pointer) with a single column.
     pub fn follow(offset: usize, pointer: isize, capacity: usize) -> usize {
-        if capacity == 0 || pointer < 0 {
-            return offset;
-        }
-        let cell = pointer as usize;
-        if cell < offset {
-            cell
-        } else if cell >= offset + capacity {
-            cell + 1 - capacity
-        } else {
-            offset
-        }
+        crate::memory::follow_pointer(offset, pointer, 1, capacity)
     }
 
     fn cell_style(&self, address: usize) -> Style {
-        if self.pointer >= 0 && self.pointer as usize == address {
+        if points_at(self.pointer, address) {
             Style::default()
                 .fg(self.theme.pointer)
                 .add_modifier(Modifier::BOLD)
@@ -122,34 +108,34 @@ impl Widget for TapeStrip<'_> {
                 format!("{byte:>3} "),
                 self.cell_style(address),
             ));
-            let glyph = if (0x20..0x7f).contains(&byte) {
-                (byte as char).to_string()
-            } else {
-                "·".to_string()
-            };
             chars.push(Span::styled(
-                format!("{glyph:>3} "),
+                format!("{:>3} ", printable(byte, '·')),
                 if byte == 0 {
                     self.theme.dim_style()
                 } else {
                     self.cell_style(address)
                 },
             ));
-            let is_pointer = self.pointer >= 0 && self.pointer as usize == address;
             caret.push(Span::styled(
-                if is_pointer { "  ▲ " } else { "    " },
+                if points_at(self.pointer, address) {
+                    "  ▲ "
+                } else {
+                    "    "
+                },
                 Style::default().fg(self.theme.pointer),
             ));
         }
 
-        let mut lines = vec![Line::from(addresses), Line::from(values)];
-        if self.show_chars {
-            lines.push(Line::from(chars));
-        }
-        lines.push(Line::from(caret));
+        let lines = vec![
+            Line::from(addresses),
+            Line::from(values),
+            Line::from(chars),
+            Line::from(caret),
+        ];
 
         // Where the pointer is, when it has walked off the strip.
-        if self.pointer < 0 || self.pointer as usize >= self.memory.len() {
+        let mut lines = lines;
+        if crate::cells::cell_under(self.memory, self.pointer).is_none() {
             lines.push(Line::from(Span::styled(
                 format!("pointer at {} — off the tape", self.pointer),
                 Style::default().fg(self.theme.error),
@@ -174,25 +160,7 @@ impl Widget for TapeStrip<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    fn render(view: TapeStrip<'_>, width: u16, height: u16) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
-        terminal
-            .draw(|frame| frame.render_widget(view, frame.area()))
-            .expect("draw");
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
-    }
+    use crate::test_utils::render;
 
     #[test]
     fn the_caret_sits_under_the_pointers_cell() {

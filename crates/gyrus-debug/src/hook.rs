@@ -13,7 +13,7 @@ use gyrus::Instruction;
 use gyrus::hooks::{ExecutionHook, HookContext, HookDecision, LoopInfo};
 use gyrus::io::{BfInput, BfOutput};
 
-use crate::state::Session;
+use crate::state::{RunState, Session, should_pause};
 use crate::ui;
 
 /// How often the screen refreshes while a program runs freely.
@@ -37,48 +37,110 @@ fn lock(session: &Shared) -> std::sync::MutexGuard<'_, Session> {
 }
 
 /// Stops the interpreter where the user asked, and draws the result.
+///
+/// The stopping rule is decided here rather than under the mutex. `reach` runs
+/// on every executed instruction — tens of millions on a real program — and
+/// taking an uncontended lock to answer "no" was the single most expensive
+/// thing the debugger did, worth about a fifth of its per-instruction cost.
+///
+/// Caching is sound because every input to the rule changes only inside
+/// `ui::pause` and `ui::tick`, which run below with the lock held; `sync`
+/// refreshes the cache the moment either returns. The one exception is whether
+/// a `,` has anything to read, which `DebugInput` drains while the program
+/// runs — so that question, and only that one, still takes the lock.
 pub struct DebuggerHook {
     session: Shared,
     since_poll: u32,
+
+    // Cached stopping rule; see `sync`.
+    run: RunState,
+    exiting: bool,
+    /// One `bool` per instruction index, indices being dense from zero.
+    stops: Vec<bool>,
+    /// The `breakpoint_revision` `stops` was built from.
+    stops_revision: u64,
 }
 
 impl DebuggerHook {
     /// A hook driving `session`.
     pub fn new(session: Shared) -> Self {
-        Self {
+        let mut hook = Self {
             session,
             since_poll: 0,
+            run: RunState::Step,
+            exiting: false,
+            stops: Vec::new(),
+            stops_revision: u64::MAX,
+        };
+        let guard = lock(&hook.session);
+        let snapshot = (guard.run, guard.exit.is_some(), guard.breakpoint_revision());
+        let bitmap = guard.breakpoint_bitmap();
+        drop(guard);
+        hook.run = snapshot.0;
+        hook.exiting = snapshot.1;
+        hook.stops = bitmap;
+        hook.stops_revision = snapshot.2;
+        hook
+    }
+
+    /// Re-read the stopping rule after the interface has had a turn.
+    fn sync(&mut self, session: &Session) {
+        self.run = session.run;
+        self.exiting = session.exit.is_some();
+        if self.stops_revision != session.breakpoint_revision() {
+            self.stops = session.breakpoint_bitmap();
+            self.stops_revision = session.breakpoint_revision();
         }
     }
 
     /// Called once for every instruction, just before it executes.
     fn reach(&mut self, instruction: &Instruction, context: &HookContext) -> HookDecision {
-        let mut session = lock(&self.session);
         let index = context.instruction_index();
+        let at_breakpoint = self.stops.get(index).copied().unwrap_or(false);
 
-        if session.wants_pause(index, instruction) {
-            observe(&mut session, context, true);
+        let stop = if self.exiting {
+            true
+        } else if matches!(instruction, Instruction::Input) {
+            // Rare enough in a hot loop that a lock costs nothing here.
+            let starving = lock(&self.session).starving_for_input();
+            should_pause(self.run, at_breakpoint, index, starving)
+        } else {
+            should_pause(self.run, at_breakpoint, index, false)
+        };
+
+        if !stop {
+            self.since_poll += 1;
+            if self.since_poll < POLL_INTERVAL {
+                return HookDecision::Continue;
+            }
             self.since_poll = 0;
-            session.touch_draw();
-            return ui::pause(&mut session);
-        }
 
-        self.since_poll += 1;
-        if self.since_poll < POLL_INTERVAL {
+            // Snapshot on every poll, not only when redrawing. If the program
+            // is about to fail, this is the last look at the tape anyone gets:
+            // the VM state is gone by the time the error reaches `main`.
+            //
+            // The handle is cloned so the guard does not borrow `self`, which
+            // `sync` needs mutably below. One atomic per redraw, not per
+            // instruction.
+            let shared = Arc::clone(&self.session);
+            let mut session = lock(&shared);
+            observe(&mut session, context, true);
+            if session.should_redraw(REDRAW_INTERVAL) {
+                let decision = ui::tick(&mut session);
+                self.sync(&session);
+                return decision;
+            }
             return HookDecision::Continue;
         }
+
         self.since_poll = 0;
-
-        // Snapshot on every poll, not only when redrawing. If the program is
-        // about to fail, this is the last look at the tape anyone gets: the VM
-        // state is gone by the time the error reaches `main`.
+        let shared = Arc::clone(&self.session);
+        let mut session = lock(&shared);
         observe(&mut session, context, true);
-
-        if session.should_redraw(REDRAW_INTERVAL) {
-            ui::tick(&mut session)
-        } else {
-            HookDecision::Continue
-        }
+        session.touch_draw();
+        let decision = ui::pause(&mut session);
+        self.sync(&session);
+        decision
     }
 }
 

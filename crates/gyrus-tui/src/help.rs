@@ -17,6 +17,7 @@ pub struct HelpOverlay<'a> {
     sections: &'a [Section<'a>],
     theme: &'a Theme,
     title: &'a str,
+    dismiss: &'a str,
     scroll: usize,
 }
 
@@ -27,6 +28,7 @@ impl<'a> HelpOverlay<'a> {
             sections,
             theme,
             title: "Keys",
+            dismiss: "esc to close",
             scroll: 0,
         }
     }
@@ -34,6 +36,17 @@ impl<'a> HelpOverlay<'a> {
     /// Popup title.
     pub fn title(mut self, title: &'a str) -> Self {
         self.title = title;
+        self
+    }
+
+    /// How to close it, shown beside the title.
+    ///
+    /// A parameter rather than a constant because the two binaries bind it
+    /// differently: `?` toggles help in the debugger, but in the tutorial `?`
+    /// is a character you might be typing, so help is on F1. A widget crate
+    /// that names a key is asserting something only its caller knows.
+    pub fn dismiss(mut self, dismiss: &'a str) -> Self {
+        self.dismiss = dismiss;
         self
     }
 
@@ -105,7 +118,7 @@ impl Widget for HelpOverlay<'_> {
                     .title(Line::from(vec![
                         Span::styled(" ", self.theme.dim_style()),
                         Span::styled(self.title, self.theme.title_style()),
-                        Span::styled("  ? or esc to close ", self.theme.dim_style()),
+                        Span::styled(format!("  {} ", self.dismiss), self.theme.dim_style()),
                     ])),
             )
             .render(popup, buf);

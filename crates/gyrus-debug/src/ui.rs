@@ -3,11 +3,8 @@
 use std::io;
 use std::time::Duration;
 
-use gyrus::Instruction;
 use gyrus::hooks::HookDecision;
-use gyrus_tui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
-};
+use gyrus_tui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use gyrus_tui::ratatui::Frame;
 use gyrus_tui::ratatui::layout::Rect;
 use gyrus_tui::ratatui::style::Color;
@@ -16,7 +13,7 @@ use gyrus_tui::{
     StatusBar, WatchEntry, WatchList, clamp_scroll, follow_pointer, follow_scroll,
 };
 
-use crate::state::{Exit, Focus, Note, Outcome, Prompt, PromptKind, RunState, Session};
+use crate::state::{Exit, Focus, Modal, Note, Outcome, Prompt, PromptKind, RunState, Session};
 
 /// How wide the source column is, as a percentage.
 const SOURCE_PERCENT: u16 = 58;
@@ -38,14 +35,15 @@ enum Flow {
 
 /// Block until the user resumes, restarts, or quits.
 pub fn pause(session: &mut Session) -> HookDecision {
-    match interact(session, true) {
+    match interact(session) {
         Ok(Flow::Break) => HookDecision::Break,
         Ok(_) => HookDecision::Continue,
         Err(error) => {
-            // The terminal is gone; there is nothing left to draw on and no way
-            // to ask what to do about it.
-            session.note(format!("terminal error: {error}"), Note::Error);
-            session.exit = Some(Exit::Quit);
+            // The terminal is gone: there is nothing left to draw on and no way
+            // to ask what to do about it. Carry the failure out so `main` can
+            // report it, rather than leaving it on a status line that only the
+            // thing which just failed knows how to draw.
+            session.exit = Some(Exit::Failed(error));
             HookDecision::Break
         }
     }
@@ -53,8 +51,8 @@ pub fn pause(session: &mut Session) -> HookDecision {
 
 /// Redraw once mid-run and check whether the user wants to interrupt.
 pub fn tick(session: &mut Session) -> HookDecision {
-    if draw(session).is_err() {
-        session.exit = Some(Exit::Quit);
+    if let Err(error) = draw(session) {
+        session.exit = Some(Exit::Failed(error));
         return HookDecision::Break;
     }
     loop {
@@ -65,7 +63,7 @@ pub fn tick(session: &mut Session) -> HookDecision {
         }
         match event::read() {
             Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                if handle_key(session, key, true) == Flow::Break {
+                if handle_key(session, key) == Flow::Break {
                     return HookDecision::Break;
                 }
             }
@@ -83,19 +81,19 @@ pub fn tick(session: &mut Session) -> HookDecision {
 /// Show the final state and wait for restart or quit.
 pub fn post_mortem(session: &mut Session) -> io::Result<()> {
     session.finished = true;
-    session.ui.result = session.outcome.is_some();
-    interact(session, false).map(|_| ())
+    if session.outcome.is_some() {
+        session.ui.modal = Some(Modal::Result);
+    }
+    interact(session).map(|_| ())
 }
 
-fn interact(session: &mut Session, live: bool) -> io::Result<Flow> {
-    // Whatever brought us here — a step, a breakpoint, a run-to-cursor — the
-    // program is stopped now, and the status bar should say so rather than
-    // still reading "running" from the state that got us here.
-    if live {
+fn interact(session: &mut Session) -> io::Result<Flow> {
+    if !session.finished {
+        // Whatever brought us here — a step, a breakpoint, a run-to-cursor —
+        // the program is stopped now, and the status bar should say so rather
+        // than still reading "running" from the state that got us here.
         session.run = RunState::Step;
-        if session.pending_input.is_empty()
-            && matches!(current_instruction(session), Some(Instruction::Input))
-        {
+        if needs_input(session) {
             session.note(
                 "`,` wants a byte — press i to type some, or step to send EOF",
                 Note::Info,
@@ -104,24 +102,13 @@ fn interact(session: &mut Session, live: bool) -> io::Result<Flow> {
     }
     loop {
         draw(session)?;
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                match handle_key(session, key, live) {
-                    Flow::Stay => {}
-                    flow => return Ok(flow),
-                }
+        if let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match handle_key(session, key) {
+                Flow::Stay => {}
+                flow => return Ok(flow),
             }
-            Event::Mouse(mouse) => {
-                let delta = match mouse.kind {
-                    MouseEventKind::ScrollUp => -3,
-                    MouseEventKind::ScrollDown => 3,
-                    _ => 0,
-                };
-                if delta != 0 {
-                    scroll_focused(session, delta);
-                }
-            }
-            _ => {}
         }
     }
 }
@@ -163,9 +150,16 @@ fn follow(session: &mut Session, panes: &Panes) {
     );
     session.ui.source_h_scroll = follow_scroll(session.ui.source_h_scroll, column, columns, 8);
 
-    if session.ui.memory_follow {
-        let cells = MemoryView::columns(panes.right_top, session.ui.memory_display);
-        let rows = MemoryView::visible_rows(panes.right_top);
+    let cells = MemoryView::columns(panes.right_top, session.ui.memory_display);
+    let rows = MemoryView::visible_rows(panes.right_top);
+
+    // "Go to cell N" and "end of tape" name an address, not a row: only here is
+    // it known how many cells fit on one, and it is 8, 16 or 24 depending on the
+    // width and the display mode.
+    if let Some(address) = session.ui.reveal.take() {
+        session.ui.memory_scroll =
+            follow_pointer(session.ui.memory_scroll, address as isize, cells, rows);
+    } else if session.ui.memory_follow {
         session.ui.memory_scroll = follow_pointer(
             session.ui.memory_scroll,
             session.snapshot.pointer,
@@ -173,25 +167,33 @@ fn follow(session: &mut Session, panes: &Panes) {
             rows,
         );
     }
+    if cells > 0 {
+        let last_row = session.snapshot.memory.len().div_ceil(cells);
+        session.ui.memory_scroll = clamp_scroll(session.ui.memory_scroll, last_row, rows);
+    }
 }
 
 fn draw(session: &mut Session) -> io::Result<()> {
     let panes = layout(session)?;
     follow(session, &panes);
+    session.refresh_modified();
 
     let fields = status_fields(session);
     let hints = status_hints(session);
     let watches = watch_entries(session);
     let (state, state_color) = run_state_label(session);
-    let title = session.program.name();
-    let result = session
-        .ui
-        .result
+    // A handful of positions; cloning them is cheaper than widening their
+    // visibility so the destructure below can reach them.
+    let breakpoints = session.breakpoints().clone();
+    let help_scroll = match session.ui.modal {
+        Some(Modal::Help { scroll }) => Some(scroll),
+        _ => None,
+    };
+    let result = matches!(session.ui.modal, Some(Modal::Result))
         .then(|| {
             session.outcome.as_ref().map(|outcome| {
                 (
                     outcome.title(),
-                    outcome.detail(),
                     match outcome {
                         Outcome::Failed(_) => session.theme.error,
                         Outcome::Completed(_) => session.theme.success,
@@ -206,29 +208,29 @@ fn draw(session: &mut Session) -> io::Result<()> {
         program,
         theme,
         ui,
-        breakpoints,
         output,
         snapshot,
         modified,
         message,
+        outcome,
         ..
     } = session;
 
     terminal.draw(|frame: &mut Frame| {
         frame.render_widget(
             Header::new("gyrus-debug", theme)
-                .subject(title)
+                .subject(program.name.clone())
                 .state(state, state_color),
             panes.header,
         );
 
         frame.render_widget(
             SourceView::new(&program.document, theme)
-                .title(program.name())
+                .title(program.name.clone())
                 .focused(ui.focus == Focus::Source)
                 .current(snapshot.location.map(|l| (l.line, l.column)))
                 .cursor(Some(ui.cursor), ui.focus == Focus::Source)
-                .breakpoints(breakpoints)
+                .breakpoints(&breakpoints)
                 .scroll(ui.source_scroll)
                 .h_scroll(ui.source_h_scroll),
             panes.left,
@@ -247,6 +249,7 @@ fn draw(session: &mut Session) -> io::Result<()> {
         if panes.right_bottom.height > 0 {
             frame.render_widget(
                 WatchList::new(&watches, theme)
+                    .empty_hint("none — press w to add one")
                     .selected(if watches.is_empty() {
                         None
                     } else {
@@ -290,9 +293,12 @@ fn draw(session: &mut Session) -> io::Result<()> {
             panes.status,
         );
 
-        if let Some((heading, detail, color)) = &result {
+        if let Some((heading, color)) = &result {
+            // `detail` re-formats the whole stats block or clones a formatted
+            // error, so it is built once here rather than per frame.
+            let detail = outcome.as_ref().map(Outcome::detail).unwrap_or_default();
             frame.render_widget(
-                Overlay::new(heading, detail, theme)
+                Overlay::new(heading, &detail, theme)
                     .accent(*color)
                     .footer("any key to look around")
                     .size(76, 60)
@@ -301,11 +307,12 @@ fn draw(session: &mut Session) -> io::Result<()> {
             );
         }
 
-        if ui.help {
+        if let Some(scroll) = help_scroll {
             frame.render_widget(
                 HelpOverlay::new(HELP, theme)
                     .title("gyrus-debug keys")
-                    .scroll(ui.help_scroll),
+                    .dismiss("? or esc to close")
+                    .scroll(scroll),
                 frame.area(),
             );
         }
@@ -460,7 +467,7 @@ const HELP: &[Section<'static>] = &[
 
 // ------------------------------------------------------------------- input
 
-fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
+fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
     if session.ui.prompt.is_some() {
         return handle_prompt_key(session, key);
     }
@@ -472,43 +479,45 @@ fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
         return Flow::Break;
     }
 
-    if session.ui.result
-        && !matches!(
-            key.code,
-            KeyCode::Char('q') | KeyCode::Char('r') | KeyCode::Char('?') | KeyCode::F(1)
-        )
-    {
-        session.ui.result = false;
-        return Flow::Stay;
-    }
-
-    if session.ui.help {
-        match key.code {
-            KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Esc => {
-                session.ui.help = false;
-                session.ui.help_scroll = 0;
+    match session.ui.modal {
+        // Anything that is not one of the debugger's own commands dismisses the
+        // result and gets on with looking around.
+        Some(Modal::Result) => {
+            if !matches!(key.code, KeyCode::Char('q' | 'r' | '?') | KeyCode::F(1)) {
+                session.ui.modal = None;
+                return Flow::Stay;
             }
-            // `q` means quit everywhere else; making it mean "close" here would
-            // be the one place it does not.
-            KeyCode::Char('q') => {
-                session.exit = Some(Exit::Quit);
-                return Flow::Break;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                session.ui.help_scroll = session.ui.help_scroll.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let height = HelpOverlay::height(HELP);
-                session.ui.help_scroll = (session.ui.help_scroll + 1).min(height.saturating_sub(1));
-            }
-            _ => {}
         }
-        return Flow::Stay;
+        Some(Modal::Help { scroll }) => {
+            match key.code {
+                KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Esc => session.ui.modal = None,
+                // `q` means quit everywhere else; making it mean "close" here
+                // would be the one place it does not.
+                KeyCode::Char('q') => {
+                    session.exit = Some(Exit::Quit);
+                    return Flow::Break;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    session.ui.modal = Some(Modal::Help {
+                        scroll: scroll.saturating_sub(1),
+                    });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let height = HelpOverlay::height(HELP);
+                    session.ui.modal = Some(Modal::Help {
+                        scroll: (scroll + 1).min(height.saturating_sub(1)),
+                    });
+                }
+                _ => {}
+            }
+            return Flow::Stay;
+        }
+        None => {}
     }
 
     match key.code {
         KeyCode::Char('?') | KeyCode::F(1) => {
-            session.ui.help = true;
+            session.ui.modal = Some(Modal::Help { scroll: 0 });
             Flow::Stay
         }
         KeyCode::Char('q') => {
@@ -521,11 +530,11 @@ fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
         }
 
         // Execution
-        KeyCode::Char(' ') => resume(session, RunState::Step, live),
-        KeyCode::Char('c') | KeyCode::Enter => resume(session, RunState::Continue, live),
-        KeyCode::Char('n') => step_over(session, live),
-        KeyCode::Char('o') => step_out(session, live),
-        KeyCode::Char('g') => run_to_cursor(session, live),
+        KeyCode::Char(' ') => resume(session, RunState::Step),
+        KeyCode::Char('c') | KeyCode::Enter => resume(session, RunState::Continue),
+        KeyCode::Char('n') => step_over(session),
+        KeyCode::Char('o') => step_out(session),
+        KeyCode::Char('g') => run_to_cursor(session),
         KeyCode::Char('p') | KeyCode::Esc => {
             session.run = RunState::Step;
             Flow::Stay
@@ -548,7 +557,7 @@ fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
             Flow::Stay
         }
         KeyCode::Char('B') => {
-            let count = session.breakpoints.len();
+            let count = session.breakpoints().len();
             session.clear_breakpoints();
             session.note(format!("removed {count} breakpoints"), Note::Info);
             Flow::Stay
@@ -560,9 +569,7 @@ fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
             Flow::Stay
         }
         KeyCode::BackTab => {
-            for _ in 0..3 {
-                session.ui.focus = session.ui.focus.next();
-            }
+            session.ui.focus = session.ui.focus.previous();
             Flow::Stay
         }
         KeyCode::Char('m') => {
@@ -653,11 +660,11 @@ fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
             Flow::Stay
         }
         KeyCode::PageUp => {
-            scroll_focused(session, -10);
+            move_focused(session, -10, 0);
             Flow::Stay
         }
         KeyCode::PageDown => {
-            scroll_focused(session, 10);
+            move_focused(session, 10, 0);
             Flow::Stay
         }
         KeyCode::Home => {
@@ -672,9 +679,16 @@ fn handle_key(session: &mut Session, key: KeyEvent, live: bool) -> Flow {
     }
 }
 
+/// Whether the instruction about to run is a `,` with nothing queued to read.
+fn needs_input(session: &Session) -> bool {
+    session.snapshot.location.is_some()
+        && session.program.reads_input(session.snapshot.index)
+        && session.starving_for_input()
+}
+
 /// Set the run state and let the interpreter go, or explain why it cannot.
-fn resume(session: &mut Session, run: RunState, live: bool) -> Flow {
-    if !live {
+fn resume(session: &mut Session, run: RunState) -> Flow {
+    if session.finished {
         session.note(
             "the program has finished — press r to run it again",
             Note::Warn,
@@ -682,9 +696,7 @@ fn resume(session: &mut Session, run: RunState, live: bool) -> Flow {
         return Flow::Stay;
     }
     // Resuming from a `,` with an empty queue is the user choosing EOF.
-    if session.pending_input.is_empty()
-        && matches!(current_instruction(session), Some(Instruction::Input))
-    {
+    if needs_input(session) {
         session.input_eof = true;
     }
     session.run = run;
@@ -692,36 +704,18 @@ fn resume(session: &mut Session, run: RunState, live: bool) -> Flow {
     Flow::Resume
 }
 
-fn current_instruction(session: &Session) -> Option<Instruction> {
-    // The AST is a tree, so there is no flat slice to index. The only thing the
-    // caller needs to know is whether the instruction at the cursor is `,`, and
-    // the source character answers that directly.
-    let location = session.snapshot.location?;
-    let text = session.program.document.line(location.line)?;
-    match text.chars().nth(location.column.checked_sub(1)?)? {
-        ',' => Some(Instruction::Input),
-        '.' => Some(Instruction::Output),
-        '>' => Some(Instruction::IncrementPointer),
-        '<' => Some(Instruction::DecrementPointer),
-        '+' => Some(Instruction::IncrementValue),
-        '-' => Some(Instruction::DecrementValue),
-        '[' => Some(Instruction::LoopCheck),
-        _ => None,
-    }
-}
-
-fn step_over(session: &mut Session, live: bool) -> Flow {
+fn step_over(session: &mut Session) -> Flow {
     let index = session.snapshot.index;
     match session.program.loop_extent(index) {
-        Some((start, end)) => resume(session, RunState::Leave { start, end }, live),
+        Some((start, end)) => resume(session, RunState::Leave { start, end }),
         // Not a loop head: stepping over an ordinary instruction is stepping.
-        None => resume(session, RunState::Step, live),
+        None => resume(session, RunState::Step),
     }
 }
 
-fn step_out(session: &mut Session, live: bool) -> Flow {
+fn step_out(session: &mut Session) -> Flow {
     match session.loop_stack.last().copied() {
-        Some((start, end)) => resume(session, RunState::Leave { start, end }, live),
+        Some((start, end)) => resume(session, RunState::Leave { start, end }),
         None => {
             session.note("not inside a loop — c continues to the end", Note::Warn);
             Flow::Stay
@@ -729,11 +723,11 @@ fn step_out(session: &mut Session, live: bool) -> Flow {
     }
 }
 
-fn run_to_cursor(session: &mut Session, live: bool) -> Flow {
+fn run_to_cursor(session: &mut Session) -> Flow {
     match session.cursor_instruction() {
         Some((position, index)) => {
             session.ui.cursor = position;
-            resume(session, RunState::RunTo(index), live)
+            resume(session, RunState::RunTo(index))
         }
         None => {
             session.note("no instruction on this line", Note::Warn);
@@ -780,7 +774,7 @@ fn apply_prompt(session: &mut Session, prompt: Prompt) {
         PromptKind::GotoCell => match text.parse::<usize>() {
             Ok(address) => {
                 session.ui.memory_follow = false;
-                session.ui.memory_scroll = address / 8;
+                session.ui.reveal = Some(address);
                 session.note(
                     format!("showing cell[{address}] — f re-enables follow"),
                     Note::Info,
@@ -842,22 +836,6 @@ fn move_focused(session: &mut Session, rows: isize, columns: isize) {
     }
 }
 
-fn scroll_focused(session: &mut Session, rows: isize) {
-    match session.ui.focus {
-        Focus::Source => {
-            let (line, column) = session.ui.cursor;
-            let line = (line as isize + rows)
-                .clamp(1, session.program.document.line_count() as isize)
-                as usize;
-            let width = session.program.document.line_width(line).max(1);
-            session.ui.cursor = (line, column.min(width));
-        }
-        Focus::Memory => scroll_memory(session, rows),
-        Focus::Watch => move_focused(session, rows.signum(), 0),
-        Focus::Output => scroll_output(session, rows),
-    }
-}
-
 fn scroll_memory(session: &mut Session, rows: isize) {
     session.ui.memory_follow = false;
     session.ui.memory_scroll = (session.ui.memory_scroll as isize + rows).max(0) as usize;
@@ -882,11 +860,11 @@ fn jump_focused(session: &mut Session, start: bool) {
         }
         Focus::Memory => {
             session.ui.memory_follow = false;
-            session.ui.memory_scroll = if start {
-                0
+            if start {
+                session.ui.memory_scroll = 0;
             } else {
-                session.snapshot.memory.len().saturating_sub(1) / 8
-            };
+                session.ui.reveal = Some(session.snapshot.memory.len().saturating_sub(1));
+            }
         }
         Focus::Watch => {
             session.ui.watch_selected = if start {

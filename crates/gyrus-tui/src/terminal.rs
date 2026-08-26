@@ -46,7 +46,7 @@ impl Drop for TerminalGuard {
 }
 
 /// Undo everything [`TerminalGuard::enter`] did. Safe to call twice.
-pub fn restore() -> io::Result<()> {
+fn restore() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
     Ok(())

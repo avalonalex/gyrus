@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use gyrus::{ExecutionStats, Instruction, SourceLocation};
+use gyrus::{ExecutionStats, SourceLocation};
 use gyrus_tui::{CellDisplay, Position, Theme, Tui};
 
 use crate::program::Program;
@@ -46,6 +46,20 @@ impl Focus {
             Focus::Memory => Focus::Watch,
             Focus::Watch => Focus::Output,
             Focus::Output => Focus::Source,
+        }
+    }
+
+    /// The previous panel, for `shift-Tab`.
+    ///
+    /// Spelled out rather than "press Tab three times": that phrasing hides a
+    /// dependency on the number of panels, and adding a fifth would silently
+    /// make shift-Tab cycle forwards.
+    pub fn previous(self) -> Self {
+        match self {
+            Focus::Source => Focus::Output,
+            Focus::Memory => Focus::Source,
+            Focus::Watch => Focus::Memory,
+            Focus::Output => Focus::Watch,
         }
     }
 }
@@ -123,10 +137,14 @@ impl Outcome {
 }
 
 /// What the user asked for while paused, once execution has unwound.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Exit {
     Quit,
     Restart,
+    /// The terminal failed. Carried out rather than written to a status line
+    /// that only the thing which just failed knows how to draw, so `main` can
+    /// report it and exit non-zero like every other failure.
+    Failed(std::io::Error),
 }
 
 /// Whether execution stops before the instruction at `index`.
@@ -165,12 +183,30 @@ pub struct Ui {
     pub watch_selected: usize,
     /// `None` pins the output panel to the newest line.
     pub output_scroll: Option<usize>,
-    pub help: bool,
-    pub help_scroll: usize,
-    /// Whether the popup describing how the run ended is showing.
-    pub result: bool,
-    /// A one-line question overlaying the status bar, if one is open.
+    /// The popup on screen, if any. One field rather than a flag each, so two
+    /// popups cannot end up stacked on top of one another.
+    pub modal: Option<Modal>,
+    /// A one-line question overlaying the status bar, if one is open. Separate
+    /// from `modal` because it genuinely coexists — it draws in the status bar.
     pub prompt: Option<Prompt>,
+    /// A cell address to bring into view on the next draw.
+    ///
+    /// An address rather than a row, because only the draw knows how many cells
+    /// fit on a row; a caller that divided by a guess would scroll to the wrong
+    /// place on every terminal but its author's.
+    pub reveal: Option<usize>,
+}
+
+/// The popup covering the panels, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Modal {
+    /// The key-binding list.
+    Help {
+        /// First visible row, for a list taller than the terminal.
+        scroll: usize,
+    },
+    /// How the run ended.
+    Result,
 }
 
 /// A one-line question: "watch cell:", "go to line:", "input:".
@@ -217,10 +253,9 @@ impl Default for Ui {
             memory_follow: true,
             watch_selected: 0,
             output_scroll: None,
-            help: false,
-            help_scroll: 0,
-            result: false,
+            modal: None,
             prompt: None,
+            reveal: None,
         }
     }
 }
@@ -241,10 +276,13 @@ pub struct Session {
     pub run: RunState,
 
     /// Breakpoints as the user sees them: source positions.
-    pub breakpoints: BTreeSet<Position>,
-    /// The same breakpoints as instruction indices, which is what the check on
-    /// every instruction actually compares against.
-    breakpoint_indices: HashSet<usize>,
+    ///
+    /// Private because the form the per-instruction check needs is a dense
+    /// bitmap, which lives in the hook that reads it. Every mutation here bumps
+    /// `breakpoint_revision` so the hook knows to rebuild.
+    breakpoints: BTreeSet<Position>,
+    /// Bumped whenever `breakpoints` changes.
+    breakpoint_revision: u64,
 
     pub watches: Vec<usize>,
     pub output: Vec<u8>,
@@ -256,9 +294,11 @@ pub struct Session {
     pub consumed_input: Vec<u8>,
 
     pub snapshot: Snapshot,
-    /// Cells whose value changed since the debugger last looked at the tape —
-    /// one instruction ago while stepping, one redraw ago while running.
+    /// Cells whose value changed since the frame before this one.
     pub modified: HashSet<usize>,
+    /// The tape as the last frame drew it, and the step it was drawn at.
+    displayed: Vec<u8>,
+    displayed_step: Option<u64>,
     /// Enclosing loops, innermost last, as `(start, end)` instruction ranges.
     pub loop_stack: Vec<(usize, usize)>,
 
@@ -289,7 +329,7 @@ impl Session {
             },
             run: RunState::Step,
             breakpoints: BTreeSet::new(),
-            breakpoint_indices: HashSet::new(),
+            breakpoint_revision: 0,
             watches: Vec::new(),
             output: Vec::new(),
             pending_input: VecDeque::new(),
@@ -299,6 +339,8 @@ impl Session {
                 ..Snapshot::default()
             },
             modified: HashSet::new(),
+            displayed: vec![0; memory_size],
+            displayed_step: None,
             loop_stack: Vec::new(),
             input_eof: false,
             message: None,
@@ -329,6 +371,8 @@ impl Session {
             ..Snapshot::default()
         };
         self.modified.clear();
+        self.displayed = vec![0; memory_size];
+        self.displayed_step = None;
         self.loop_stack.clear();
         self.input_eof = false;
         self.run = RunState::Step;
@@ -336,58 +380,72 @@ impl Session {
         self.outcome = None;
         self.finished = false;
         self.ui.output_scroll = None;
-        self.ui.result = false;
+        self.ui.modal = None;
+    }
+
+    /// The breakpoints, for drawing them.
+    pub fn breakpoints(&self) -> &BTreeSet<Position> {
+        &self.breakpoints
+    }
+
+    /// How many times the breakpoints have changed.
+    pub fn breakpoint_revision(&self) -> u64 {
+        self.breakpoint_revision
+    }
+
+    /// A bitmap of the instruction indices that carry a breakpoint.
+    ///
+    /// This is the form the check on every executed instruction wants: indices
+    /// are dense from zero, so a bounds-checked `bool` read beats hashing.
+    pub fn breakpoint_bitmap(&self) -> Vec<bool> {
+        let mut stops = vec![false; self.program.instruction_count()];
+        for position in &self.breakpoints {
+            if let Some(index) = self.program.index_at(*position) {
+                stops[index] = true;
+            }
+        }
+        stops
+    }
+
+    /// Add a breakpoint. Returns whether it was not already there.
+    pub fn set_breakpoint(&mut self, position: Position) -> bool {
+        let added = self.breakpoints.insert(position);
+        self.breakpoint_revision += 1;
+        added
     }
 
     /// Add or remove a breakpoint, returning what happened for the status line.
     pub fn toggle_breakpoint(&mut self, position: Position) -> bool {
-        let added = if self.breakpoints.contains(&position) {
-            self.breakpoints.remove(&position);
+        if self.breakpoints.remove(&position) {
+            self.breakpoint_revision += 1;
             false
         } else {
-            self.breakpoints.insert(position);
-            true
-        };
-        self.rebuild_breakpoints();
-        added
+            self.set_breakpoint(position)
+        }
     }
 
     /// Drop every breakpoint.
     pub fn clear_breakpoints(&mut self) {
         self.breakpoints.clear();
-        self.breakpoint_indices.clear();
+        self.breakpoint_revision += 1;
     }
 
-    /// Recompute the instruction indices the breakpoint check compares against.
-    pub fn rebuild_breakpoints(&mut self) {
-        self.breakpoint_indices = self
-            .breakpoints
-            .iter()
-            .filter_map(|position| self.program.index_at(*position))
-            .collect();
+    /// Whether a `,` reached now would have nothing to read.
+    ///
+    /// Stopping there is the whole point of a debugger: the user gets to supply
+    /// the byte instead of silently taking the EOF branch. Once they resume
+    /// without supplying one, they have chosen EOF, and we stop asking.
+    pub fn starving_for_input(&self) -> bool {
+        self.pending_input.is_empty() && !self.input_eof
     }
 
-    /// Whether execution should stop before instruction `index`.
-    pub fn wants_pause(&self, index: usize, instruction: &Instruction) -> bool {
-        if self.exit.is_some() {
-            return true;
-        }
-        // A `,` with nothing queued would silently take the EOF branch. Stopping
-        // there is the whole point of a debugger: the user gets to supply the
-        // byte. Once they resume without supplying one, they have chosen EOF,
-        // and we stop asking.
-        let starving = matches!(instruction, Instruction::Input)
-            && self.pending_input.is_empty()
-            && !self.input_eof;
-        should_pause(
-            self.run,
-            self.breakpoint_indices.contains(&index),
-            index,
-            starving,
-        )
-    }
-
-    /// Record interpreter state, and note which cells changed since last time.
+    /// Record interpreter state.
+    ///
+    /// Copies the tape and nothing more. Diffing it here would cost a scan of
+    /// every cell on every poll — thousands of times a second — to produce a
+    /// set that is only ever drawn; [`Self::refresh_modified`] does it once per
+    /// frame instead, which also makes "changed" mean "since you last saw the
+    /// screen" rather than "in the last few thousand instructions".
     pub fn observe(
         &mut self,
         memory: &[u8],
@@ -397,21 +455,6 @@ impl Session {
         loop_depth: usize,
         location: Option<SourceLocation>,
     ) {
-        self.modified.clear();
-        for (address, (&before, &after)) in
-            self.snapshot.memory.iter().zip(memory.iter()).enumerate()
-        {
-            if before != after {
-                self.modified.insert(address);
-            }
-        }
-        // An unbounded tape that just grew: everything past the old end is new.
-        for (address, &value) in memory.iter().enumerate().skip(self.snapshot.memory.len()) {
-            if value != 0 {
-                self.modified.insert(address);
-            }
-        }
-
         self.snapshot.memory.clear();
         self.snapshot.memory.extend_from_slice(memory);
         self.snapshot.pointer = pointer;
@@ -419,6 +462,21 @@ impl Session {
         self.snapshot.index = index;
         self.snapshot.loop_depth = loop_depth;
         self.snapshot.location = location;
+    }
+
+    /// Work out which cells have changed since the last frame that showed them.
+    ///
+    /// A redraw that follows no execution — a scroll, a display-mode change —
+    /// leaves the highlight alone rather than clearing it, which is why this
+    /// keys off the step count rather than just comparing.
+    pub fn refresh_modified(&mut self) {
+        if self.displayed_step == Some(self.snapshot.step) {
+            return;
+        }
+        self.modified = gyrus_tui::changed_cells(&self.displayed, &self.snapshot.memory);
+        self.displayed.clear();
+        self.displayed.extend_from_slice(&self.snapshot.memory);
+        self.displayed_step = Some(self.snapshot.step);
     }
 
     /// Whether enough time has passed to redraw while running freely.
@@ -446,7 +504,11 @@ impl Session {
 
     /// Whether execution is stopped on a breakpoint.
     pub fn at_breakpoint(&self) -> bool {
-        self.snapshot.location.is_some() && self.breakpoint_indices.contains(&self.snapshot.index)
+        self.snapshot.location.is_some()
+            && self
+                .program
+                .position(self.snapshot.index)
+                .is_some_and(|position| self.breakpoints.contains(&position))
     }
 
     /// The instruction the user's cursor names, snapping to the nearest one on

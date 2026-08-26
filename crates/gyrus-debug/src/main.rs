@@ -176,6 +176,11 @@ fn run() -> Result<(), String> {
                 session.reset(initial_memory);
                 session.run = initial_run;
             }
+            // The interface could not draw. Report it the way every other
+            // failure is reported, rather than exiting zero in silence.
+            Some(Exit::Failed(error)) => {
+                return Err(format!("Error: terminal failure: {error}"));
+            }
             _ => break,
         }
     }
@@ -294,8 +299,7 @@ fn apply_breakpoint(session: &mut Session, spec: &str) -> Result<(), String> {
 
     match session.program.nearest_on_line((line, column)) {
         Some((position, _)) => {
-            session.breakpoints.insert(position);
-            session.rebuild_breakpoints();
+            session.set_breakpoint(position);
             Ok(())
         }
         None => Err(format!(

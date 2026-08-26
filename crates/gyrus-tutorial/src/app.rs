@@ -4,7 +4,7 @@
 use gyrus_tui::{SourceDocument, Theme};
 
 use crate::editor::Editor;
-use crate::lesson::{LESSONS, Lesson, STEP_LIMIT, Verdict};
+use crate::lesson::{LESSONS, Lesson, STEP_LIMIT, Verdict, evaluate};
 use crate::trace::{self, Trace};
 
 /// Which panel the arrow keys drive.
@@ -40,10 +40,15 @@ pub struct App {
     pub editor: Editor,
     /// The editor's text, split and colored for the source panel.
     pub document: SourceDocument,
+    /// The lesson's prose and task, joined once. It changes only when the
+    /// lesson does, and the panel redraws on every keystroke.
+    pub prose: String,
     /// The last run, if the learner has run anything.
     pub trace: Option<Trace>,
-    /// Which recorded step is on screen.
-    pub step: usize,
+    /// Which recorded step is on screen. Private: [`Self::step`] is the clamped
+    /// value everything else should read, and two spellings one character apart
+    /// meaning different things is a trap.
+    step: usize,
     /// Whether the last run satisfied the lesson.
     pub verdict: Option<Verdict>,
     pub focus: Focus,
@@ -58,6 +63,11 @@ pub struct App {
     pub quit: bool,
 }
 
+/// A lesson's explanation and its task, as one block of text.
+fn prose(lesson: &Lesson) -> String {
+    format!("{}\n\n— — —\n\n{}", lesson.body, lesson.task)
+}
+
 impl App {
     /// Start at `lesson`.
     pub fn new(lesson: usize) -> Self {
@@ -69,6 +79,7 @@ impl App {
             lesson,
             editor,
             document,
+            prose: prose(&LESSONS[lesson]),
             trace: None,
             step: 0,
             verdict: None,
@@ -104,7 +115,7 @@ impl App {
         let source = self.editor.text();
         match trace::record(&source, lesson.input, lesson.cells, STEP_LIMIT) {
             Ok(trace) => {
-                let verdict = lesson.check.evaluate(&trace, &source, lesson.max_length);
+                let verdict = evaluate(lesson.criteria, &trace, &source);
                 if verdict.is_solved() {
                     self.solved[self.lesson] = true;
                 }
@@ -171,6 +182,7 @@ impl App {
             return;
         }
         self.lesson = lesson;
+        self.prose = prose(self.current());
         self.reset_editor();
         self.hints_shown = 0;
         self.lesson_scroll = 0;

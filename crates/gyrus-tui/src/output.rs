@@ -12,7 +12,7 @@ use crate::theme::Theme;
 pub struct OutputView<'a> {
     bytes: &'a [u8],
     theme: &'a Theme,
-    title: String,
+    title: &'static str,
     focused: bool,
     scroll: Option<usize>,
 }
@@ -23,16 +23,10 @@ impl<'a> OutputView<'a> {
         Self {
             bytes,
             theme,
-            title: "Output".to_string(),
+            title: "Output",
             focused: false,
             scroll: None,
         }
-    }
-
-    /// Panel title.
-    pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = title.into();
-        self
     }
 
     /// Draw the border brighter, to show this panel has keyboard focus.
@@ -50,6 +44,31 @@ impl<'a> OutputView<'a> {
     /// How many output lines fit in `area`.
     pub fn visible_lines(area: Rect) -> usize {
         area.height.saturating_sub(2) as usize
+    }
+
+    /// How many display lines `bytes` occupies.
+    ///
+    /// Counts rather than builds, because a panel showing seven lines should
+    /// not pay to format a megabyte of output that scrolled past long ago.
+    pub fn line_count(bytes: &[u8]) -> usize {
+        bytes.iter().filter(|byte| **byte == b'\n').count() + 1
+    }
+
+    /// Byte offset where display line `index` starts.
+    fn line_offset(bytes: &[u8], index: usize) -> usize {
+        if index == 0 {
+            return 0;
+        }
+        let mut seen = 0;
+        for (offset, byte) in bytes.iter().enumerate() {
+            if *byte == b'\n' {
+                seen += 1;
+                if seen == index {
+                    return offset + 1;
+                }
+            }
+        }
+        bytes.len()
     }
 
     /// Split output into display lines, rendering control bytes visibly.
@@ -73,26 +92,25 @@ impl<'a> OutputView<'a> {
 impl Widget for OutputView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let height = Self::visible_lines(area);
-        let all = Self::display_lines(self.bytes);
+        let total = Self::line_count(self.bytes);
         let start = match self.scroll {
-            Some(scroll) => scroll.min(all.len().saturating_sub(1)),
-            None => all.len().saturating_sub(height),
+            Some(scroll) => scroll.min(total.saturating_sub(1)),
+            None => total.saturating_sub(height),
         };
 
-        let lines: Vec<Line> = all[start..]
-            .iter()
+        // Format only the lines that will be drawn. A program left running
+        // writes output faster than anyone reads it, and the panel redraws
+        // sixteen times a second regardless of how much has piled up.
+        let offset = Self::line_offset(self.bytes, start);
+        let lines: Vec<Line> = Self::display_lines(&self.bytes[offset..])
+            .into_iter()
             .take(height)
-            .map(|line| {
-                Line::from(Span::styled(
-                    line.clone(),
-                    Style::default().fg(self.theme.title),
-                ))
-            })
+            .map(|line| Line::from(Span::styled(line, Style::default().fg(self.theme.title))))
             .collect();
 
         let title = Line::from(vec![
             Span::styled(" ", self.theme.dim_style()),
-            Span::styled(self.title.clone(), self.theme.title_style()),
+            Span::styled(self.title, self.theme.title_style()),
             Span::styled(
                 format!("  {} bytes ", self.bytes.len()),
                 self.theme.dim_style(),
@@ -139,5 +157,25 @@ mod tests {
     #[test]
     fn no_output_is_still_one_empty_line() {
         assert_eq!(OutputView::display_lines(b""), vec![String::new()]);
+        assert_eq!(OutputView::line_count(b""), 1);
+    }
+
+    #[test]
+    fn counting_lines_agrees_with_building_them() {
+        for bytes in [&b""[..], b"a", b"a\n", b"a\nb", b"\n\n\n", b"a\nb\nc\n"] {
+            assert_eq!(
+                OutputView::line_count(bytes),
+                OutputView::display_lines(bytes).len(),
+                "{bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_offset_lands_on_the_start_of_that_line() {
+        let bytes = b"one\ntwo\nthree";
+        assert_eq!(OutputView::line_offset(bytes, 0), 0);
+        assert_eq!(&bytes[OutputView::line_offset(bytes, 1)..], b"two\nthree");
+        assert_eq!(&bytes[OutputView::line_offset(bytes, 2)..], b"three");
     }
 }

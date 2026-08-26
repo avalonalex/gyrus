@@ -283,6 +283,7 @@ gyrus/
 │   │   └── tests/           # Corpus, differential, and generated-program tests
 │   ├── gyrus-tui/  # Shared terminal widgets, no application logic
 │   │   └── src/
+│   │       ├── cells.rs     # Reading a tape: what is under the cursor, what changed
 │   │       ├── source.rs    # Code with line numbers, breakpoints, a cursor
 │   │       ├── memory.rs    # The tape as a hex dump
 │   │       ├── tape.rs      # A few cells, labelled, for teaching
@@ -293,6 +294,7 @@ gyrus/
 │   │       ├── overlay.rs   # A centered popup for results and explanations
 │   │       ├── layout.rs    # The two screen shapes
 │   │       ├── terminal.rs  # Entering and leaving the alternate screen
+│   │       ├── test_utils.rs # Render a widget and read it back as text (private)
 │   │       └── theme.rs     # Colors, matching gyrus::syntax
 │   ├── gyrus-debug/ # `gyrus-debug` binary — the debugger
 │   │   └── src/
@@ -302,7 +304,7 @@ gyrus/
 │   │       └── ui.rs        # Drawing and key handling
 │   ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
 │   │   └── src/
-│   │       ├── lesson.rs    # The thirteen lessons and their checks
+│   │       ├── lesson.rs    # The thirteen lessons and their criteria
 │   │       ├── trace.rs     # Recording every step of a run, for scrubbing
 │   │       ├── editor.rs    # A very small text editor
 │   │       ├── app.rs       # Lesson progress and the current attempt

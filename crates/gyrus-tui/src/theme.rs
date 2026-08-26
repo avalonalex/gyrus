@@ -25,9 +25,9 @@ pub enum Category {
 impl Category {
     /// Classify a single source character, ignoring line-comment context.
     ///
-    /// Callers that care about `*` comments should use [`classify_line`], which
-    /// tracks the comment state across the line.
-    pub fn of(ch: char) -> Self {
+    /// Private because `*` comments make per-character classification wrong on
+    /// its own; [`classify_line`] is the entry point.
+    fn of(ch: char) -> Self {
         match ch {
             '>' | '<' => Category::Movement,
             '+' | '-' => Category::Arithmetic,

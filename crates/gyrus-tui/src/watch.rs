@@ -25,6 +25,7 @@ pub struct WatchList<'a> {
     theme: &'a Theme,
     selected: Option<usize>,
     focused: bool,
+    empty_hint: &'a str,
 }
 
 impl<'a> WatchList<'a> {
@@ -35,7 +36,17 @@ impl<'a> WatchList<'a> {
             theme,
             selected: None,
             focused: false,
+            empty_hint: "nothing watched",
         }
+    }
+
+    /// What to say when nothing is being watched.
+    ///
+    /// The caller supplies it because a useful empty state names the key that
+    /// fills it, and only the caller knows which key that is.
+    pub fn empty_hint(mut self, hint: &'a str) -> Self {
+        self.empty_hint = hint;
+        self
     }
 
     /// Index of the highlighted entry, for keyboard removal.
@@ -55,7 +66,7 @@ impl Widget for WatchList<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let lines: Vec<Line> = if self.entries.is_empty() {
             vec![Line::from(Span::styled(
-                " none — press w to add one",
+                format!(" {}", self.empty_hint),
                 self.theme.dim_style(),
             ))]
         } else {

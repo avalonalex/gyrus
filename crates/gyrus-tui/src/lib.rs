@@ -28,6 +28,7 @@
 //! # }
 //! ```
 
+pub mod cells;
 pub mod help;
 pub mod layout;
 pub mod memory;
@@ -35,20 +36,24 @@ pub mod output;
 pub mod overlay;
 pub mod source;
 pub mod status;
+
 pub mod tape;
 pub mod terminal;
+#[cfg(test)]
+mod test_utils;
 pub mod theme;
 pub mod watch;
 
+pub use cells::{cell_under, changed_cells, points_at, printable};
 pub use help::{HelpOverlay, Section};
-pub use layout::{LessonPanes, Panes, centered, centered_rect, lesson_panes, panes};
+pub use layout::{LessonPanes, Panes, centered, lesson_panes, panes};
 pub use memory::{CellDisplay, MemoryView, follow_pointer};
 pub use output::OutputView;
 pub use overlay::Overlay;
 pub use source::{Position, SourceDocument, SourceView, clamp_scroll, follow_scroll};
 pub use status::{Field, Header, Hint, StatusBar};
 pub use tape::TapeStrip;
-pub use terminal::{TerminalGuard, Tui, restore};
+pub use terminal::{TerminalGuard, Tui};
 pub use theme::{Category, Theme, classify_line};
 pub use watch::{WatchEntry, WatchList};
 

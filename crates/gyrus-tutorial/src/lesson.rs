@@ -2,18 +2,22 @@
 
 use crate::trace::{Ending, Trace};
 
-/// What a lesson wants the learner's program to have done.
+/// One thing a lesson asks of the learner's program.
+///
+/// A lesson carries a slice of these rather than a single tagged `Check`,
+/// because criteria compose: two lessons already want a cell *and* an output,
+/// and a combining variant for every pair does not scale past two. An empty
+/// slice is a lesson that only wants reading.
 #[derive(Debug, Clone, Copy)]
-pub enum Check {
-    /// Nothing to satisfy. Read it, try things, move on.
-    Explore,
+pub enum Criterion {
     /// These cells must hold these values when the program finishes. Cells not
     /// listed can hold anything.
     Cells(&'static [(usize, u8)]),
     /// The program must print exactly this.
     Output(&'static str),
-    /// Both of the above.
-    Both(&'static [(usize, u8)], &'static str),
+    /// The program must be no longer than this, counting non-whitespace
+    /// characters — for the lessons whose point is brevity.
+    Length(usize),
 }
 
 /// The result of checking an attempt.
@@ -34,69 +38,63 @@ impl Verdict {
     }
 }
 
-impl Check {
-    /// Judge one recorded run.
-    pub fn evaluate(&self, trace: &Trace, source: &str, max_length: Option<usize>) -> Verdict {
-        if matches!(self, Check::Explore) {
-            return Verdict::Nothing;
-        }
-
-        // A program that was cut off or failed has no final tape to check, and
-        // saying "cell 1 holds 0" about a run that never got there would send
-        // the learner looking in the wrong place.
-        match &trace.ending {
-            Ending::TooManySteps(limit) => {
-                return Verdict::NotYet(format!(
-                    "the program was still running after {limit} steps — something never reaches zero"
-                ));
-            }
-            Ending::Failed(message) => {
-                let first = message.lines().next().unwrap_or("the program failed");
-                return Verdict::NotYet(first.to_string());
-            }
-            Ending::Finished => {}
-        }
-
-        if let Some(limit) = max_length {
-            let length = source.chars().filter(|c| !c.is_whitespace()).count();
-            if length > limit {
-                return Verdict::NotYet(format!(
-                    "that works, but it is {length} characters and the limit is {limit}"
-                ));
-            }
-        }
-
-        let cells = match self {
-            Check::Cells(cells) | Check::Both(cells, _) => Some(*cells),
-            _ => None,
-        };
-        let expected_output = match self {
-            Check::Output(text) | Check::Both(_, text) => Some(*text),
-            _ => None,
-        };
-
-        if let Some(cells) = cells {
-            for &(address, expected) in cells {
+impl Criterion {
+    /// Judge one recorded run against this criterion alone.
+    fn evaluate(&self, trace: &Trace, source: &str) -> Option<String> {
+        match self {
+            Criterion::Cells(cells) => cells.iter().find_map(|&(address, expected)| {
                 let actual = trace.memory.get(address).copied().unwrap_or(0);
-                if actual != expected {
-                    return Verdict::NotYet(format!(
-                        "cell {address} holds {actual}, and the lesson asked for {expected}"
-                    ));
-                }
+                (actual != expected).then(|| {
+                    format!("cell {address} holds {actual}, and the lesson asked for {expected}")
+                })
+            }),
+            Criterion::Output(expected) => {
+                let actual = String::from_utf8_lossy(&trace.output);
+                (actual != *expected).then(|| {
+                    format!(
+                        "the program printed {:?}, and the lesson asked for {:?}",
+                        actual, expected
+                    )
+                })
+            }
+            Criterion::Length(limit) => {
+                let length = source.chars().filter(|c| !c.is_whitespace()).count();
+                (length > *limit).then(|| {
+                    format!("that works, but it is {length} characters and the limit is {limit}")
+                })
             }
         }
+    }
+}
 
-        if let Some(expected) = expected_output {
-            let actual = String::from_utf8_lossy(&trace.output);
-            if actual != expected {
-                return Verdict::NotYet(format!(
-                    "the program printed {:?}, and the lesson asked for {:?}",
-                    actual, expected
-                ));
-            }
+/// Judge one recorded run against everything a lesson asks of it.
+pub fn evaluate(criteria: &[Criterion], trace: &Trace, source: &str) -> Verdict {
+    if criteria.is_empty() {
+        return Verdict::Nothing;
+    }
+
+    // A program that was cut off or failed has no final tape to check, and
+    // saying "cell 1 holds 0" about a run that never got there would send the
+    // learner looking in the wrong place.
+    match &trace.ending {
+        Ending::TooManySteps(limit) => {
+            return Verdict::NotYet(format!(
+                "the program was still running after {limit} steps — something never reaches zero"
+            ));
         }
+        Ending::Failed(message) => {
+            let first = message.lines().next().unwrap_or("the program failed");
+            return Verdict::NotYet(first.to_string());
+        }
+        Ending::Finished => {}
+    }
 
-        Verdict::Solved
+    match criteria
+        .iter()
+        .find_map(|criterion| criterion.evaluate(trace, source))
+    {
+        Some(why) => Verdict::NotYet(why),
+        None => Verdict::Solved,
     }
 }
 
@@ -114,14 +112,12 @@ pub struct Lesson {
     pub answer: &'static str,
     /// Nudges, revealed one at a time.
     pub hints: &'static [&'static str],
-    /// What counts as done.
-    pub check: Check,
+    /// What counts as done. Empty means the lesson only wants reading.
+    pub criteria: &'static [Criterion],
     /// Input handed to the program's `,`.
     pub input: &'static str,
     /// How many cells the tape has for this lesson.
     pub cells: usize,
-    /// A character budget, when the point of the lesson is brevity.
-    pub max_length: Option<usize>,
 }
 
 /// How many steps a lesson program may run before the tutorial gives up.
@@ -155,10 +151,9 @@ Those eight commands are enough to compute anything any computer can compute. Th
         starter: "",
         answer: "+",
         hints: &["One character. The tape starts at zero, and + adds one."],
-        check: Check::Cells(&[(0, 1)]),
+        criteria: &[Criterion::Cells(&[(0, 1)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Counting",
@@ -175,10 +170,9 @@ A cell holds one byte: 0 to 255. Add one to 255 and you are at 0 again. Subtract
             "Seven pluses is the direct route.",
             "So is nine pluses and two minuses. Both are right; one is shorter.",
         ],
-        check: Check::Cells(&[(0, 7)]),
+        criteria: &[Criterion::Cells(&[(0, 7)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "The pointer",
@@ -192,10 +186,9 @@ The pointer is the only way this language has of pointing at anything. There are
         starter: "+>++>+++",
         answer: "+++>++>+",
         hints: &["Only the number of pluses in each group has to change."],
-        check: Check::Cells(&[(0, 3), (1, 2), (2, 1)]),
+        criteria: &[Criterion::Cells(&[(0, 3), (1, 2), (2, 1)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Loops",
@@ -223,10 +216,9 @@ So what did it do? It moved the value. Not copied — moved. Cell 0 is empty at 
             "Two > to reach cell 2 means two < to get back to the counter.",
             "Forget the second < and the ] will be testing the wrong cell.",
         ],
-        check: Check::Cells(&[(0, 0), (2, 5)]),
+        criteria: &[Criterion::Cells(&[(0, 0), (2, 5)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Clearing",
@@ -247,10 +239,9 @@ Its evil twin is [+]. That terminates too, by climbing to 255 and wrapping round
             "Two steps: build the 5, then clear it with [-].",
             "Then move right and count to nine.",
         ],
-        check: Check::Cells(&[(0, 0), (1, 9)]),
+        criteria: &[Criterion::Cells(&[(0, 0), (1, 9)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Multiplication",
@@ -271,10 +262,9 @@ gyrus recognises this shape too. The optimizer calls it MultiplyAdd and computes
             "Six in the counter, seven added each pass.",
             "Or seven in the counter and six added — multiplication does not mind.",
         ],
-        check: Check::Cells(&[(1, 42)]),
+        criteria: &[Criterion::Cells(&[(1, 42)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Why this is enough",
@@ -297,10 +287,9 @@ Everything after this lesson is ergonomics.",
         starter: "+++[>++++<-]>.",
         answer: "+++[>++++<-]>.",
         hints: &["There is nothing to get right here. ctrl-n moves on."],
-        check: Check::Explore,
+        criteria: &[],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Input and output",
@@ -321,10 +310,9 @@ Eight eights is 64, and then one more. Run it.
             "Eight nines is 72, and 72 is H.",
             "i is 105, which is 33 more than H. You are already on the right cell.",
         ],
-        check: Check::Output("Hi"),
+        criteria: &[Criterion::Output("Hi")],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Nested loops",
@@ -343,10 +331,9 @@ The outer counter is consumed on the way, as always, so a two-level nest needs o
             "The starter puts 100 in cell 1. You want it one cell further right.",
             "Two > inside the loop means two < before the -.",
         ],
-        check: Check::Cells(&[(2, 100)]),
+        criteria: &[Criterion::Cells(&[(2, 100)]), Criterion::Length(40)],
         input: "",
         cells: 16,
-        max_length: Some(40),
     },
     Lesson {
         title: "Making a decision",
@@ -374,10 +361,9 @@ For a real else you need a second cell: set an else-flag to 1, clear it inside t
         ],
         // The flag has to end up cleared as well: a program that prints y and
         // leaves the flag set is one that got out of the loop some other way.
-        check: Check::Both(&[(0, 0)], "y"),
+        criteria: &[Criterion::Cells(&[(0, 0)]), Criterion::Output("y")],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Copying",
@@ -400,10 +386,9 @@ That is also the argument for the macro preprocessor gyrus has a design for and 
             "Then move one of them back into cell 0 with a second loop.",
             "Every > inside a loop body needs its < before the ].",
         ],
-        check: Check::Cells(&[(0, 5), (1, 5), (2, 5)]),
+        criteria: &[Criterion::Cells(&[(0, 5), (1, 5), (2, 5)])],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "Walking the tape",
@@ -426,10 +411,9 @@ Building a string is the same idea run backwards: fill a run of cells with chara
             "64 is one less than A, two less than B, three less than C.",
             "Move right, add the difference, print. Three times.",
         ],
-        check: Check::Output("ABC"),
+        criteria: &[Criterion::Output("ABC")],
         input: "",
         cells: 16,
-        max_length: None,
     },
     Lesson {
         title: "The halting problem",
@@ -454,10 +438,9 @@ Below is a cell set to one and a loop with an empty body that can never change i
         starter: "+[]",
         answer: "+[]",
         hints: &["Nothing to solve. ctrl-r runs it; the cap does the rest."],
-        check: Check::Explore,
+        criteria: &[],
         input: "",
         cells: 16,
-        max_length: None,
     },
 ];
 
@@ -480,9 +463,7 @@ mod tests {
     fn every_answer_solves_its_own_lesson() {
         for (index, lesson) in LESSONS.iter().enumerate() {
             let trace = run(lesson.answer, lesson);
-            let verdict = lesson
-                .check
-                .evaluate(&trace, lesson.answer, lesson.max_length);
+            let verdict = evaluate(lesson.criteria, &trace, lesson.answer);
             assert!(
                 verdict.is_solved(),
                 "lesson {index} ({}): the answer {:?} gives {verdict:?}",
@@ -517,13 +498,11 @@ mod tests {
     #[test]
     fn no_starter_is_already_the_answer() {
         for (index, lesson) in LESSONS.iter().enumerate() {
-            if matches!(lesson.check, Check::Explore) {
+            if lesson.criteria.is_empty() {
                 continue;
             }
             let trace = run(lesson.starter, lesson);
-            let verdict = lesson
-                .check
-                .evaluate(&trace, lesson.starter, lesson.max_length);
+            let verdict = evaluate(lesson.criteria, &trace, lesson.starter);
             assert!(
                 !verdict.is_solved(),
                 "lesson {index} ({}): the starter already solves it, so there is nothing to do",
@@ -552,7 +531,7 @@ mod tests {
     fn a_check_reports_which_cell_is_wrong() {
         let lesson = &LESSONS[1];
         let trace = run("+", lesson);
-        match lesson.check.evaluate(&trace, "+", None) {
+        match evaluate(lesson.criteria, &trace, "+") {
             Verdict::NotYet(why) => {
                 assert!(why.contains("cell 0"), "{why}");
                 assert!(why.contains('7'), "{why}");
@@ -565,7 +544,7 @@ mod tests {
     fn a_program_that_never_ends_is_reported_as_such_and_not_as_a_wrong_cell() {
         let lesson = &LESSONS[1];
         let trace = run("+[]", lesson);
-        match lesson.check.evaluate(&trace, "+[]", None) {
+        match evaluate(lesson.criteria, &trace, "+[]") {
             Verdict::NotYet(why) => assert!(why.contains("still running"), "{why}"),
             other => panic!("expected NotYet, got {other:?}"),
         }
@@ -578,7 +557,7 @@ mod tests {
         let lesson = &LESSONS[8];
         let brute = format!(">>{}", "+".repeat(100));
         let trace = run(&brute, lesson);
-        match lesson.check.evaluate(&trace, &brute, lesson.max_length) {
+        match evaluate(lesson.criteria, &trace, &brute) {
             Verdict::NotYet(why) => assert!(why.contains("limit"), "{why}"),
             other => panic!("expected NotYet, got {other:?}"),
         }

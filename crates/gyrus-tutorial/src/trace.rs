@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex};
 
 use gyrus::hooks::{ExecutionHook, HookContext, HookDecision};
-use gyrus::io::{BfInput, BfOutput};
+use gyrus::io::{BfOutput, StringIo};
 use gyrus::{
     BfError, ExecutionConfigBuilder, Instruction, SourceLocation, interpret_with_io,
     parse_with_debug,
@@ -176,21 +176,6 @@ impl BfOutput for Collect {
     }
 }
 
-struct Feed {
-    bytes: Vec<u8>,
-    position: usize,
-}
-
-impl BfInput for Feed {
-    fn read_byte(&mut self) -> std::io::Result<Option<u8>> {
-        let byte = self.bytes.get(self.position).copied();
-        if byte.is_some() {
-            self.position += 1;
-        }
-        Ok(byte)
-    }
-}
-
 /// Run `source` on a `cells`-cell tape, recording at most `limit` steps.
 ///
 /// Parse errors come back as `Err`; anything that goes wrong at run time is an
@@ -211,10 +196,9 @@ pub fn record(source: &str, input: &str, cells: usize, limit: usize) -> Result<T
         }))
         .build();
 
-    let mut feed = Feed {
-        bytes: input.as_bytes().to_vec(),
-        position: 0,
-    };
+    // `StringIo` is already the input half of this; only the output side needs
+    // a custom adapter, because the recorder reads the length mid-run.
+    let mut feed = StringIo::new(input);
     let mut collect = Collect {
         output: Arc::clone(&output),
     };

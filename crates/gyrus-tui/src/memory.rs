@@ -8,6 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
+use crate::cells::{cell_under, points_at, printable};
 use crate::theme::Theme;
 
 /// How cell values are written out.
@@ -53,16 +54,8 @@ impl CellDisplay {
         match self {
             CellDisplay::Hex => format!("{byte:02X}"),
             CellDisplay::Decimal => format!("{byte:>3}"),
-            CellDisplay::Ascii => printable(byte).to_string(),
+            CellDisplay::Ascii => printable(byte, '.').to_string(),
         }
-    }
-}
-
-fn printable(byte: u8) -> char {
-    if (0x20..0x7f).contains(&byte) {
-        byte as char
-    } else {
-        '.'
     }
 }
 
@@ -130,10 +123,17 @@ impl<'a> MemoryView<'a> {
         self
     }
 
-    /// How many cells fit on one row of `area` in `display` mode.
+    /// How many cells fit on one row of `area`, and whether the ASCII sidebar
+    /// fits beside them.
     ///
-    /// Snapped down to a multiple of 8 so addresses stay round.
-    pub fn columns(area: Rect, display: CellDisplay) -> usize {
+    /// One function because the two answers are one inequality: the sidebar
+    /// fits exactly when the row was sized with room for it. Computing them
+    /// apart meant the gutter width and the separator width appeared twice, in
+    /// forms that did not look alike -- change one and the dump and the sidebar
+    /// disagree about how much room they have, silently.
+    ///
+    /// The count is snapped down to a multiple of 8 so addresses stay round.
+    pub fn layout(area: Rect, display: CellDisplay) -> (usize, bool) {
         let inner = area.width.saturating_sub(2) as usize;
         let available = inner.saturating_sub(GUTTER);
         let per_cell = display.width() + 1;
@@ -141,16 +141,23 @@ impl<'a> MemoryView<'a> {
         // Prefer a layout wide enough for both; drop the sidebar rather than
         // squeeze the dump below eight cells a row.
         let with_ascii = available.saturating_sub(3) / (per_cell + 1);
-        let count = if with_ascii >= 8 {
+        let ascii = with_ascii >= 8;
+        let count = if ascii {
             with_ascii
         } else {
             available / per_cell
         };
-        if count >= 8 {
+        let count = if count >= 8 {
             count / 8 * 8
         } else {
             count.max(1)
-        }
+        };
+        (count, ascii)
+    }
+
+    /// How many cells fit on one row of `area` in `display` mode.
+    pub fn columns(area: Rect, display: CellDisplay) -> usize {
+        Self::layout(area, display).0
     }
 
     /// How many memory rows fit in `area`, after the info line and header.
@@ -158,14 +165,8 @@ impl<'a> MemoryView<'a> {
         area.height.saturating_sub(4) as usize
     }
 
-    fn show_ascii(&self, area: Rect, columns: usize) -> bool {
-        let inner = area.width.saturating_sub(2) as usize;
-        GUTTER + columns * (self.display.width() + 1) + 3 + columns <= inner
-    }
-
     fn cell_style(&self, address: usize, byte: u8) -> Style {
-        let is_pointer = self.pointer >= 0 && self.pointer as usize == address;
-        if is_pointer {
+        if points_at(self.pointer, address) {
             return Style::default()
                 .fg(self.theme.pointer)
                 .add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -192,18 +193,15 @@ impl<'a> MemoryView<'a> {
                     .add_modifier(Modifier::BOLD),
             ),
         ];
-        match usize::try_from(self.pointer)
-            .ok()
-            .and_then(|index| self.memory.get(index))
-        {
-            Some(&byte) => {
+        match cell_under(self.memory, self.pointer) {
+            Some(byte) => {
                 spans.push(Span::styled("   cell ", self.theme.dim_style()));
                 spans.push(Span::styled(
                     format!("{byte}"),
                     Style::default().fg(self.theme.title),
                 ));
                 spans.push(Span::styled(
-                    format!("  0x{byte:02X}  '{}'", printable(byte)),
+                    format!("  0x{byte:02X}  '{}'", printable(byte, '.')),
                     self.theme.dim_style(),
                 ));
             }
@@ -257,7 +255,7 @@ impl<'a> MemoryView<'a> {
                 let address = base + column;
                 match self.memory.get(address) {
                     Some(&byte) => spans.push(Span::styled(
-                        printable(byte).to_string(),
+                        printable(byte, '.').to_string(),
                         self.cell_style(address, byte),
                     )),
                     None => spans.push(Span::raw(" ")),
@@ -270,9 +268,8 @@ impl<'a> MemoryView<'a> {
 
 impl Widget for MemoryView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let columns = Self::columns(area, self.display);
+        let (columns, ascii) = Self::layout(area, self.display);
         let rows = Self::visible_rows(area);
-        let ascii = self.show_ascii(area, columns);
 
         let mut lines = vec![self.info_line(), Line::raw(""), self.header_line(columns)];
         for row in 0..rows {
@@ -325,9 +322,8 @@ pub fn follow_pointer(scroll: usize, pointer: isize, columns: usize, rows: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::render;
     use crate::theme::Theme;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     fn area(width: u16, height: u16) -> Rect {
         Rect::new(0, 0, width, height)
@@ -363,23 +359,6 @@ mod tests {
     #[test]
     fn an_off_tape_pointer_never_scrolls_the_view() {
         assert_eq!(follow_pointer(4, -1, 8, 10), 4);
-    }
-
-    fn render(view: MemoryView<'_>, width: u16, height: u16) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
-        terminal
-            .draw(|frame| frame.render_widget(view, frame.area()))
-            .expect("draw");
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     #[test]

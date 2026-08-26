@@ -55,11 +55,6 @@ impl SourceDocument {
     pub fn line_width(&self, line: usize) -> usize {
         self.line(line).map_or(0, |text| text.chars().count())
     }
-
-    /// Every line, in order.
-    pub fn lines(&self) -> &[String] {
-        &self.lines
-    }
 }
 
 /// The source code panel.
@@ -301,9 +296,8 @@ pub fn clamp_scroll(scroll: usize, total: usize, span: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::render;
     use crate::theme::Theme;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     #[test]
     fn an_empty_program_still_has_one_line() {
@@ -346,24 +340,6 @@ mod tests {
     fn clamping_stops_at_the_last_screenful() {
         assert_eq!(clamp_scroll(90, 50, 20), 30);
         assert_eq!(clamp_scroll(5, 50, 20), 5);
-    }
-
-    /// Render into a fixed-size buffer and return it as lines of text.
-    fn render(view: SourceView<'_>, width: u16, height: u16) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
-        terminal
-            .draw(|frame| frame.render_widget(view, frame.area()))
-            .expect("draw");
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     #[test]

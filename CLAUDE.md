@@ -19,8 +19,12 @@ the development compiler.
   (`gyrus --jit`); see `docs/execution-models.md` and the crate's module docs
 - **gyrus-tui** (`crates/gyrus-tui/`): shared terminal widgets — source panel,
   hex memory dump, labelled tape strip, output, watches, status, help and
-  overlay popups, plus the terminal guard. Widgets only: nothing in here knows
-  about breakpoints or lesson progress
+  overlay popups, plus the terminal guard and `cells.rs` for reading a tape.
+  A widget may name what it draws (`SourceView::breakpoints`); it may not name
+  a **key**, because the two binaries bind them differently — `?` opens help in
+  the debugger, and in the tutorial `?` is a character you might be typing. Any
+  text naming a key is a parameter (`HelpOverlay::dismiss`,
+  `WatchList::empty_hint`). No application state lives here
 - **gyrus-debug** (`crates/gyrus-debug/`): `gyrus-debug` binary — the terminal
   debugger; see `docs/debugger.md`
 - **gyrus-tutorial** (`crates/gyrus-tutorial/`): `gyrus-tutorial` binary —

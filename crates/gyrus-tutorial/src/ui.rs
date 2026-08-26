@@ -10,12 +10,14 @@ use gyrus_tui::ratatui::text::{Line, Span};
 use gyrus_tui::ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 use gyrus_tui::{
     Header, HelpOverlay, OutputView, Overlay, Section, SourceView, StatusBar, TapeStrip, Tui,
-    clamp_scroll,
+    cell_under, clamp_scroll,
 };
 
 use crate::app::{App, Focus, Note, Popup};
 use crate::lesson::{LESSONS, Verdict};
-use crate::trace::Ending;
+// Aliased: ratatui's `Frame` is the drawing surface, and this one is a
+// recorded step. Both appear in this file.
+use crate::trace::{Ending, Frame as TraceFrame};
 
 /// Width of the lesson-text column, as a percentage. Prose needs the room;
 /// a lesson program is a line or two.
@@ -53,19 +55,19 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
         .map(|trace| trace.changed_at(step))
         .unwrap_or_default();
 
-    let memory = frame_state
+    let empty_tape = vec![0; app.current().cells];
+    let memory: &[u8] = frame_state
         .as_ref()
-        .map(|frame| frame.memory.clone())
-        .unwrap_or_else(|| vec![0; app.current().cells]);
+        .map_or(&empty_tape, |frame| frame.memory.as_slice());
     let pointer = frame_state.as_ref().map_or(0, |frame| frame.pointer);
     app.tape_offset = TapeStrip::follow(app.tape_offset, pointer, TapeStrip::capacity(panes.tape));
 
-    let output: Vec<u8> = match (&app.trace, &frame_state) {
-        (Some(trace), Some(frame)) => {
-            trace.output[..frame.output_len.min(trace.output.len())].to_vec()
-        }
-        (Some(trace), None) => trace.output.clone(),
-        _ => Vec::new(),
+    // Borrowed, not copied: the whole output is already in the trace, and a
+    // runaway lesson program writes thousands of bytes a frame would re-copy.
+    let output: &[u8] = match (&app.trace, &frame_state) {
+        (Some(trace), Some(frame)) => &trace.output[..frame.output_len.min(trace.output.len())],
+        (Some(trace), None) => &trace.output,
+        _ => &[],
     };
 
     let current = frame_state
@@ -74,13 +76,12 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
         .map(|location| (location.line, location.column));
 
     let lesson = app.current();
-    let prose = format!("{}\n\n— — —\n\n{}", lesson.body, lesson.task);
-    let prose_lines = prose.lines().count();
+    let prose_lines = app.prose.lines().count();
     let prose_height = panes.lesson.height.saturating_sub(2) as usize;
     app.lesson_scroll = clamp_scroll(app.lesson_scroll, prose_lines, prose_height);
 
     let (state, state_color) = header_state(app);
-    let fields = status_fields(app, step);
+    let fields = status_fields(app, frame_state.as_ref());
     let hints = status_hints(app);
     let note = app.message.as_ref().map(|(text, kind)| {
         (
@@ -109,7 +110,7 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
 
         frame.render_widget(
             LessonText {
-                prose: &prose,
+                prose: &app.prose,
                 scroll: app.lesson_scroll,
                 theme: &app.theme,
                 title: lesson.title,
@@ -127,7 +128,7 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
         );
 
         frame.render_widget(
-            TapeStrip::new(&memory, pointer, &app.theme)
+            TapeStrip::new(memory, pointer, &app.theme)
                 .changed(&changed)
                 .offset(app.tape_offset)
                 .title(tape_title(app, step)),
@@ -135,7 +136,7 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
         );
 
         frame.render_widget(
-            OutputView::new(&output, &app.theme).focused(false),
+            OutputView::new(output, &app.theme).focused(false),
             panes.output,
         );
 
@@ -158,7 +159,9 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
 
         if app.popup == Some(Popup::Help) {
             frame.render_widget(
-                HelpOverlay::new(HELP, &app.theme).title("gyrus-tutorial keys"),
+                HelpOverlay::new(HELP, &app.theme)
+                    .title("gyrus-tutorial keys")
+                    .dismiss("F1 or esc to close"),
                 frame.area(),
             );
         }
@@ -236,18 +239,15 @@ fn tape_title(app: &App, step: usize) -> String {
     }
 }
 
-fn status_fields(app: &App, step: usize) -> Vec<(&'static str, String)> {
+fn status_fields(app: &App, frame: Option<&TraceFrame>) -> Vec<(&'static str, String)> {
     let mut fields = Vec::new();
-    match &app.trace {
-        Some(trace) => {
-            let frame = trace.frame(step);
+    match frame {
+        Some(frame) => {
             fields.push(("ptr", frame.pointer.to_string()));
             fields.push((
                 "cell",
-                usize::try_from(frame.pointer)
-                    .ok()
-                    .and_then(|index| frame.memory.get(index))
-                    .map_or_else(|| "off tape".to_string(), u8::to_string),
+                cell_under(&frame.memory, frame.pointer)
+                    .map_or_else(|| "off tape".to_string(), |byte| byte.to_string()),
             ));
             fields.push(("depth", frame.loop_depth.to_string()));
         }

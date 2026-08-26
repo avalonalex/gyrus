@@ -17,7 +17,6 @@ pub struct Overlay<'a> {
     theme: &'a Theme,
     accent: Option<Color>,
     size: (u16, u16),
-    scroll: usize,
     wrap: bool,
 }
 
@@ -31,7 +30,6 @@ impl<'a> Overlay<'a> {
             theme,
             accent: None,
             size: (70, 60),
-            scroll: 0,
             wrap: false,
         }
     }
@@ -57,12 +55,6 @@ impl<'a> Overlay<'a> {
         self
     }
 
-    /// First visible line, for text longer than the popup.
-    pub fn scroll(mut self, scroll: usize) -> Self {
-        self.scroll = scroll;
-        self
-    }
-
     /// Wrap long lines instead of clipping them.
     pub fn wrap(mut self, wrap: bool) -> Self {
         self.wrap = wrap;
@@ -79,7 +71,6 @@ impl Widget for Overlay<'_> {
         let content: usize = self
             .body
             .lines()
-            .skip(self.scroll)
             .map(|line| line.chars().count().max(1).div_ceil(inner))
             .sum();
         let wanted = u16::try_from(content + 2).unwrap_or(u16::MAX);
@@ -94,7 +85,6 @@ impl Widget for Overlay<'_> {
         let lines: Vec<Line> = self
             .body
             .lines()
-            .skip(self.scroll)
             .map(|line| {
                 Line::from(Span::styled(
                     line.to_string(),

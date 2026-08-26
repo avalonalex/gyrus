@@ -12,8 +12,9 @@ use gyrus_tui::{Position, SourceDocument};
 
 /// A loaded BrainFuck program with everything the debugger needs to show it.
 pub struct Program {
-    /// Path the source came from.
-    pub path: PathBuf,
+    /// File name, for panel titles. A field rather than a method because the
+    /// title is wanted twice a frame and the name never changes.
+    pub name: String,
     /// Source text, split and syntax-classified for the source panel.
     pub document: SourceDocument,
     /// The parsed AST.
@@ -23,6 +24,8 @@ pub struct Program {
     /// Instruction index to source position. Dense: the parser records one
     /// location per instruction, numbered from zero.
     positions: Vec<Position>,
+    /// Instruction index to the instruction itself, in the same numbering.
+    kinds: Vec<Instruction>,
     /// The inverse map, so a cursor can name an instruction.
     indices: BTreeMap<Position, usize>,
 }
@@ -57,22 +60,23 @@ impl Program {
             indices.insert(position, index);
         }
 
+        let mut kinds = Vec::with_capacity(positions.len());
+        flatten(&instructions, &mut kinds);
+
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+
         Ok(Self {
-            path,
+            name,
             document: SourceDocument::new(source),
             instructions,
             debug,
             positions,
             indices,
+            kinds,
         })
-    }
-
-    /// File name for panel titles.
-    pub fn name(&self) -> String {
-        self.path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.path.display().to_string())
     }
 
     /// How many instructions the program has.
@@ -83,6 +87,16 @@ impl Program {
     /// Where instruction `index` sits in the source.
     pub fn position(&self, index: usize) -> Option<Position> {
         self.positions.get(index).copied()
+    }
+
+    /// What instruction `index` is.
+    ///
+    /// The mirror of [`Self::position`]. The alternative — reading the source
+    /// character back out of the rendered document — would give the debugger a
+    /// second, weaker identity for "where we are" and a fourth copy of what a
+    /// `,` means.
+    pub fn instruction_at(&self, index: usize) -> Option<&Instruction> {
+        self.kinds.get(index)
     }
 
     /// The instruction at an exact source position.
@@ -141,6 +155,12 @@ impl Program {
             .or_else(|| self.indices.keys().next_back().copied())
     }
 
+    /// Whether instruction `index` reads input, and so may need the user to
+    /// supply a byte before it can run.
+    pub fn reads_input(&self, index: usize) -> bool {
+        matches!(self.instruction_at(index), Some(Instruction::Input))
+    }
+
     /// The half-open instruction range a loop occupies, given the index of its
     /// `[`. Returns `None` when `index` is not a loop head.
     ///
@@ -149,6 +169,21 @@ impl Program {
     pub fn loop_extent(&self, index: usize) -> Option<(usize, usize)> {
         let metadata = self.debug.get_loop_metadata(index)?;
         Some((index, index + metadata.body_size))
+    }
+}
+
+/// Flatten the AST into the parser's instruction numbering.
+///
+/// The parser numbers instructions in exactly this order: depth-first, with
+/// the `LoopCheck` standing for `[` counted at the head of each loop body and
+/// the `Loop` container itself counted not at all. `]` gets no number because
+/// it is not an instruction.
+fn flatten(instructions: &[Instruction], out: &mut Vec<Instruction>) {
+    for instruction in instructions {
+        match instruction {
+            Instruction::Loop(body) => flatten(body, out),
+            other => out.push(other.clone()),
+        }
     }
 }
 
@@ -204,6 +239,40 @@ mod tests {
         assert_eq!(program.next_instruction((1, 5)), Some((1, 1)));
         assert_eq!(program.previous_instruction((1, 5)), Some((1, 1)));
         assert_eq!(program.previous_instruction((1, 1)), Some((1, 5)));
+    }
+
+    #[test]
+    fn the_flattened_instructions_line_up_with_the_parsers_numbering() {
+        // If these two ever disagree, the debugger points at one instruction
+        // and reports the properties of another.
+        let program = program("+[->+<],.");
+        assert_eq!(program.instruction_count(), 8);
+        for index in 0..program.instruction_count() {
+            let position = program.position(index).expect("position");
+            let instruction = program.instruction_at(index).expect("instruction");
+            let text = program.document.line(position.0).expect("line");
+            let character = text.chars().nth(position.1 - 1).expect("character");
+            let expected = match character {
+                '>' => Instruction::IncrementPointer,
+                '<' => Instruction::DecrementPointer,
+                '+' => Instruction::IncrementValue,
+                '-' => Instruction::DecrementValue,
+                '.' => Instruction::Output,
+                ',' => Instruction::Input,
+                '[' => Instruction::LoopCheck,
+                other => panic!("index {index} maps to {other:?}, not an instruction"),
+            };
+            assert_eq!(*instruction, expected, "index {index} at {position:?}");
+        }
+    }
+
+    #[test]
+    fn reads_input_finds_the_comma_and_nothing_else() {
+        let program = program("+,+");
+        assert!(!program.reads_input(0));
+        assert!(program.reads_input(1));
+        assert!(!program.reads_input(2));
+        assert!(!program.reads_input(99));
     }
 
     #[test]
