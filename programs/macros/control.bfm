@@ -1,0 +1,28 @@
+* A macro that opens a loop, and a different macro that closes it -- the
+* control-flow pattern the design's standard library proposes. Whether the
+* bracket stack and the balance check survive a loop split across two macro
+* bodies is not obvious.
+@var counter at 0
+@var letter  at 1
+
+@macro while_not_zero(cell) {
+    @to cell
+    [
+}
+
+@macro end_while(cell) {
+    @to cell
+    -
+    ]
+}
+
+@to letter
++{65}
+@to counter
++{3}
+
+@while_not_zero(counter)
+    @to letter
+    .
+    +
+@end_while(counter)

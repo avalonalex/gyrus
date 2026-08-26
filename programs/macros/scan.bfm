@@ -1,0 +1,24 @@
+* A string laid out in cells, printed by a scan loop -- the shape that makes
+* the expander lose track of the cursor, and @here the way back.
+@var first at 0
+@var after at 3
+
+@to first
++{72}
+>
++{105}
+>
++{33}
+
+@to first
+[
+    .
+    >
+]
+
+* The scan stopped on the terminator, which is `after`. The expander cannot
+* know that; saying so costs nothing and emits nothing.
+@here after
+@to after
++{10}
+.
