@@ -8,14 +8,29 @@
 
 use std::io::Write;
 
+use crate::directive::understood;
 use gyrus::SourceLocation;
 use thiserror::Error;
 
-/// Directives the design has a plan for but the expander does not implement.
+/// What a name was declared to be.
 ///
-/// Naming them separately is worth five lines: `@var` is a reasonable thing to
-/// type, and "unknown directive" would be a lie about why it failed.
-pub(crate) const PLANNED: &[&str] = &["var", "to", "macro", "include", "ifdef", "ifndef", "endif"];
+/// A pair of `&'static str` would do the same job in prose, but two of them
+/// plus an advice string made `MacroError` large enough that returning it by
+/// value was worth a lint. This is one byte and reads better at the use site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Constant,
+    Variable,
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Kind::Constant => "constant",
+            Kind::Variable => "variable",
+        })
+    }
+}
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -75,6 +90,30 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("'{name}' is a {found}, not a {wanted}, at {location}")]
+    WrongKind {
+        name: String,
+        found: Kind,
+        wanted: Kind,
+        location: SourceLocation,
+        declared: SourceLocation,
+    },
+
+    #[error("The cursor's position is not known at {location}, so '@to {name}' cannot move to it")]
+    PositionUnknown {
+        name: String,
+        location: SourceLocation,
+        /// The `[` of the loop that lost it.
+        lost_at: SourceLocation,
+    },
+
+    #[error("'@to' at {location} is inside a loop that does not put the cursor back")]
+    MovingInsideUnbalancedLoop {
+        location: SourceLocation,
+        /// The `[` of the loop in question.
+        loop_at: SourceLocation,
+    },
+
     #[error("Unmatched '[' at {location}")]
     UnmatchedOpenBracket { location: SourceLocation },
 
@@ -85,6 +124,13 @@ pub enum MacroError {
     RepeatTooLarge {
         count: u64,
         limit: u64,
+        location: SourceLocation,
+    },
+
+    #[error("Cell {cell} at {location} is past the {limit} the whole file may expand to")]
+    CellTooFar {
+        cell: u64,
+        limit: usize,
         location: SourceLocation,
     },
 
@@ -99,6 +145,23 @@ pub enum MacroError {
 }
 
 impl MacroError {
+    /// A name used where the other kind belongs.
+    pub(crate) fn wrong_kind(
+        name: &str,
+        found: Kind,
+        wanted: Kind,
+        location: SourceLocation,
+        declared: SourceLocation,
+    ) -> Self {
+        MacroError::WrongKind {
+            name: name.to_string(),
+            found,
+            wanted,
+            location,
+            declared,
+        }
+    }
+
     /// Where in the `.bfm` source this went wrong.
     pub fn location(&self) -> SourceLocation {
         match self {
@@ -110,8 +173,12 @@ impl MacroError {
             | MacroError::BadRepeatCount { location, .. }
             | MacroError::RepeatNotRepeatable { location, .. }
             | MacroError::StrayBrace { location, .. }
+            | MacroError::WrongKind { location, .. }
+            | MacroError::PositionUnknown { location, .. }
+            | MacroError::MovingInsideUnbalancedLoop { location, .. }
             | MacroError::UnmatchedOpenBracket { location }
             | MacroError::UnmatchedCloseBracket { location }
+            | MacroError::CellTooFar { location, .. }
             | MacroError::RepeatTooLarge { location, .. }
             | MacroError::ExpansionTooLarge { location, .. } => *location,
         }
@@ -121,8 +188,8 @@ impl MacroError {
     ///
     /// Matched exhaustively on purpose. A `_ => None` arm compiles for every
     /// variant added later, so each one would ship hintless by default rather
-    /// than by decision -- and with `@var`, `@to` and `@macro` still to come
-    /// that is a standing invitation. The variants that genuinely have nothing
+    /// than by decision -- and with `@macro` and the conditionals still to
+    /// come that is a standing invitation. The variants that genuinely have nothing
     /// to add carry their advice in `detail` and say so here.
     pub fn hint(&self) -> Option<String> {
         match self {
@@ -140,21 +207,24 @@ impl MacroError {
                 match nearest(name, defined) {
                     Some(near) => format!("Did you mean '{near}'?"),
                     None if defined.is_empty() => {
-                        "Nothing is defined above this line. Add `@define NAME VALUE` before it."
+                        "Nothing is defined above this line. Add `@define NAME VALUE` or \
+                         `@var NAME at N` before it."
                             .to_string()
                     }
                     None => format!("Defined above this line: {}.", defined.join(", ")),
                 }
             }),
             MacroError::PlannedDirective { name, .. } => Some(format!(
-                "@{name} is part of the design but not built yet. \
-                 Today the expander understands @define and repeat counts like +{{N}}."
+                "@{name} is part of the design but not built yet. {}",
+                understood()
             )),
-            MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => Some(
-                "The expander understands @define. A directive must start its line; \
-                 an '@' anywhere else is an ordinary comment character."
-                    .to_string(),
-            ),
+            MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => {
+                Some(format!(
+                    "{} A directive must start its line; an '@' anywhere else is \
+                     an ordinary comment character.",
+                    understood()
+                ))
+            }
             MacroError::Redefinition { first, .. } => Some(format!(
                 "It was first defined at {first}. A symbol is defined once, so that a name means one thing."
             )),
@@ -170,6 +240,34 @@ impl MacroError {
             MacroError::StrayBrace { .. } => {
                 Some("There is no repeat count open here for a '}' to close.".to_string())
             }
+            MacroError::WrongKind {
+                name,
+                found,
+                declared,
+                ..
+            } => Some(format!(
+                "'{name}' was declared a {found} at {declared}. {}.",
+                // What the kind it *is* would be written as. Matching on the
+                // kind that was wanted gave the same text only because two
+                // kinds make one the negation of the other; a third would
+                // have needed a special case here.
+                match found {
+                    Kind::Constant => format!("`+{{{name}}}` uses its value as a repeat count"),
+                    Kind::Variable => format!("`@to {name}` moves the cursor to it"),
+                }
+            )),
+            MacroError::PositionUnknown { lost_at, .. } => Some(format!(
+                "The loop at {lost_at} does not put the cursor back where it found it, so \
+                 where it ends up depends on the data. That is ordinary BrainFuck -- `[>]` \
+                 is a scan -- and it is only a problem for `@to`. Say `@here NAME` once you \
+                 know where the scan landed."
+            )),
+            MacroError::MovingInsideUnbalancedLoop { loop_at, .. } => Some(format!(
+                "The loop at {loop_at} leaves the cursor somewhere other than it found it, \
+                 so this `@to` would emit the right movement on the first iteration and the \
+                 wrong movement on every one after. Move the cursor with '>' and '<' inside \
+                 a loop like this, or make the body put the cursor back."
+            )),
             MacroError::UnmatchedOpenBracket { .. } => Some(
                 "Every '[' needs a matching ']'. This is checked before expansion so the \
                  position is the one you wrote."
@@ -178,6 +276,11 @@ impl MacroError {
             MacroError::UnmatchedCloseBracket { .. } => {
                 Some("This ']' closes a loop that was never opened.".to_string())
             }
+            MacroError::CellTooFar { limit, .. } => Some(format!(
+                "Reaching cell N costs N moves, so a cell past {limit} is one no program could \
+                 move to. It usually means the constant it came from is not the number it \
+                 was meant to be."
+            )),
             MacroError::RepeatTooLarge { .. } => Some(
                 "A repeat count this large is almost always a mistake in the constant it came from."
                     .to_string(),
@@ -353,10 +456,10 @@ mod tests {
     #[test]
     fn a_planned_directive_says_so_rather_than_calling_itself_unknown() {
         let error = MacroError::PlannedDirective {
-            name: "var".to_string(),
+            name: "macro".to_string(),
             location: SourceLocation::new(1, 1, 0),
         };
-        let rendered = strip_ansi(&error.format_with_source("@var x at 0\n"));
+        let rendered = strip_ansi(&error.format_with_source("@macro clear { [-] }\n"));
         assert!(rendered.contains("not implemented yet"), "{rendered}");
         assert!(rendered.contains("@define"), "{rendered}");
     }

@@ -94,6 +94,19 @@ after a `@define` — and a discarded `]` went on to report an unmatched `[` tha
 the source plainly matched. Refusing is the only acceptable behaviour: quietly
 dropping code somebody wrote is the one thing a preprocessor must not do.
 
+**The pointer-tracking hazard is resolved, and the first answer here was
+wrong.** This document said: require every loop body to have net-zero
+movement. That bans `[>]`, the ordinary scan idiom, which is not a trade a
+BrainFuck preprocessor can make. What shipped distinguishes a body that
+returns the cursor, a body that does not and so loses the position, and a
+`@to` inside the latter. The rules live in one place, `expand.rs`'s module
+documentation, and the reasoning is in the commit that changed them; repeating
+either here would be a third copy to keep in sync.
+
+**`NegativePointer` is dropped.** The design lists it; it predates the tape
+contract, under which movement off the tape is legal and only *access* is
+checked. An expander stricter than the interpreter would be its own trap.
+
 **Brackets are balanced in the expander, not left to the parser.** The parser
 would catch an unbalanced `[`, but it renders the source context into the error
 at parse time, so the position the user sees would be a column in generated
@@ -127,9 +140,16 @@ document keeps only what is still to be decided or built. A running inventory
 of shipped behaviour is exactly the thing this directory deleted twelve
 thousand lines of.
 
-**Not built**, in the order the plan wants them: `@var`/`@to` with pointer
-tracking, `@macro` with parameters, the oracle generator, `gyrus-tool expand`,
-and `gyrus` accepting `.bfm`.
+**Not built**, in the order the plan wants them: `@macro` with parameters, the
+oracle generator, `gyrus-tool expand`, and `gyrus` accepting `.bfm`.
+
+**A decision `@macro` forces.** The origin map holds one position per emitted
+byte, against one source. A byte emitted from a macro body has two positions --
+the body and the call site -- and `@include` would add a second file, which the
+type cannot express at all. For `@macro` alone the answer is a policy rather
+than a richer type: synthesized bytes point at the *call site*, which is the
+position a reader wants and keeps the map a flat `Vec`. `Expansion::origin`'s
+return type should be treated as not yet final.
 
 **A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
 `DebugInfo` carries locations but not loop metadata, because `LoopMetadata`
@@ -144,16 +164,6 @@ every instruction of `+{65}` shares a column.
 
 `crates/gyrus-macro/tests/source_locations.rs` asserts the loss, so closing it
 shows up as a failing test rather than as nobody noticing.
-
-### The hazard to settle before `@to`
-
-Static pointer tracking and BrainFuck loops. At `[` the expander knows the
-pointer; at `]` it is wherever the body left it, after an unknown number of
-iterations. If the body's net movement is zero the position is knowable;
-otherwise it is not, and every `@to` after that loop emits wrong code —
-silently, producing a program that runs and prints garbage. The intended answer
-is to require net-zero movement in any loop body and reject otherwise with a
-located error, but it is a decision to take deliberately rather than discover.
 
 ## Overview
 

@@ -35,8 +35,12 @@ file.
 
 - **`hello_world.bfm`** - `basic/hello_world.bf` with its counted runs written
   as named constants. It expands to that file character for character, which is
-  what makes it a test as well as an example: `crates/gyrus-macro/tests/round_trip.rs`
-  reads it, so it is load-bearing rather than illustrative.
+  what makes it a test as well as an example.
+- **`variables.bfm`** - named cells and `@to`, around the multiply idiom. Its
+  own header makes the case.
+
+Both are load-bearing rather than illustrative:
+`crates/gyrus-macro/tests/round_trip.rs` reads them.
 
 There is no `gyrus`-side way to run these yet; they go through the library.
 

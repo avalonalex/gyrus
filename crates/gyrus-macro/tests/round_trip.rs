@@ -45,9 +45,13 @@ fn the_macro_hello_world_expands_to_the_program_it_was_written_from() {
     );
 }
 
-#[test]
-fn the_expansion_prints_hello_world() {
-    let bfm = read("programs/macros/hello_world.bfm");
+/// Expand a `.bfm`, remap its debug info, run it, and return what it printed.
+///
+/// The sequence -- expand, `parse_with_debug`, `remap`, `interpret_with_io` --
+/// is what using this crate looks like end to end, so it is written once here
+/// rather than per test.
+fn run(relative: &str, max_steps: u64) -> (String, String) {
+    let bfm = read(relative);
     let expansion =
         gyrus_macro::expand(&bfm).unwrap_or_else(|e| panic!("{}", e.format_with_source(&bfm)));
 
@@ -59,7 +63,7 @@ fn the_expansion_prints_hello_world() {
         &instructions,
         ExecutionConfigBuilder::new()
             .with_memory_size(30_000)
-            .with_max_steps(1_000_000)
+            .with_max_steps(max_steps)
             .build(),
         &mut input,
         &mut output,
@@ -67,5 +71,26 @@ fn the_expansion_prints_hello_world() {
     )
     .expect("runs");
 
-    assert_eq!(output.output_string(), "Hello World!\n");
+    (expansion.brainfuck().to_string(), output.output_string())
+}
+
+#[test]
+fn the_expansion_prints_hello_world() {
+    let (_, printed) = run("programs/macros/hello_world.bfm", 1_000_000);
+    assert_eq!(printed, "Hello World!\n");
+}
+
+/// Named cells end to end. `hello_world.bfm` proves the expander against a
+/// program that already exists; this one is written the way a `.bfm` would be
+/// written from scratch, so what pins it down is its output.
+#[test]
+fn the_variables_example_prints_hi() {
+    let (brainfuck, printed) = run("programs/macros/variables.bfm", 100_000);
+    // The multiply idiom, which is also what the optimizer folds into a
+    // MultiplyAdd -- so this exercises a shape worth exercising.
+    assert_eq!(
+        brainfuck,
+        "++++++++[>+++++++++<-]>.+++++++++++++++++++++++++++++++++."
+    );
+    assert_eq!(printed, "Hi");
 }

@@ -1,0 +1,30 @@
+* Cells by name, and a multiply loop written with them.
+*
+* The classic BrainFuck idiom -- put a count in one cell, loop, add to another
+* -- with both cells named and the cursor moved by name instead of by counting
+* angle brackets. Change `letter` from 1 to 5 and the program still works; the
+* same edit to the expansion means finding and fixing every '>' and '<'.
+*
+* The loop body puts the cursor back where it found it, which is what lets @to
+* be used inside it at all.
+
+@var counter at 0
+@var letter  at 1
+
+@define TIMES   8    * 8 times round the loop
+@define STEP    9    * adding 9 each time: 72, which is 'H'
+@define H_TO_I 33    * and 'i' is 33 further on
+
+@to counter
++{TIMES}
+[
+    @to letter
+    +{STEP}
+    @to counter
+    -
+]
+
+@to letter
+.
++{H_TO_I}
+.

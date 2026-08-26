@@ -145,6 +145,34 @@ deliberately has neither. See [the debugger](debugger.md).
 
 ---
 
+## The macro expander (`crates/gyrus-macro`)
+
+`.bfm` source in, pure BrainFuck out, plus a map from every emitted byte back
+to the position in the macro source that wrote it. The map is the reason the
+crate exists: a program that expands to a wall of BrainFuck and then reports a
+cell overflow at column 3,847 of the *expansion* is the experience gyrus was
+built to replace.
+
+It understands `@define` (named constants), `OP{N}` (repeat counts), `@var`
+and `@to` (named cells, with the cursor tracked and the movement emitted), and
+`@here` (assert a position without moving). A directive must start its line and
+owns the rest of it; `{` and `}` are reserved everywhere, `@` only at the start
+of a line, so BrainFuck's free-form prose comments survive.
+
+Two things are worth knowing about the design, both documented in full in the
+crate's module documentation:
+
+**Located errors need no change to `gyrus`.** `Expansion::remap` rewrites
+`parse_with_debug`'s `DebugInfo` using only public API. What it cannot carry is
+loop metadata, which no foreign crate can construct — nothing in the error path
+reads it, but `gyrus-debug` does, which is why stepping through a `.bfm` is not
+yet possible.
+
+**Cursor tracking is measured in movement, not position.** A loop body that
+does not return the cursor leaves the position unknown rather than being
+refused, because `[>]` is ordinary BrainFuck. See `expand.rs`'s module
+documentation for the three rules that follow from that.
+
 ## The optimized interpreter
 
 `Source → AST → OptimizedProgram → execution` is the default path. `--debug`
