@@ -132,7 +132,10 @@ impl<'a> MemoryView<'a> {
     /// forms that did not look alike -- change one and the dump and the sidebar
     /// disagree about how much room they have, silently.
     ///
-    /// The count is snapped down to a multiple of 8 so addresses stay round.
+    /// The count is snapped down to a multiple of 8 so addresses stay round —
+    /// but only once eight fit. Below that every cell that fits is shown, on
+    /// the grounds that a narrow panel needs the tape more than round
+    /// addresses, and every row prints its own address anyway.
     pub fn layout(area: Rect, display: CellDisplay) -> (usize, bool) {
         let inner = area.width.saturating_sub(2) as usize;
         let available = inner.saturating_sub(GUTTER);
@@ -183,37 +186,61 @@ impl<'a> MemoryView<'a> {
         }
     }
 
-    fn info_line(&self) -> Line<'static> {
+    /// The line above the dump: where the pointer is, and what is under it.
+    ///
+    /// Assembled in priority order and cut off at whole pieces, because the
+    /// last piece is a cell count and a clipped number does not read as
+    /// clipped. At 80 columns "30000 cells" used to render as "3000".
+    fn info_line(&self, width: usize) -> Line<'static> {
+        let pointer = self.pointer.to_string();
         let mut spans = vec![
             Span::styled("ptr ", self.theme.dim_style()),
             Span::styled(
-                self.pointer.to_string(),
+                pointer.clone(),
                 Style::default()
                     .fg(self.theme.pointer)
                     .add_modifier(Modifier::BOLD),
             ),
         ];
+        let mut used = 4 + pointer.chars().count();
+
         match cell_under(self.memory, self.pointer) {
             Some(byte) => {
-                spans.push(Span::styled("   cell ", self.theme.dim_style()));
-                spans.push(Span::styled(
-                    format!("{byte}"),
-                    Style::default().fg(self.theme.title),
-                ));
-                spans.push(Span::styled(
-                    format!("  0x{byte:02X}  '{}'", printable(byte, '.')),
-                    self.theme.dim_style(),
-                ));
+                let value = byte.to_string();
+                let detail = format!("  0x{byte:02X}  '{}'", printable(byte, '.'));
+                if used + 8 + value.chars().count() <= width {
+                    spans.push(Span::styled("   cell ", self.theme.dim_style()));
+                    spans.push(Span::styled(
+                        value.clone(),
+                        Style::default().fg(self.theme.title),
+                    ));
+                    used += 8 + value.chars().count();
+                    if used + detail.chars().count() <= width {
+                        used += detail.chars().count();
+                        spans.push(Span::styled(detail, self.theme.dim_style()));
+                    }
+                }
             }
-            None => spans.push(Span::styled(
-                "   off tape (reading here would error)",
-                Style::default().fg(self.theme.error),
-            )),
+            None => {
+                // Two spellings, so the narrow one still says the important part.
+                let long = "   off tape (reading here would error)";
+                let short = "   off tape";
+                let text = if used + long.len() <= width {
+                    long
+                } else {
+                    short
+                };
+                if used + text.len() <= width {
+                    used += text.len();
+                    spans.push(Span::styled(text, Style::default().fg(self.theme.error)));
+                }
+            }
         }
-        spans.push(Span::styled(
-            format!("   {} cells", self.memory.len()),
-            self.theme.dim_style(),
-        ));
+
+        let size = format!("   {} cells", self.memory.len());
+        if used + size.chars().count() <= width {
+            spans.push(Span::styled(size, self.theme.dim_style()));
+        }
         Line::from(spans)
     }
 
@@ -271,7 +298,12 @@ impl Widget for MemoryView<'_> {
         let (columns, ascii) = Self::layout(area, self.display);
         let rows = Self::visible_rows(area);
 
-        let mut lines = vec![self.info_line(), Line::raw(""), self.header_line(columns)];
+        let inner = area.width.saturating_sub(2) as usize;
+        let mut lines = vec![
+            self.info_line(inner),
+            Line::raw(""),
+            self.header_line(columns),
+        ];
         for row in 0..rows {
             let base = (self.scroll + row) * columns;
             if base >= self.memory.len() {
@@ -390,5 +422,37 @@ mod tests {
         let lines = render(MemoryView::new(&memory, 0, &theme), 60, 8);
         assert!(lines[4].contains("48 69"), "{lines:?}");
         assert!(lines[4].contains("Hi.."), "{lines:?}");
+    }
+}
+
+#[cfg(test)]
+mod info_line_tests {
+    use super::*;
+    use crate::test_utils::render;
+    use crate::theme::Theme;
+
+    #[test]
+    fn the_tape_size_is_dropped_rather_than_clipped() {
+        // At 80 columns the memory panel is 32 wide, and "30000 cells" used to
+        // render as "3000" -- a complete, plausible, wrong number.
+        let theme = Theme::default();
+        let memory = vec![0u8; 30000];
+        let narrow = render(MemoryView::new(&memory, 0, &theme), 32, 8);
+        assert!(narrow[1].contains("ptr 0"), "{narrow:?}");
+        assert!(
+            !narrow[1].contains("3000"),
+            "a partial cell count is worse than none: {narrow:?}"
+        );
+
+        let wide = render(MemoryView::new(&memory, 0, &theme), 60, 8);
+        assert!(wide[1].contains("30000 cells"), "{wide:?}");
+    }
+
+    #[test]
+    fn an_off_tape_pointer_still_says_so_when_there_is_no_room_to_explain() {
+        let theme = Theme::default();
+        let memory = vec![0u8; 32];
+        let narrow = render(MemoryView::new(&memory, 99, &theme), 26, 8);
+        assert!(narrow[1].contains("off tape"), "{narrow:?}");
     }
 }

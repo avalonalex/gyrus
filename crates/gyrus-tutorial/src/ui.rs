@@ -142,6 +142,7 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
 
         frame.render_widget(
             StatusBar::new(&fields, &hints, &app.theme)
+                .always(ESSENTIAL_HINTS)
                 .message(note.as_ref().map(|(text, color)| (text.as_str(), *color))),
             panes.status,
         );
@@ -264,6 +265,9 @@ fn status_fields(app: &App, frame: Option<&TraceFrame>) -> Vec<(&'static str, St
     fields
 }
 
+/// Hints held back from the fill, so a narrow terminal never drops them.
+const ESSENTIAL_HINTS: &[(&str, &str)] = &[("F1", "keys"), ("ctrl-q", "quit")];
+
 fn status_hints(app: &App) -> Vec<(&'static str, &'static str)> {
     if app.popup.is_some() {
         return vec![("esc", "close")];
@@ -275,8 +279,6 @@ fn status_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("tab", "step through"),
             ("F2", "hint"),
             ("ctrl-n", "next lesson"),
-            ("F1", "keys"),
-            ("ctrl-q", "quit"),
         ],
         Focus::Steps => vec![
             ("← →", "step"),
@@ -285,8 +287,6 @@ fn status_hints(app: &App) -> Vec<(&'static str, &'static str)> {
             ("ctrl-r", "run again"),
             ("F2", "hint"),
             ("ctrl-n", "next lesson"),
-            ("F1", "keys"),
-            ("ctrl-q", "quit"),
         ],
     }
 }

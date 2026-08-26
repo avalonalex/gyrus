@@ -251,6 +251,17 @@ impl Widget for SourceView<'_> {
                 Style::default().fg(self.theme.breakpoint),
             ));
         }
+        // On a one-line program -- which hello_world.bf is, and quine.bf, and
+        // most golfed BrainFuck -- the cursor's gutter chevron is hidden by the
+        // current-instruction arrow on that same line, leaving one underlined
+        // character among a hundred as the only cue. `b` and `g` both act at
+        // the cursor, so saying where it is belongs next to the code.
+        if let Some((line, column)) = self.cursor.filter(|_| self.show_cursor) {
+            title.push(Span::styled(
+                format!("  cur {line}:{column}"),
+                Style::default().fg(self.theme.accent),
+            ));
+        }
         if self.h_scroll > 0 {
             title.push(Span::styled(
                 format!("  col {}", self.h_scroll + 1),

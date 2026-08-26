@@ -12,7 +12,7 @@ cargo build --release
 
 ```
  gyrus-debug │ hello_world.bf │ breakpoint
-┌ hello_world.bf  ● 1 ───────────────────┐┌ Memory  hex · follow ──────────────┐
+┌ hello_world.bf  ● 1  cur 1:12 ─────────┐┌ Memory  hex · follow ──────────────┐
 │▶●   1 │ ++++++++[>++++[>++>+++>+++>+<<<││ptr 1   cell 1  0x01  30000 cells   │
 │                                        ││                                    │
 │                                        ││  addr │  0  1  2  3  4  5  6  7    │
@@ -23,7 +23,7 @@ cargo build --release
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
  ran 11   at 1:12   depth 1   ptr 1   cell 1   changed 2   next #11 of 103
- space step  n over  o out  c continue  g to cursor  b break  r restart  q quit
+ space step  n over  o out  c continue  g to cursor  b break  r restart  ? help  q quit
 ```
 
 ## Keys
@@ -83,6 +83,12 @@ Move the cursor with the arrow keys and press `b`. The cursor lands wherever
 you left it, which is usually a comment character, so `b` snaps to the nearest
 instruction on the cursor's line before setting anything. The character itself
 is marked, and the gutter shows a `●` for any line holding a breakpoint.
+
+The panel title carries the cursor's position — `cur 1:12` above. On a program
+written as one long line, which most famous BrainFuck is, the cursor's `›` in
+the gutter is hidden by the `▶` marking the instruction about to run, and an
+underlined character among a hundred is not much of a cue for the thing `b` and
+`g` both aim with.
 
 From the command line, `--break` takes `LINE` or `LINE:COLUMN` and snaps the
 same way:
@@ -187,6 +193,18 @@ instructions and redraws about sixteen times a second, which is also when it
 takes a copy of the tape — so if the program is about to fail, the state on
 screen is at most a few thousand instructions old rather than whatever it was
 at the last breakpoint.
+
+## On a small terminal
+
+Everything still works at 80×24, which is what the layout is checked against.
+The panels shrink, the watch list is dropped rather than squeezed, and the two
+rows along the bottom drop whole fields rather than clipping one — a clipped
+number reads as a smaller number, not as a truncation. `? help` and `q quit`
+are held back from that trimming and never disappear; a `…` marks where the
+other hints went.
+
+The key list scrolls with `j`/`k` when it does not fit, and says how many rows
+are below.
 
 ## What it does not do
 
