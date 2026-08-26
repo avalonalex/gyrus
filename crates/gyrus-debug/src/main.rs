@@ -70,7 +70,8 @@ struct Cli {
     #[arg(long, default_value = "0")]
     timeout: u64,
 
-    /// Bytes to feed the program's `,` instructions
+    /// Bytes to feed the program's `,` instructions. A trailing newline is
+    /// added if there is not one, the way a shell would
     #[arg(long, value_name = "TEXT")]
     input: Option<String>,
 
@@ -220,7 +221,18 @@ fn initial_memory_size(cli: &Cli) -> Result<usize, String> {
 
 fn read_input(cli: &Cli) -> Result<Vec<u8>, String> {
     match (&cli.input, &cli.input_file) {
-        (Some(text), _) => Ok(text.as_bytes().to_vec()),
+        // `--input 1234` means what `echo 1234 |` means. Programs that read a
+        // number read until the newline, so without one they stop one byte
+        // short and look broken -- and the `i` prompt already appends one, so
+        // the two ways of supplying input disagreed.
+        (Some(text), _) => {
+            let mut bytes = text.as_bytes().to_vec();
+            if !bytes.ends_with(b"\n") {
+                bytes.push(b'\n');
+            }
+            Ok(bytes)
+        }
+        // A file is exact bytes: it is the way to say "no trailing newline".
         (_, Some(path)) => std::fs::read(path)
             .map_err(|error| format!("Error: could not read {}: {error}", path.display())),
         _ => Ok(Vec::new()),
@@ -305,5 +317,49 @@ fn apply_breakpoint(session: &mut Session, spec: &str) -> Result<(), String> {
         None => Err(format!(
             "Error: no instruction on line {line} to break at (--break {spec})"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cli(input: Option<&str>, file: Option<&str>) -> Cli {
+        Cli {
+            file: PathBuf::from("test.bf"),
+            memory_size: 30000,
+            memory_model: "fixed".into(),
+            cell_model: "wrapping".into(),
+            unbounded_initial: 1000,
+            unbounded_max: 1_000_000,
+            eof_behavior: "zero".into(),
+            max_steps: 0,
+            timeout: 0,
+            input: input.map(str::to_owned),
+            input_file: file.map(PathBuf::from),
+            breakpoints: Vec::new(),
+            run: false,
+            display: "hex".into(),
+        }
+    }
+
+    #[test]
+    fn input_gains_the_newline_a_shell_would_add() {
+        // `factor.bf` reads digits until a newline. Without one it stops a byte
+        // short of starting, which looks like the debugger ignoring --input.
+        assert_eq!(
+            read_input(&cli(Some("1234567"), None)).unwrap(),
+            b"1234567\n"
+        );
+    }
+
+    #[test]
+    fn a_newline_that_is_already_there_is_not_doubled() {
+        assert_eq!(read_input(&cli(Some("hi\n"), None)).unwrap(), b"hi\n");
+    }
+
+    #[test]
+    fn no_input_flag_queues_nothing() {
+        assert!(read_input(&cli(None, None)).unwrap().is_empty());
     }
 }
