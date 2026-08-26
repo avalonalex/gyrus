@@ -414,6 +414,7 @@ fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
 fn watch_entries(session: &Session) -> Vec<WatchEntry> {
     session
         .watches
+        .as_slice()
         .iter()
         .map(|watch| match watch {
             Watch::Cell(address) => WatchEntry::new(
