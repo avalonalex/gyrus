@@ -6,8 +6,7 @@
 * same edit to the expansion means finding and fixing every '>' and '<'.
 *
 * The loop body puts the cursor back where it found it, which is what lets @to
-* be used inside it at all. A body that did not would be refused, because the
-* first iteration would move correctly and every one after it would not.
+* be used inside it at all.
 
 @var counter at 0
 @var letter  at 1

@@ -83,6 +83,7 @@
 //! # }
 //! ```
 
+mod directive;
 mod error;
 mod expand;
 mod source_map;

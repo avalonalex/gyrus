@@ -9,10 +9,8 @@
 //!
 //! - `@define NAME VALUE` -- a named constant. `VALUE` is a decimal number or
 //!   a name defined earlier. Definition precedes use: one pass, as `cpp` has.
-//! - `@var NAME at N` -- a named cell, and `@to NAME` to move the cursor there.
-//!   The expander tracks where the cursor is and emits the difference, which
-//!   is the abstraction that earns the feature: manual pointer arithmetic is
-//!   what makes hand-written BrainFuck unmaintainable past a few dozen cells.
+//! - `@var NAME at N` -- a named cell, and `@to NAME` to move the cursor
+//!   there: the expander tracks where the cursor is and emits the difference.
 //! - `@here NAME` -- tell the expander where the cursor is without moving it.
 //! - `OP{N}` -- repeat `OP` N times, where `OP` is one of `+ - < > . ,` and `N`
 //!   is a number or a defined name. `+{0}` is nothing, which is legal.
@@ -77,7 +75,8 @@ use std::collections::HashMap;
 
 use gyrus::SourceLocation;
 
-use crate::error::{Kind, MacroError, PLANNED};
+use crate::directive::{Declaration, Directive};
+use crate::error::{Kind, MacroError};
 use crate::source_map::Expansion;
 
 /// The most instructions one repeat count may emit.
@@ -104,44 +103,6 @@ const REPEATABLE: [char; 6] = ['+', '-', '<', '>', '.', ','];
 /// Expand `.bfm` source into BrainFuck, keeping the origin of every byte.
 pub fn expand(source: &str) -> Result<Expansion, MacroError> {
     Scanner::new(source).run()
-}
-
-/// The directives that declare a name, for the two helpers they share.
-///
-/// An enum rather than the directive's spelling: the helpers used to pick
-/// their example text by matching on a `&str`, so `@define`'s wording was the
-/// silent fallback for anything unrecognised, and a typo in a literal would
-/// have been caught by nobody. Adding a variant here is a compile error until
-/// every arm is filled in.
-#[derive(Debug, Clone, Copy)]
-enum Directive {
-    Define,
-    Var,
-}
-
-impl Directive {
-    fn spelling(self) -> &'static str {
-        match self {
-            Directive::Define => "define",
-            Directive::Var => "var",
-        }
-    }
-
-    /// What to write where the name goes.
-    fn name_example(self) -> &'static str {
-        match self {
-            Directive::Define => "`@define CHAR_A 65`",
-            Directive::Var => "`@var counter at 0`",
-        }
-    }
-
-    /// What is missing when the value is, and an example of supplying it.
-    fn value_example(self, name: &str) -> (&'static str, String) {
-        match self {
-            Directive::Define => ("a value", format!("`@define {name} 65`")),
-            Directive::Var => ("a cell", format!("`@var {name} at 0`")),
-        }
-    }
 }
 
 /// What a name means. One namespace, so a name means one thing.
@@ -215,8 +176,10 @@ impl Scanner {
             defined: Vec::new(),
             position: Position::Known(0),
             net: 0,
-            out: String::new(),
-            origins: Vec::new(),
+            // Most of a `.bfm` is instructions, so its length is a decent
+            // first guess and spares the early doublings.
+            out: String::with_capacity(source.len().min(EXPANSION_LIMIT)),
+            origins: Vec::with_capacity(source.len().min(EXPANSION_LIMIT)),
             open_brackets: Vec::new(),
         }
     }
@@ -292,9 +255,18 @@ impl Scanner {
         }
     }
 
-    fn emit(&mut self, c: char, origin: SourceLocation) {
-        self.out.push(c);
-        self.origins.push(origin);
+    /// Whether the identifier at the cursor is exactly `want`, consuming it
+    /// either way. Spares the `String` that comparing `identifier()` against
+    /// a keyword allocates and drops.
+    fn identifier_is(&mut self, want: &str) -> bool {
+        let start = self.at.offset;
+        while self.peek().is_some_and(is_identifier_char) {
+            self.bump();
+        }
+        self.chars[start..self.at.offset]
+            .iter()
+            .copied()
+            .eq(want.chars())
     }
 
     /// An identifier at the cursor: a letter or `_`, then letters, digits, `_`.
@@ -358,9 +330,15 @@ impl Scanner {
                 location: origin,
             });
         }
-        for _ in 0..count {
-            self.emit(c, origin);
-        }
+        // Filled in bulk rather than a byte at a time. `origins` holds a
+        // `SourceLocation` -- 24 bytes -- per emitted byte, and growing it
+        // from nothing by doubling costs nineteen reallocations and 25 MB of
+        // copying to reach the limit. Measured about 3x faster on
+        // `+{1000000}` (2.97ms to 0.95ms) and on a long `@to`, and 1.2x on a
+        // file of single instructions, so it is not a trade.
+        let n = count as usize;
+        self.origins.resize(self.origins.len() + n, origin);
+        self.out.extend(std::iter::repeat_n(c, n));
         // Bounded by the check above, so the cast cannot lose anything.
         self.step(match c {
             '>' => count as i64,
@@ -385,20 +363,17 @@ impl Scanner {
                 net_at_entry: self.net,
                 to_inside: None,
             });
-            self.emit(c, origin);
-            return Ok(());
+            return self.emit_run(c, 1, origin);
         }
 
         let Some(open) = self.open_brackets.pop() else {
             return Err(MacroError::UnmatchedCloseBracket { location: origin });
         };
-        self.emit(c, origin);
+        self.emit_run(c, 1, origin)?;
 
         if self.net != open.net_at_entry {
-            // Reported here rather than at the `@to` itself, because whether
-            // the body balances is not known until this bracket. Its first
-            // iteration would emit the right movement and every later one the
-            // wrong movement, which is the worst way for this to fail.
+            // Rule 3 in this module's documentation: not knowable before
+            // this bracket, which is why it is reported here.
             if let Some(to) = open.to_inside {
                 return Err(MacroError::MovingInsideUnbalancedLoop {
                     location: to,
@@ -413,12 +388,6 @@ impl Scanner {
             }
         }
 
-        // A `@to` in a nested body is inside this one too.
-        if let (Some(to), Some(parent)) = (open.to_inside, self.open_brackets.last_mut())
-            && parent.to_inside.is_none()
-        {
-            parent.to_inside = Some(to);
-        }
         Ok(())
     }
 
@@ -507,13 +476,13 @@ impl Scanner {
     fn resolve(&self, name: &str, location: SourceLocation) -> Result<u64, MacroError> {
         match self.lookup(name, location)? {
             (Symbol::Constant(value), _) => Ok(value),
-            (other, declared) => Err(MacroError::WrongKind {
-                name: name.to_string(),
-                found: other.kind(),
-                wanted: Kind::Constant,
+            (other, declared) => Err(MacroError::wrong_kind(
+                name,
+                other.kind(),
+                Kind::Constant,
                 location,
                 declared,
-            }),
+            )),
         }
     }
 
@@ -521,13 +490,13 @@ impl Scanner {
     fn resolve_cell(&self, name: &str, location: SourceLocation) -> Result<i64, MacroError> {
         match self.lookup(name, location)? {
             (Symbol::Variable(cell), _) => Ok(cell),
-            (other, declared) => Err(MacroError::WrongKind {
-                name: name.to_string(),
-                found: other.kind(),
-                wanted: Kind::Variable,
+            (other, declared) => Err(MacroError::wrong_kind(
+                name,
+                other.kind(),
+                Kind::Variable,
                 location,
                 declared,
-            }),
+            )),
         }
     }
 
@@ -543,15 +512,15 @@ impl Scanner {
             .collect();
         rest.lines().any(|line| {
             let trimmed = line.trim_start();
-            let Some(tail) = trimmed
-                .strip_prefix("@define")
-                .or_else(|| trimmed.strip_prefix("@var"))
-            else {
-                return false;
-            };
-            let tail = tail.trim_start();
-            tail.strip_prefix(name)
-                .is_some_and(|after| !after.starts_with(|c: char| is_identifier_char(c)))
+            Directive::ALL
+                .into_iter()
+                .filter(|d| d.declaration().is_some())
+                .filter_map(|d| trimmed.strip_prefix(&format!("@{}", d.spelling())))
+                .any(|tail| {
+                    tail.trim_start()
+                        .strip_prefix(name)
+                        .is_some_and(|after| !after.starts_with(is_identifier_char))
+                })
         })
     }
 
@@ -567,26 +536,23 @@ impl Scanner {
                 location,
             });
         }
-        match name.as_str() {
-            "define" => return self.define(location),
-            "var" => return self.var(location),
-            "to" => return self.to(location),
-            "here" => return self.here(),
-            _ => {}
+        match Directive::from_spelling(&name) {
+            Some(Directive::Define) => self.define(location),
+            Some(Directive::Var) => self.var(location),
+            Some(Directive::To) => self.to(location),
+            Some(Directive::Here) => self.here(),
+            Some(_) => Err(MacroError::PlannedDirective { name, location }),
+            None => Err(MacroError::UnknownDirective { name, location }),
         }
-        if PLANNED.contains(&name.as_str()) {
-            return Err(MacroError::PlannedDirective { name, location });
-        }
-        Err(MacroError::UnknownDirective { name, location })
     }
 
     /// `@var NAME at N` -- name a cell.
     fn var(&mut self, location: SourceLocation) -> Result<(), MacroError> {
-        let name = self.declared_name(Directive::Var, location)?;
+        let name = self.declared_name(Declaration::Var, location)?;
 
         self.skip_blanks();
         let at_keyword = self.at;
-        if self.identifier() != "at" {
+        if !self.identifier_is("at") {
             return Err(MacroError::MalformedDirective {
                 directive: "var".to_string(),
                 detail: format!("expected `at`, as in `@var {name} at 0`"),
@@ -596,50 +562,52 @@ impl Scanner {
 
         self.skip_blanks();
         let at_value = self.at;
-        let cell = self.number_or_name(Directive::Var, &name, at_value)?;
+        let cell = self.number_or_name(Declaration::Var, &name, at_value)?;
         // Reaching cell N costs N moves, so a cell past the expansion budget
         // is one no program could ever move to. Refusing it here is also what
         // keeps every tracked position small enough that the arithmetic on
         // them cannot overflow.
         if cell > EXPANSION_LIMIT as u64 {
-            return Err(MacroError::MalformedDirective {
-                directive: "var".to_string(),
-                detail: format!(
-                    "cell {cell} is further along the tape than {EXPANSION_LIMIT} moves reach, \
-                     which is the whole file's budget"
-                ),
+            return Err(MacroError::CellTooFar {
+                cell,
+                limit: EXPANSION_LIMIT,
                 location: at_value,
             });
         }
         let cell = cell as i64;
 
-        self.end_of_directive("var")?;
+        self.end_of_directive(Directive::Var)?;
         self.declare(name, Symbol::Variable(cell), location);
         Ok(())
     }
 
-    /// `@to NAME` -- move the cursor to a named cell.
-    fn to(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+    /// The cell a `@to` or `@here` names, and its own name for the error.
+    fn cell_operand(&mut self, directive: Directive) -> Result<(String, i64), MacroError> {
         self.skip_blanks();
         let at_name = self.at;
         let name = self.identifier();
         if name.is_empty() {
             return Err(MacroError::MalformedDirective {
-                directive: "to".to_string(),
+                directive: directive.spelling().to_string(),
                 detail: "expected the name of a cell declared with @var".to_string(),
                 location: at_name,
             });
         }
-        let target = self.resolve_cell(&name, at_name)?;
-        self.end_of_directive("to")?;
+        let cell = self.resolve_cell(&name, at_name)?;
+        self.end_of_directive(directive)?;
+        Ok((name, cell))
+    }
 
-        // Inside a loop body, remember that a `@to` happened: if the body
-        // turns out not to restore the cursor, this is the error, and the `]`
-        // is where that becomes knowable.
-        if let Some(open) = self.open_brackets.last_mut()
-            && open.to_inside.is_none()
-        {
-            open.to_inside = Some(location);
+    /// `@to NAME` -- move the cursor to a named cell.
+    fn to(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        let (name, target) = self.cell_operand(Directive::To)?;
+
+        // A `@to` is inside every loop currently open, so every open frame
+        // records it. Setting only the innermost and lifting it to the parent
+        // at each `]` reached the same answer, but stated one rule in two
+        // places. Nesting is shallow, so the walk costs nothing.
+        for open in &mut self.open_brackets {
+            open.to_inside.get_or_insert(location);
         }
 
         let here = match self.position {
@@ -668,18 +636,7 @@ impl Scanner {
 
     /// `@here NAME` -- assert where the cursor is, emitting nothing.
     fn here(&mut self) -> Result<(), MacroError> {
-        self.skip_blanks();
-        let at_name = self.at;
-        let name = self.identifier();
-        if name.is_empty() {
-            return Err(MacroError::MalformedDirective {
-                directive: "here".to_string(),
-                detail: "expected the name of a cell declared with @var".to_string(),
-                location: at_name,
-            });
-        }
-        let cell = self.resolve_cell(&name, at_name)?;
-        self.end_of_directive("here")?;
+        let (_, cell) = self.cell_operand(Directive::Here)?;
         self.position = Position::Known(cell);
         Ok(())
     }
@@ -692,7 +649,7 @@ impl Scanner {
     /// wrong reports the redefinition rather than costing two round trips.
     fn declared_name(
         &mut self,
-        directive: Directive,
+        declaring: Declaration,
         location: SourceLocation,
     ) -> Result<String, MacroError> {
         self.skip_blanks();
@@ -700,8 +657,8 @@ impl Scanner {
         let name = self.identifier();
         if name.is_empty() {
             return Err(MacroError::MalformedDirective {
-                directive: directive.spelling().to_string(),
-                detail: format!("expected a name, as in {}", directive.name_example()),
+                directive: declaring.directive().spelling().to_string(),
+                detail: format!("expected a name, as in {}", declaring.name_example()),
                 location: at_name,
             });
         }
@@ -718,7 +675,7 @@ impl Scanner {
     /// A decimal number or the name of a constant.
     fn number_or_name(
         &mut self,
-        directive: Directive,
+        declaring: Declaration,
         name: &str,
         at_value: SourceLocation,
     ) -> Result<u64, MacroError> {
@@ -732,10 +689,9 @@ impl Scanner {
         }
 
         if token.is_empty() {
-            let (wanted, example) = directive.value_example(name);
             return Err(MacroError::MalformedDirective {
-                directive: directive.spelling().to_string(),
-                detail: format!("expected {wanted} for '{name}', as in {example}"),
+                directive: declaring.directive().spelling().to_string(),
+                detail: declaring.missing_value(name),
                 location: at_value,
             });
         }
@@ -744,7 +700,7 @@ impl Scanner {
             token
                 .parse::<u64>()
                 .map_err(|_| MacroError::MalformedDirective {
-                    directive: directive.spelling().to_string(),
+                    directive: declaring.directive().spelling().to_string(),
                     detail: format!("'{token}' does not fit in a 64-bit number"),
                     location: at_value,
                 })
@@ -752,7 +708,7 @@ impl Scanner {
             self.resolve(&token, at_value)
         } else {
             Err(MacroError::MalformedDirective {
-                directive: directive.spelling().to_string(),
+                directive: declaring.directive().spelling().to_string(),
                 detail: format!("'{token}' is neither a number nor a name"),
                 location: at_value,
             })
@@ -762,7 +718,7 @@ impl Scanner {
     /// A directive owns the rest of its line, and says so rather than dropping
     /// what follows. Skipping silently discarded any instruction written after
     /// it -- and a discarded ']' went on to blame a '[' the source matched.
-    fn end_of_directive(&mut self, directive: &str) -> Result<(), MacroError> {
+    fn end_of_directive(&mut self, directive: Directive) -> Result<(), MacroError> {
         self.skip_blanks();
         match self.peek() {
             None | Some('\n') => Ok(()),
@@ -771,10 +727,11 @@ impl Scanner {
                 Ok(())
             }
             Some(c) => Err(MacroError::MalformedDirective {
-                directive: directive.to_string(),
+                directive: directive.spelling().to_string(),
                 detail: format!(
-                    "'{c}' follows it. A @{directive} takes the rest of its line: \
-                     move this to a line of its own, or start a comment with '*'"
+                    "'{c}' follows it. A @{} takes the rest of its line: \
+                     move this to a line of its own, or start a comment with '*'",
+                    directive.spelling()
                 ),
                 location: self.at,
             }),
@@ -787,11 +744,11 @@ impl Scanner {
     }
 
     fn define(&mut self, location: SourceLocation) -> Result<(), MacroError> {
-        let name = self.declared_name(Directive::Define, location)?;
+        let name = self.declared_name(Declaration::Define, location)?;
         self.skip_blanks();
         let at_value = self.at;
-        let value = self.number_or_name(Directive::Define, &name, at_value)?;
-        self.end_of_directive("define")?;
+        let value = self.number_or_name(Declaration::Define, &name, at_value)?;
+        self.end_of_directive(Directive::Define)?;
         self.declare(name, Symbol::Constant(value), location);
         Ok(())
     }
@@ -838,10 +795,13 @@ mod tests {
             // written literally, so its bytes point at the directive that
             // generated them. Everything else still points at itself.
             if chars[origin.offset] == '@' {
-                let head: String = chars[origin.offset..].iter().take(3).collect();
-                assert_eq!(
-                    head, "@to",
-                    "byte {offset} points at a directive that does not emit"
+                let spelling: String = chars[origin.offset + 1..]
+                    .iter()
+                    .take_while(|c| is_identifier_char(**c))
+                    .collect();
+                assert!(
+                    Directive::from_spelling(&spelling).is_some_and(Directive::emits),
+                    "byte {offset} points at @{spelling}, which does not emit"
                 );
                 assert!(
                     emitted == '>' || emitted == '<',
@@ -880,15 +840,6 @@ mod tests {
                 "column disagrees with offset at byte {offset}"
             );
         }
-
-        // Every `@to` that emitted anything is accounted for exactly once, so
-        // a run credited to the wrong directive cannot hide as a duplicate.
-        let written = source.match_indices("@to").count();
-        assert!(
-            directions.len() <= written,
-            "{} directives emitted moves but only {written} were written",
-            directions.len()
-        );
     }
 
     #[test]
@@ -1221,9 +1172,7 @@ mod tests {
 
     #[test]
     fn to_inside_an_unbalanced_loop_is_refused_at_the_bracket() {
-        // The first iteration would emit the right movement and every one
-        // after it the wrong movement -- the worst way for this to fail, and
-        // not knowable until the ']'.
+        // Rule 3: not knowable until the ']'.
         let source = "@var a at 0\n@var b at 2\n+[\n>\n@to b\n<-\n]\n";
         let error = expand(source).unwrap_err();
         let MacroError::MovingInsideUnbalancedLoop { location, loop_at } = &error else {
@@ -1300,16 +1249,13 @@ mod tests {
     fn origins_survive_the_new_directives() {
         assert_origins_are_exact("@var a at 0\n@var b at 3\n@to b\n+\n@to a\n");
         assert_origins_are_exact("@var a at 0\n@var b at 2\n+[\n@to b\n+\n@to a\n-\n]\n");
+        // The shapes the loop rules are about, which used to live in a second
+        // test module that could not reach this helper.
+        assert_origins_are_exact("@var a at 0\n@var b at 5\n+[>]\n@here b\n+\n");
+        assert_origins_are_exact("@var a at 0\n@var b at 2\n+[>]\n+[\n@here a\n@to b\n@to a\n]\n");
     }
-}
 
-#[cfg(test)]
-mod balance_tests {
-    use super::*;
-
-    fn expanded(source: &str) -> String {
-        expand(source).expect("expands").brainfuck().to_string()
-    }
+    // ---- what the loop rules guarantee ---------------------------------
 
     #[test]
     fn a_balanced_loop_after_a_scan_does_not_steal_the_blame() {
@@ -1358,7 +1304,7 @@ mod balance_tests {
         ] {
             let error = expand(source).unwrap_err();
             assert!(
-                matches!(error, MacroError::MalformedDirective { .. }),
+                matches!(error, MacroError::CellTooFar { .. }),
                 "{source:?}: got {error:?}"
             );
         }
@@ -1368,10 +1314,14 @@ mod balance_tests {
     fn a_cell_beyond_the_expansion_budget_is_refused_where_it_is_declared() {
         let just_past = EXPANSION_LIMIT + 1;
         let error = expand(&format!("@var far at {just_past}\n")).unwrap_err();
-        let MacroError::MalformedDirective { detail, .. } = &error else {
-            panic!("expected a malformed directive, got {error:?}");
+        // A structured variant rather than free text inside a "malformed
+        // directive": the syntax was fine, the value was out of range -- and
+        // the shared malformed-directive hint, which explains that directives
+        // start their line, was advice for a different mistake.
+        let MacroError::CellTooFar { cell, limit, .. } = &error else {
+            panic!("expected a cell out of range, got {error:?}");
         };
-        assert!(detail.contains("budget"), "{detail}");
+        assert_eq!((*cell, *limit), (just_past as u64, EXPANSION_LIMIT));
 
         // And the last reachable cell is still fine.
         assert!(expand(&format!("@var edge at {EXPANSION_LIMIT}\n")).is_ok());

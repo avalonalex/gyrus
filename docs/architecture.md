@@ -162,21 +162,16 @@ of a line, so BrainFuck's free-form prose comments survive.
 Two things are worth knowing about the design, both documented in full in the
 crate's module documentation:
 
-**Located errors need no change to `gyrus`.** `Expansion::remap` rewrites the
-`DebugInfo` that `parse_with_debug` produced so it names the `.bfm`, using only
-the public `with_source`, `record`, `lookup` and `len`. Loop call stacks come
-along, because `DebugTrackingHook` builds them from a plain
-`debug_info.lookup(index)`. What a remapped table does *not* carry is loop
-metadata, which no foreign crate can construct — nothing in the error path
+**Located errors need no change to `gyrus`.** `Expansion::remap` rewrites
+`parse_with_debug`'s `DebugInfo` using only public API. What it cannot carry is
+loop metadata, which no foreign crate can construct — nothing in the error path
 reads it, but `gyrus-debug` does, which is why stepping through a `.bfm` is not
 yet possible.
 
-**Cursor tracking is measured in movement, not position.** `@to` needs to know
-where the cursor is, and a loop is where that breaks. Balance is judged by how
-far a body moved the cursor — always known — rather than by where it ended up,
-which often is not. A body that does not return the cursor leaves the position
-unknown rather than being refused, because `[>]` is ordinary BrainFuck; the
-next `@to` is the error, and it names the loop that lost the position.
+**Cursor tracking is measured in movement, not position.** A loop body that
+does not return the cursor leaves the position unknown rather than being
+refused, because `[>]` is ordinary BrainFuck. See `expand.rs`'s module
+documentation for the three rules that follow from that.
 
 ## The optimized interpreter
 

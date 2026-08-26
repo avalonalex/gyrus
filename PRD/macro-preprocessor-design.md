@@ -143,6 +143,14 @@ thousand lines of.
 **Not built**, in the order the plan wants them: `@macro` with parameters, the
 oracle generator, `gyrus-tool expand`, and `gyrus` accepting `.bfm`.
 
+**A decision `@macro` forces.** The origin map holds one position per emitted
+byte, against one source. A byte emitted from a macro body has two positions --
+the body and the call site -- and `@include` would add a second file, which the
+type cannot express at all. For `@macro` alone the answer is a policy rather
+than a richer type: synthesized bytes point at the *call site*, which is the
+position a reader wants and keeps the map a flat `Vec`. `Expansion::origin`'s
+return type should be treated as not yet final.
+
 **A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
 `DebugInfo` carries locations but not loop metadata, because `LoopMetadata`
 lives in a private module and is not re-exported, so `record_loop_metadata`
