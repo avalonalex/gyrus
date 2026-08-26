@@ -140,16 +140,14 @@ document keeps only what is still to be decided or built. A running inventory
 of shipped behaviour is exactly the thing this directory deleted twelve
 thousand lines of.
 
-**Not built**, in the order the plan wants them: `@macro` with parameters, the
-oracle generator, `gyrus-tool expand`, and `gyrus` accepting `.bfm`.
+**Not built**, in the order the plan wants them: the oracle generator,
+`gyrus-tool expand`, and `gyrus` accepting `.bfm`. The scoped phase-1 language
+is complete.
 
-**A decision `@macro` forces.** The origin map holds one position per emitted
-byte, against one source. A byte emitted from a macro body has two positions --
-the body and the call site -- and `@include` would add a second file, which the
-type cannot express at all. For `@macro` alone the answer is a policy rather
-than a richer type: synthesized bytes point at the *call site*, which is the
-position a reader wants and keeps the map a flat `Vec`. `Expansion::origin`'s
-return type should be treated as not yet final.
+**A decision `@include` would force.** The origin map holds one position per
+emitted byte against one source, which `@macro` fits by policy -- a byte names
+the invocation, not the definition -- but a second *file* it cannot express at
+all. `Expansion::origin`'s return type should be treated as not yet final.
 
 **A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
 `DebugInfo` carries locations but not loop metadata, because `LoopMetadata`

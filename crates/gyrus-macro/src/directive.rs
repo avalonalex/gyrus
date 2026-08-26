@@ -58,7 +58,8 @@ impl Directive {
     /// Whether the expander implements it. The rest are refused by name
     /// rather than called unknown, which would be a lie about why they failed.
     pub(crate) fn implemented(self) -> bool {
-        self.declaration().is_some() || matches!(self, Directive::To | Directive::Here)
+        self.declaration().is_some()
+            || matches!(self, Directive::To | Directive::Here | Directive::Macro)
     }
 
     /// Whether it can emit instructions nobody wrote literally. Only `@to`

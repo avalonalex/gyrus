@@ -154,8 +154,8 @@ cell overflow at column 3,847 of the *expansion* is the experience gyrus was
 built to replace.
 
 It understands `@define` (named constants), `OP{N}` (repeat counts), `@var`
-and `@to` (named cells, with the cursor tracked and the movement emitted), and
-`@here` (assert a position without moving). A directive must start its line and
+and `@to` (named cells, with the cursor tracked and the movement emitted),
+`@here` (assert a position without moving), and `@macro` with parameters. A directive must start its line and
 owns the rest of it; `{` and `}` are reserved everywhere, `@` only at the start
 of a line, so BrainFuck's free-form prose comments survive.
 
@@ -167,6 +167,13 @@ crate's module documentation:
 loop metadata, which no foreign crate can construct — nothing in the error path
 reads it, but `gyrus-debug` does, which is why stepping through a `.bfm` is not
 yet possible.
+
+**A macro is expanded in place, from a span of the source.** A body is not
+copied — invoking one moves the cursor and scans to the closing brace — so
+every position inside a body is a real position in the file, and the cursor
+tracking, loop rules and expansion budget apply to macro output with no special
+case. Emitted bytes name the *invocation* rather than the definition, since the
+map holds one position per byte.
 
 **Cursor tracking is measured in movement, not position.** A loop body that
 does not return the cursor leaves the position unknown rather than being
