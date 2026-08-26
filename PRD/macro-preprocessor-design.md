@@ -1,9 +1,9 @@
 # PRD: BrainFuck Macro Preprocessor
 
-**Status**: Not started — design predates the rest of this directory's
-conventions and was reviewed 2026-08-25; see Decisions below
-**Last Updated**: 2026-08-25
-**Priority**: Low — behind the TUI debugger, which is the next thing to build
+**Status**: First slice in progress. `gyrus-macro` exists with `@define`,
+repeat counts and the source map; see "What is left" below
+**Last Updated**: 2026-08-26
+**Priority**: Medium — the next thing to build, and started
 
 ## Decisions taken on review, 2026-08-25
 
@@ -45,6 +45,115 @@ a way to test.
 nothing with execution; the workspace boundary is what keeps it that way. It
 depends on `gyrus` for `SourceLocation` and the error formatting, not the other
 way round.
+
+## Decisions taken while building, 2026-08-26
+
+**It needs no change to `gyrus`.** This was the open question and the answer is
+yes. `Expansion::remap` rewrites the `DebugInfo` that `parse_with_debug`
+produced for the expansion so it names the `.bfm` instead, and everything that
+requires — `DebugInfo::with_source`, `record`, `lookup`, `len` — is already
+public. Loop call stacks come along for free, which was not obvious: they look
+like they would need the loop metadata a foreign crate cannot rebuild
+(`LoopMetadata` is unnameable outside `gyrus`), but `DebugTrackingHook` builds
+them from a plain `debug_info.lookup(index)`. The parallel with the debugger
+holds — a second front end written entirely against the public surface.
+
+**The CLI defaults to a located engine for `.bfm`, and gains no flag.**
+`gyrus prog.bfm` runs the tree-walker with debug symbols. `--jit` and `--trace`
+also carry symbols, so both keep macro locations, and `--jit` is the answer for
+anyone who wants speed. There is deliberately no `--optimized`:
+
+> The optimized interpreter is the only engine that cannot name a source
+> position. A `.bfm` exists to name source positions, so it is the one engine a
+> `.bfm` never runs on.
+
+That rule keeps the flag table exactly as it is today; only the "default:
+optimized" sentence in the docs becomes conditional on the extension. The
+option was considered and rejected: the optimized interpreter beats the JIT
+only on programs that finish in a few milliseconds, and on those the
+tree-walker is fast enough that the difference buys nothing — its advantage
+over the tree-walker appears only where the JIT already wins. Anyone who
+genuinely wants to measure it runs `gyrus-tool expand` and then the `.bf`,
+which is the honest thing to measure anyway.
+
+The cost, stated rather than discovered later: `--no-default-features` builds
+without `--jit`, so in that binary a long-running `.bfm` has only the
+tree-walker and no way to trade locations for speed.
+
+**A directive must start its line; `@` elsewhere is prose.** Reserving `@`
+everywhere was the first attempt, and it hard-errors on converting an existing
+program: `calc.bf`, `pi.bf` and `char.bf` all contain one in their comments,
+and BrainFuck prose is free-form by convention. Line-start-only follows `cpp`,
+costs nothing, and keeps directives unambiguous. `{` and `}` stay reserved
+everywhere — no bundled program has either, and reserving them buys the error
+for the likeliest typo there is, a space between an instruction and its count.
+
+The other half of the rule is that a directive *owns* the rest of its line. It
+used to skip to the newline silently, which discarded any instruction written
+after a `@define` — and a discarded `]` went on to report an unmatched `[` that
+the source plainly matched. Refusing is the only acceptable behaviour: quietly
+dropping code somebody wrote is the one thing a preprocessor must not do.
+
+**Brackets are balanced in the expander, not left to the parser.** The parser
+would catch an unbalanced `[`, but it renders the source context into the error
+at parse time, so the position the user sees would be a column in generated
+code. Checking during expansion costs a stack and gives back a position they
+can act on.
+
+**Dependencies: two, not five.** `gyrus` and `thiserror`. `regex` and
+`lazy_static` are unnecessary — the scanner is a char loop, like `gyrus`'s
+parser and `gyrus-corpus`'s TOML reader — and `serde`/`serde_json` only served
+the JSON source map, which has no reader. When one appears, `serde_json` is
+already a workspace dependency.
+
+**Test hookup: golden expansions, not a manifest extension.** `gyrus-corpus`
+learns nothing about `.bfm`. A macro program is committed alongside its
+expansion, and the expansion is an ordinary `[[test]]` entry picked up by all
+three engines. Teaching the manifest to expand would put `gyrus-macro` into
+`gyrus`'s dev-dependency graph and make `cargo test -p gyrus` build it for
+nothing. The repository already does generate-commit-diff twice —
+`benchmarks/expected/` and `capture-debugger-svg.py --check`.
+
+For `hello_world` the golden file is better still: the expansion is
+byte-identical to `programs/basic/hello_world.bf`, which is already a manifest
+case, so the round-trip test inherits an output that three engines already
+check rather than committing a duplicate.
+
+## What is left
+
+The expander exists. What it does is described where every other crate's job
+is, in [`docs/architecture.md`](../docs/architecture.md), and in the code; this
+document keeps only what is still to be decided or built. A running inventory
+of shipped behaviour is exactly the thing this directory deleted twelve
+thousand lines of.
+
+**Not built**, in the order the plan wants them: `@var`/`@to` with pointer
+tracking, `@macro` with parameters, the oracle generator, `gyrus-tool expand`,
+and `gyrus` accepting `.bfm`.
+
+**A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
+`DebugInfo` carries locations but not loop metadata, because `LoopMetadata`
+lives in a private module and is not re-exported, so `record_loop_metadata`
+takes a type no foreign crate can build. Nothing in the error path reads it —
+which is why located errors and loop call stacks are unaffected — but
+`gyrus-debug` does, for loop navigation. Closing it means either exporting
+`LoopMetadata` or, better, a `DebugInfo::remap` inside `gyrus` that keeps the
+whole table consistent. It is not the only obstacle: the debugger's position
+map holds one instruction per position, and remapping is many-to-one, since
+every instruction of `+{65}` shares a column.
+
+`crates/gyrus-macro/tests/source_locations.rs` asserts the loss, so closing it
+shows up as a failing test rather than as nobody noticing.
+
+### The hazard to settle before `@to`
+
+Static pointer tracking and BrainFuck loops. At `[` the expander knows the
+pointer; at `]` it is wherever the body left it, after an unknown number of
+iterations. If the body's net movement is zero the position is knowable;
+otherwise it is not, and every `@to` after that loop emits wrong code —
+silently, producing a program that runs and prints garbage. The intended answer
+is to require net-zero movement in any loop body and reject otherwise with a
+located error, but it is a decision to take deliberately rather than discover.
 
 ## Overview
 

@@ -4,6 +4,7 @@ members = [
     "crates/gyrus-cli",
     "crates/gyrus-tool",
     "crates/gyrus-jit",
+    "crates/gyrus-macro",
     "crates/gyrus-corpus",
     "crates/gyrus-tui",
     "crates/gyrus-debug",
@@ -49,6 +50,7 @@ rust-version = "1.95"
 gyrus = { path = "crates/gyrus" }
 gyrus-jit = { path = "crates/gyrus-jit" }
 gyrus-corpus = { path = "crates/gyrus-corpus" }
+gyrus-macro = { path = "crates/gyrus-macro" }
 gyrus-tui = { path = "crates/gyrus-tui" }
 
 # Error handling

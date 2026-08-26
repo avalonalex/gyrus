@@ -18,7 +18,7 @@ design changed belongs in the commit that changed it.
 
 | Document | Status | Priority |
 |---|---|---|
-| [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design reviewed and scoped 2026-08-25, unimplemented | **Medium — the next thing to build** |
+| [macro-preprocessor-design.md](macro-preprocessor-design.md) | First slice in progress: `gyrus-macro` expands `@define` and repeat counts, and runtime errors name the `.bfm` | **Medium — being built** |
 
 ## Future
 

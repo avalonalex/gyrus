@@ -3,7 +3,8 @@
 This directory contains BrainFuck programs for testing and demonstrating gyrus functionality.
 
 Programs written for this project live in `basic/`, `tests/`, `errors/`,
-`warnings/`, and `debug/`, and are MIT licensed along with the rest of gyrus.
+`warnings/`, `debug/`, and `macros/`, and are MIT licensed along with the rest
+of gyrus.
 Programs written by **other authors** live under `third-party/` and keep their
 own licenses — see [`third-party/CREDITS.md`](third-party/CREDITS.md) for
 per-file attribution.
@@ -25,6 +26,19 @@ Simple programs demonstrating core BrainFuck features and gyrus capabilities.
 cargo run -- programs/basic/hello_world.bf
 cargo run -- programs/basic/simple.bf
 ```
+
+### `macros/` - Macro Source (`.bfm`)
+
+Source for the macro preprocessor (`gyrus-macro`), which expands to ordinary
+BrainFuck. The extension is `.bfm`, and nothing in this directory is a `.bf`
+file.
+
+- **`hello_world.bfm`** - `basic/hello_world.bf` with its counted runs written
+  as named constants. It expands to that file character for character, which is
+  what makes it a test as well as an example: `crates/gyrus-macro/tests/round_trip.rs`
+  reads it, so it is load-bearing rather than illustrative.
+
+There is no `gyrus`-side way to run these yet; they go through the library.
 
 ### `third-party/advanced/` - Complex Programs
 
