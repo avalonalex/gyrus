@@ -145,7 +145,10 @@ out \n     stop before each line ends
 A bare number is a cell; `out` and whatever follows it is a condition on output.
 So `5` watches cell 5 and `out 5` stops on the digit. Everything you set with
 `w` lasts as long as the session, and a `●` beside a row marks the ones that
-stop rather than only being shown.
+stop rather than only being shown. If a watch never fires, the debugger says so
+when the program ends — "never printed" is the answer when you are chasing a
+character missing from the output, and it is also how you find out the shell ate
+your backslash.
 
 The same conditions are available before you start, as `--break-output`, which
 is how you put one in a script or a bug report.

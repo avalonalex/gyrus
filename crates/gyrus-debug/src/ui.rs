@@ -227,6 +227,13 @@ fn draw(session: &mut Session) -> io::Result<()> {
         Some(Modal::Help { scroll }) => Some(scroll),
         _ => None,
     };
+    // Computed here, where the output and the watches are both in hand.
+    let unmatched: Vec<String> = session
+        .watches
+        .unmatched(&session.output)
+        .into_iter()
+        .map(|watch| format!("  {} — {}", watch.label(), watch.never_matched()))
+        .collect();
     let result = matches!(session.ui.modal, Some(Modal::Result))
         .then(|| {
             session.outcome.as_ref().map(|outcome| {
@@ -335,7 +342,14 @@ fn draw(session: &mut Session) -> io::Result<()> {
         if let Some((heading, color)) = &result {
             // `detail` re-formats the whole stats block or clones a formatted
             // error, so it is built once here rather than per frame.
-            let detail = outcome.as_ref().map(Outcome::detail).unwrap_or_default();
+            let mut detail = outcome.as_ref().map(Outcome::detail).unwrap_or_default();
+            if !unmatched.is_empty() {
+                // A watch that never fired is a finding, not a silence: it says
+                // the program never printed that byte, which is exactly what
+                // someone chasing a missing character wanted to know.
+                detail.push_str("\n\nwatches that never fired:\n");
+                detail.push_str(&unmatched.join("\n"));
+            }
             frame.render_widget(
                 Overlay::new(heading, &detail, theme)
                     .accent(*color)
@@ -473,6 +487,12 @@ fn watch_entries(session: &Session) -> Vec<WatchEntry> {
                     .map_or_else(|| "off tape".to_string(), |byte| byte.to_string()),
             )
             .changed(session.modified.contains(address)),
+            // Once the run is over, what a watch would match matters less than
+            // whether it ever did -- and the overlay saying so is dismissed
+            // long before the panel is.
+            output if session.finished && !output.seen_in(&session.output) => {
+                WatchEntry::new(watch.label(), "never fired").stopping(true)
+            }
             Watch::AnyOutput => WatchEntry::new(watch.label(), "any byte").stopping(true),
             Watch::Output(byte) => {
                 WatchEntry::new(watch.label(), format!("byte {byte}")).stopping(true)

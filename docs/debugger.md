@@ -249,6 +249,26 @@ word `any`, an escape (`\n`, `\t`, `\r`, `\0`), or `#N` for a byte value from
 `#0` to `#255`. A cell holds one byte, so a multi-byte character is refused
 rather than silently never matching.
 
+### When a watch never fires
+
+A watch that does not fire looks exactly like one that is broken: the program
+simply runs to the end. Those are different findings, so the debugger says
+which:
+
+```
+watches that never fired:
+  output 'X' — never printed
+```
+
+That is the answer when you are chasing a character missing from the output.
+It is also what tells you the value never arrived as you meant it — the bytes
+most worth watching are `\n`, `\t` and `#0`, and they are the ones a shell is
+most likely to mangle. `--break-output \n` without quotes reaches the program as
+the letter `n`, and without this line the run would just say `finished`.
+
+The watch panel says `never fired` beside the row too, because the result popup
+is dismissed long before the panel is.
+
 This is the answer to "run until it prints something wrong", which a positional
 breakpoint cannot express: on `hello_world.bf`, `--break-output '\n'` stops on
 the very last instruction of the program, and finding that by eye would mean

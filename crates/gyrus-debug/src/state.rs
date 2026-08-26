@@ -92,6 +92,29 @@ impl Watch {
         }
     }
 
+    /// Whether anything in `output` satisfied this watch.
+    ///
+    /// A cell watch never stops anything, so nothing about the output can leave
+    /// it unsatisfied.
+    pub fn seen_in(self, output: &[u8]) -> bool {
+        match self {
+            Watch::Cell(_) => true,
+            Watch::AnyOutput => !output.is_empty(),
+            Watch::Output(byte) => output.contains(&byte),
+        }
+    }
+
+    /// Why this watch never fired, for a run that has ended.
+    pub fn never_matched(self) -> String {
+        match self {
+            Watch::Cell(_) => String::new(),
+            Watch::AnyOutput => "the program printed nothing".to_string(),
+            // The label beside it already names the byte, so this says only
+            // what happened to it.
+            Watch::Output(_) => "never printed".to_string(),
+        }
+    }
+
     /// Whether a `.` about to print `byte` satisfies this.
     pub fn matches_output(self, byte: u8) -> bool {
         match self {
@@ -177,6 +200,21 @@ impl Watches {
     /// Whether any watch stops on output at all.
     pub fn stops_output(&self) -> bool {
         self.list.iter().any(|watch| watch.stops())
+    }
+
+    /// Watches that stop on output which nothing in `output` ever satisfied.
+    ///
+    /// A watch that does not fire looks exactly like one that is broken: the
+    /// program simply runs to the end. Those are different findings — "this
+    /// program never prints an X" is an answer, and "you quoted the value wrong"
+    /// is a dead end — and only the debugger can tell them apart, because it is
+    /// the one holding the output.
+    pub fn unmatched(&self, output: &[u8]) -> Vec<Watch> {
+        self.list
+            .iter()
+            .copied()
+            .filter(|watch| watch.stops() && !watch.seen_in(output))
+            .collect()
     }
 
     /// One entry per byte value: whether a `.` printing it should stop.
@@ -996,5 +1034,64 @@ mod pace_tests {
     fn the_default_rate_is_a_rung_of_the_ladder() {
         // `Pace::default` panics otherwise, which this states out loud.
         assert!(PACES.contains(&DEFAULT_RATE));
+    }
+}
+
+#[cfg(test)]
+mod unmatched_tests {
+    use super::*;
+
+    #[test]
+    fn a_byte_the_program_printed_counts_as_matched() {
+        let mut watches = Watches::default();
+        watches.add(Watch::Output(b'W'));
+        assert!(watches.unmatched(b"Hello World!").is_empty());
+    }
+
+    #[test]
+    fn a_byte_the_program_never_printed_is_reported() {
+        let mut watches = Watches::default();
+        watches.add(Watch::Output(b'X'));
+        assert_eq!(
+            watches.unmatched(b"Hello World!"),
+            vec![Watch::Output(b'X')]
+        );
+    }
+
+    #[test]
+    fn any_output_is_unmatched_only_when_nothing_was_printed() {
+        let mut watches = Watches::default();
+        watches.add(Watch::AnyOutput);
+        assert!(watches.unmatched(b"x").is_empty());
+        assert_eq!(watches.unmatched(b""), vec![Watch::AnyOutput]);
+    }
+
+    #[test]
+    fn cell_watches_are_never_reported() {
+        // They do not stop anything, so there is nothing for them to have missed.
+        let mut watches = Watches::default();
+        watches.add(Watch::Cell(0));
+        assert!(watches.unmatched(b"").is_empty());
+    }
+
+    #[test]
+    fn the_explanation_reads_as_a_sentence_beside_its_label() {
+        // The label carries the byte; this carries only the outcome.
+        assert_eq!(
+            format!(
+                "{} — {}",
+                Watch::Output(b'X').label(),
+                Watch::Output(b'X').never_matched()
+            ),
+            "output 'X' — never printed"
+        );
+        assert_eq!(
+            format!(
+                "{} — {}",
+                Watch::AnyOutput.label(),
+                Watch::AnyOutput.never_matched()
+            ),
+            "output — the program printed nothing"
+        );
     }
 }
