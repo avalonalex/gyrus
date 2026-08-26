@@ -14,7 +14,12 @@ cargo build --release          # what you want for anything timed
 cargo build -p gyrus           # just the library
 cargo run -p gyrus-cli -- programs/basic/hello_world.bf
 cargo run -p gyrus-tool -- view programs/basic/simple.bf --line-numbers
+cargo run -p gyrus-debug -- programs/basic/simple.bf
+cargo run -p gyrus-tutorial
 ```
+
+The two terminal binaries take over the screen, so `cargo run` on them wants a
+real terminal — piping their output somewhere is not useful.
 
 `rust-toolchain.toml` pins the compiler, so `cargo` picks the right one on its
 own and local builds cannot drift from CI. That pin is a different fact from

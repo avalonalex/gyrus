@@ -37,6 +37,8 @@ CRATE_BINARY = {
     "": "gyrus",
     "gyrus-cli": "gyrus",
     "gyrus-tool": "gyrus-tool",
+    "gyrus-debug": "gyrus-debug",
+    "gyrus-tutorial": "gyrus-tutorial",
 }
 
 
@@ -57,11 +59,17 @@ def main():
 
     gyrus = ROOT / "target" / "release" / "gyrus"
     tool = ROOT / "target" / "release" / "gyrus-tool"
-    for binary in (gyrus, tool):
+    debug = ROOT / "target" / "release" / "gyrus-debug"
+    tutorial = ROOT / "target" / "release" / "gyrus-tutorial"
+    for binary in (gyrus, tool, debug, tutorial):
         if not binary.exists():
             sys.exit(f"error: {binary} not built. Run: cargo build --release --workspace")
 
-    known = {"gyrus": help_flags([str(gyrus), "--help"])}
+    known = {
+        "gyrus": help_flags([str(gyrus), "--help"]),
+        "gyrus-debug": help_flags([str(debug), "--help"]),
+        "gyrus-tutorial": help_flags([str(tutorial), "--help"]),
+    }
     tool_help = subprocess.run([str(tool), "--help"], capture_output=True, text=True).stdout
     # clap lists subcommands two-space-indented under "Commands:"
     subcommands = re.findall(r"^  ([a-z][a-z-]*)\s{2,}\S", tool_help, re.M)
@@ -83,7 +91,7 @@ def main():
         # docs/tooling.md kept documenting `--inspect-debug` for however long
         # it had been since that became `gyrus-tool debug-info`.
         line = CARGO_RUN.sub(lambda m: CRATE_BINARY[m.group("crate") or ""] + " ", line)
-        for prog in ("gyrus-tool", "gyrus"):  # longest first
+        for prog in ("gyrus-tutorial", "gyrus-debug", "gyrus-tool", "gyrus"):  # longest first
             if line.startswith(prog + " "):
                 break
         else:

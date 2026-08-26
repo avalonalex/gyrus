@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-gyrus is a BrainFuck interpreter, optimizer, and JIT written in Rust, built as
-a learning project. (A debugger is designed but not built -- see `PRD/`. Do not
-describe one as existing.) Rust edition 2024, MSRV 1.95 (Cranelift's floor;
+gyrus is a BrainFuck interpreter, optimizer, JIT, terminal debugger, and
+interactive tutorial written in Rust, built as a learning project. Rust edition
+2024, MSRV 1.95 (Cranelift's floor;
 the library alone would need 1.88 for let-chains); `rust-toolchain.toml` pins
 the development compiler.
 
@@ -17,11 +17,23 @@ the development compiler.
 - **gyrus-tool** (`crates/gyrus-tool/`): `gyrus-tool` binary — development tools
 - **gyrus-jit** (`crates/gyrus-jit/`): Cranelift JIT for the optimized IR
   (`gyrus --jit`); see `docs/execution-models.md` and the crate's module docs
+- **gyrus-tui** (`crates/gyrus-tui/`): shared terminal widgets — source panel,
+  hex memory dump, labelled tape strip, output, watches, status, help and
+  overlay popups, plus the terminal guard and `cells.rs` for reading a tape.
+  A widget may name what it draws (`SourceView::breakpoints`); it may not name
+  a **key**, because the two binaries bind them differently — `?` opens help in
+  the debugger, and in the tutorial `?` is a character you might be typing. Any
+  text naming a key is a parameter (`HelpOverlay::dismiss`,
+  `WatchList::empty_hint`). No application state lives here
+- **gyrus-debug** (`crates/gyrus-debug/`): `gyrus-debug` binary — the terminal
+  debugger; see `docs/debugger.md`
+- **gyrus-tutorial** (`crates/gyrus-tutorial/`): `gyrus-tutorial` binary —
+  thirteen lessons in BrainFuck; see `docs/tutorial.md`
 - **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
   `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
   read the same cases. Not a product crate; nothing depends on it outside
   `[dev-dependencies]`
-- Future: TUI debugger, REPL as separate crates
+- Future: REPL as a separate crate
 
 ## Documentation Organization
 
@@ -30,8 +42,8 @@ the development compiler.
 - **`README.md`** — the landing page, kept short on purpose. It says what gyrus
   is, shows one error message, gives a quick start, and links onward.
 - **`docs/`** — user-facing reference: usage, errors, execution models, tooling,
-  development, testing, architecture, performance. Anything describing what
-  *exists* goes here. `performance.md` is also where the optimization work's
+  debugger, tutorial, development, testing, architecture, performance. Anything
+  describing what *exists* goes here. `performance.md` is also where the optimization work's
   negative results live: it concluded in August 2026, and the experiments that
   did not pay are recorded there so they are not repeated.
 - **`PRD/`** — design documents for what does **not** exist yet. When a feature
@@ -148,6 +160,30 @@ re-exports and crate docs.
      `gyrus --minify` and `gyrus --validate` do not exist.
    - **Runtime warnings**: Only shown with `--verbose` flag (cell wrapping is common in BF programs)
    - **Debug symbols**: Opt-in with `--debug` flag (default: fast mode without source locations)
+
+**Debugger** (`crates/gyrus-debug/`) — step through a program
+   - Runs the tree-walking interpreter: it needs a source location per
+     instruction and a hook per step, and the optimized path has neither
+   - Stops **before** each instruction. `]` is not a stopping point because it
+     is not an instruction — `[` is the `LoopCheck` at the head of the body,
+     and `]` is the loop's structure
+   - `before_instruction` covers every instruction except `[`;
+     `after_instruction` covers `[`, and only `[`, because the interpreter
+     dispatches that hook point for `LoopCheck` *before* the check runs
+   - Breakpoints are source positions (line **and** column), not lines: a
+     BrainFuck program is often one line of a hundred instructions
+   - "Step over" and "step out" are instruction *ranges*, not loop depths — at
+     a `[` the depth is the same before the loop and after it
+   - Same runtime flags as `gyrus`, plus `--break LINE[:COL]`, `--run`,
+     `--input`, `--input-file`, `--display`
+
+**Tutorial** (`crates/gyrus-tutorial/`) — thirteen lessons, numbered 0 to 12
+   - Records every step of a run and lets the learner scrub through it in both
+     directions. Affordable because a lesson tape is 16 cells and runs are
+     capped at 20,000 steps; the debugger cannot do this on a 30,000-cell tape
+   - Lessons are one table in `src/lesson.rs`: prose, starter, answer, hints,
+     and a check. Three tests hold it together — every answer solves its own
+     lesson, every starter parses and runs, and no starter is already the answer
 
 ### Key Design Decisions
 
@@ -385,6 +421,10 @@ cargo build --release                 # Optimized build
 # Run interpreter
 cargo run -p gyrus-cli -- programs/basic/hello_world.bf
 
+# Run the debugger and the tutorial (both take over the terminal)
+cargo run -p gyrus-debug -- programs/basic/hello_world.bf
+cargo run -p gyrus-tutorial
+
 # Run development tools
 cargo run -p gyrus-tool -- minify programs/basic/hello_world.bf
 cargo run -p gyrus-tool -- validate programs/tests/warnings_test.bf
@@ -618,22 +658,30 @@ What follows is the shape of the thing, which changes far more slowly.
 **Built and shipped**: the parser with full source locations, four execution
 paths (tree-walking, optimized, JIT, tracing), the optimizer, the hook system
 with its built-in hooks, static validation, minification, syntax highlighting,
-debug symbols, the string-to-BrainFuck compiler, the program generator, and the
-`gyrus-tool` subcommands.
+debug symbols, the string-to-BrainFuck compiler, the program generator, the
+`gyrus-tool` subcommands, the terminal debugger, and the tutorial.
 
-**Not built**: a TUI debugger, a REPL, an AOT backend on the JIT's translator,
-and a macro preprocessor. The debugger and the preprocessor have designs in
-`PRD/`; the REPL and the AOT backend have only the idea. None has code.
+**Not built**: a REPL, an AOT backend on the JIT's translator, and a macro
+preprocessor. Only the preprocessor has a design, in `PRD/`; the other two have
+only the idea. Neither has code.
 
-**The hook system is the debugger's foundation** and needs no API change to
-support one:
+**The hook system was the debugger's foundation**, and the claim that it needed
+no API change to support one held up — `gyrus-debug` and `gyrus-tutorial` are
+written entirely against the library's public surface and changed nothing in
+`gyrus`:
 - `HookContext` gives memory, pointer, step count, source location, loop depth
-- `before_instruction` + step-count or location matching gives breakpoints
-- `HookDecision::Break` pauses with `BfError::ExecutionPaused`
-- `after_instruction` gives watchpoints; state snapshots give time-travel
+- `before_instruction` is where the debugger stops; `HookDecision::Break`
+  unwinds with `BfError::ExecutionPaused`
+- `on_loop_enter`/`on_loop_exit` give the stack that "step out" needs
+- `on_complete` is the only chance to capture the final tape
 - `Option<HookManager>` means zero overhead when nothing is registered
 - The JIT declines hooks outright rather than half-supporting them: a
   configuration carrying hooks is refused
+
+Two things a debugger might want still do not exist: a `HookDecision` variant
+that substitutes an instruction (which is what evaluating an expression in a
+paused context would need), and any way to write to the tape from a hook —
+`HookContext` is immutable by design.
 
 For anything more specific than this, read the code or `docs/`. For why a
 decision was made, read git history.

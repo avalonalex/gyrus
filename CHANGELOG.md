@@ -7,6 +7,68 @@ manifests carried at the time.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+The two terminal interfaces the hook system was built for.
+
+### Added
+
+- **A terminal debugger** (`gyrus-debug`). Source, tape, output, and watched
+  cells on screen at once; step, step over, step out, continue, run to cursor,
+  and restart. It is built entirely on the library's public surface — an
+  `ExecutionHook` plus its own `BfInput`/`BfOutput` — and adding it changed
+  nothing in `gyrus`, which is the claim `docs/architecture.md` had been making
+  about the hook system since 0.2.0.
+- **Breakpoints are source positions, not lines.** `hello_world.bf` is one line
+  of 106 instructions, so a line breakpoint would be nearly useless on it. The
+  cursor snaps to the nearest instruction on its line, and `--break` takes
+  `LINE` or `LINE:COLUMN`.
+- **"Step over" and "step out" are instruction ranges**, taken from the loop
+  metadata the parser already records. Loop depth cannot express either: at a
+  `[`, the depth is the same on the iteration about to start as it is once the
+  loop has finished, so a depth-based rule stops on the next iteration instead
+  of after the loop.
+- **The debugger stops at `[` through `after_instruction`.** The interpreter
+  runs the `LoopCheck` at the head of a loop body itself and dispatches only
+  that hook point for it — before the check executes. Without the special case,
+  `[` would be the one instruction a debugger could never stop on.
+- **Program input is queued rather than read from the terminal**, which the
+  interface is using. A `,` with an empty queue stops execution and says so,
+  even mid-`continue`; resuming without supplying anything is how you choose
+  EOF. A restart replays what was already consumed.
+- **An interactive tutorial** (`gyrus-tutorial`): thirteen lessons, numbered 0
+  to 12, from `+` to the halting problem. Each explains an idea, hands over a
+  program that demonstrates it, and asks for a variation.
+- **The tutorial records every step and scrubs in both directions.** Walking
+  backwards through `[->+<]` is what makes it legible, and it is affordable
+  because a lesson tape is sixteen cells and runs are capped at 20,000 steps —
+  which is the opposite trade from the debugger, and the reason the debugger
+  does not offer it.
+- **Three tests keep the lessons honest**: every answer must satisfy its own
+  lesson's check, every starting program must parse and run, and no starting
+  program may already be the answer. The prose and the checks are separate
+  pieces of data, and editing one is exactly the change nobody re-runs by hand.
+- **A shared widget crate** (`gyrus-tui`): source panel with syntax colors and
+  breakpoint markers, hex memory dump with an ASCII sidebar, a labelled tape
+  strip for teaching, output, watches, status, help and result overlays, and a
+  terminal guard whose panic hook restores the screen. Widgets only — nothing
+  in it knows about breakpoints or lesson progress.
+
+### Changed
+
+- **`docs/architecture.md` stopped predicting the debugger and started
+  describing it.** The two things such a debugger would still want are named
+  there: a `HookDecision` that substitutes an instruction, and any way to write
+  to the tape from a hook.
+- **`scripts/check-readme-commands.py` covers the new binaries**, so their
+  documented flags rot no more quietly than the others'.
+
+### Removed
+
+- **`PRD/tui_debugger_and_tutorial.md`**, 1,343 lines, deleted rather than
+  archived now that the thing it designed exists. That is the rule the
+  directory runs on.
+
 ## 0.3.0 — 2026-08-25
 
 First public release. Two threads: a compiler, and getting the repository fit

@@ -24,6 +24,9 @@ Back to the [README](../README.md).
 | `gyrus-cli` | The `gyrus` binary — run a program, in any of the four modes |
 | `gyrus-tool` | The `gyrus-tool` binary — minify, validate, view, inspect, generate |
 | `gyrus-jit` | Cranelift JIT over the optimized IR, behind `gyrus --jit` |
+| `gyrus-tui` | Shared terminal widgets: source, memory, tape, output, status, help |
+| `gyrus-debug` | The `gyrus-debug` binary — step through a program with the tape in view |
+| `gyrus-tutorial` | The `gyrus-tutorial` binary — thirteen lessons in BrainFuck |
 | `gyrus-corpus` | Test support: the program manifest, parsed once for both corpus suites |
 
 The file-by-file layout is in [Project Structure](#project-structure) below;
@@ -107,21 +110,37 @@ cannot fail.
 
 ---
 
-## Where a debugger will attach
+## How the debugger attaches
 
-The hook system was built for this and needs no API change to support it.
-`before_instruction` gives breakpoints, matching on step count or source
-location. `HookDecision::Break` pauses execution with
-`BfError::ExecutionPaused`. `after_instruction` gives watchpoints. A hook that
-captures state snapshots gives time-travel.
+The hook system was built for this, and the claim that it needed no API change
+to support a debugger turned out to be true: `gyrus-debug` and
+`gyrus-tutorial` are written entirely against the library's public surface, and
+adding them changed nothing in `gyrus`.
 
-The one extension a full debugger would want is a `HookDecision` variant that
-replaces an instruction, for evaluating expressions in a paused context.
+- `before_instruction` is the stop point, and `HookDecision::Break` unwinds the
+  interpreter with `BfError::ExecutionPaused` when the user quits or restarts.
+- `after_instruction` is the stop point for `[`, and only for `[`. The
+  interpreter runs the `LoopCheck` at the head of a loop body itself and
+  dispatches only `after_instruction` for it — before the check executes. For
+  that one instruction this hook point means "about to run".
+- `on_loop_enter` and `on_loop_exit` give the stack of enclosing loops that
+  "step out" needs. Loop depth alone cannot express either "step over" or "step
+  out": at a `[`, the depth is the same on the iteration about to start as it
+  is once the loop has finished. Both are expressed as instruction ranges
+  instead, taken from the loop metadata the parser records.
+- `on_complete` is the only chance to capture the final tape; the VM state is
+  gone by the time the interpreter returns.
+- `BfInput` and `BfOutput` keep the program's bytes out of the interface that
+  is already drawing on the terminal.
 
-The interface, the layout, and the tutorial that goes with it are designed in
-[`PRD/tui_debugger_and_tutorial.md`](../PRD/tui_debugger_and_tutorial.md).
-Design documents live there rather than here, because this file describes what
-exists.
+Two things a debugger might want still do not exist. There is no `HookDecision`
+variant that replaces an instruction, which is what evaluating an expression in
+a paused context would need. And `HookContext` is immutable by design, so
+nothing can edit the tape from a hook.
+
+`gyrus-debug` runs the tree-walking interpreter. Debugging needs a source
+location per instruction and a hook per step, and the optimized path
+deliberately has neither. See [the debugger](debugger.md).
 
 ---
 
@@ -262,6 +281,34 @@ gyrus/
 │   ├── gyrus-jit/  # Cranelift JIT over OptimizedProgram
 │   │   ├── src/             # Translator, runtime, slow-path interpreter
 │   │   └── tests/           # Corpus, differential, and generated-program tests
+│   ├── gyrus-tui/  # Shared terminal widgets, no application logic
+│   │   └── src/
+│   │       ├── cells.rs     # Reading a tape: what is under the cursor, what changed
+│   │       ├── source.rs    # Code with line numbers, breakpoints, a cursor
+│   │       ├── memory.rs    # The tape as a hex dump
+│   │       ├── tape.rs      # A few cells, labelled, for teaching
+│   │       ├── output.rs    # What the program printed
+│   │       ├── watch.rs     # Watched cells and whether they changed
+│   │       ├── status.rs    # Header and the two status rows
+│   │       ├── help.rs      # The key-binding overlay
+│   │       ├── overlay.rs   # A centered popup for results and explanations
+│   │       ├── layout.rs    # The two screen shapes
+│   │       ├── terminal.rs  # Entering and leaving the alternate screen
+│   │       ├── test_utils.rs # Render a widget and read it back as text (private)
+│   │       └── theme.rs     # Colors, matching gyrus::syntax
+│   ├── gyrus-debug/ # `gyrus-debug` binary — the debugger
+│   │   └── src/
+│   │       ├── program.rs   # Source positions to instruction indices, both ways
+│   │       ├── state.rs     # Session state and the rule for when to stop
+│   │       ├── hook.rs      # The ExecutionHook and the I/O adapters
+│   │       └── ui.rs        # Drawing and key handling
+│   ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
+│   │   └── src/
+│   │       ├── lesson.rs    # The thirteen lessons and their criteria
+│   │       ├── trace.rs     # Recording every step of a run, for scrubbing
+│   │       ├── editor.rs    # A very small text editor
+│   │       ├── app.rs       # Lesson progress and the current attempt
+│   │       └── ui.rs        # Drawing and key handling
 │   └── gyrus-corpus/        # The test manifest, parsed; shared by both
 │       └── src/lib.rs       #   corpus suites. Test support, not a product.
 ├── programs/                # BrainFuck programs for testing
@@ -502,11 +549,12 @@ for inst in &optimized.instructions {
 }
 ```
 
-#### Debugger Integration (Future)
-```rust
-// Set breakpoints on original source locations
-// Optimized interpreter respects SourceRange for debugging
-```
+#### Debugger Integration
+
+`gyrus-debug` does not use any of this: it runs the tree-walking interpreter,
+where every instruction has one source location rather than a range. `SourceRange`
+exists for the tools that report on optimized code — `gyrus-tool optimize` and
+the JIT's error locations — not for stepping.
 
 ### Design Decisions
 
