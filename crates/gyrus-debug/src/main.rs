@@ -27,7 +27,7 @@ use gyrus_tui::TerminalGuard;
 
 use hook::{DebugInput, DebugOutput, DebuggerHook, Shared};
 use program::Program;
-use state::{Exit, Outcome, RunState, Session};
+use state::{Exit, Note, Outcome, RunState, Session};
 
 #[derive(Parser)]
 #[command(name = "gyrus-debug")]
@@ -83,6 +83,15 @@ struct Cli {
     #[arg(short = 'b', long = "break", value_name = "LINE[:COL]")]
     breakpoints: Vec<String>,
 
+    /// Character in the source that marks a breakpoint. Must not be a
+    /// BrainFuck command or `*`
+    #[arg(long, value_name = "CHAR", default_value = "@")]
+    marker: char,
+
+    /// Ignore breakpoint markers in the source
+    #[arg(long, conflicts_with = "marker")]
+    no_markers: bool,
+
     /// Start running instead of stopping at the first instruction
     #[arg(long)]
     run: bool,
@@ -112,9 +121,10 @@ fn run() -> Result<(), String> {
     let initial_input = read_input(&cli)?;
     let initial_memory = initial_memory_size(&cli)?;
 
-    // Validate the execution settings before taking over the terminal, so a
-    // typo in a flag prints an error instead of flashing an empty screen.
+    // Validate everything before taking over the terminal, so a typo in a flag
+    // prints an error instead of flashing an empty screen at it.
     build_config(&cli, None)?;
+    let marker = marker_char(&cli)?;
 
     let (_guard, terminal) = TerminalGuard::enter()
         .map_err(|error| format!("Error: could not set up the terminal: {error}"))?;
@@ -125,6 +135,7 @@ fn run() -> Result<(), String> {
     for spec in &cli.breakpoints {
         apply_breakpoint(&mut session, spec)?;
     }
+    apply_markers(marker, &mut session);
     let initial_run = if cli.run {
         RunState::Continue
     } else {
@@ -187,6 +198,67 @@ fn run() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// The marker character to scan for, or `None` when markers are off.
+///
+/// Rejects the eight commands and `*`: a marker that is also an instruction
+/// would put a breakpoint on every one of them, and `*` starts a comment, so
+/// every marker would be inside one and none would ever bind.
+fn marker_char(cli: &Cli) -> Result<Option<char>, String> {
+    if cli.no_markers {
+        return Ok(None);
+    }
+    if "><+-.,[]*".contains(cli.marker) {
+        return Err(format!(
+            "Error: --marker '{}' is a BrainFuck command or a comment character, \
+             so it cannot mark anything",
+            cli.marker
+        ));
+    }
+    Ok(Some(cli.marker))
+}
+
+/// Read the source's breakpoint markers, and say what was found.
+///
+/// On by default. Every BrainFuck implementation ignores every character that
+/// is not one of the eight commands, so a marked program runs identically
+/// everywhere and a breakpoint becomes something you can commit.
+///
+/// The count is announced rather than applied quietly: a program you did not
+/// write may contain the marker character for its own reasons, and an
+/// unexplained stop is worse than an unwanted one. `B` clears them all.
+fn apply_markers(marker: Option<char>, session: &mut Session) {
+    let Some(marker) = marker else {
+        return;
+    };
+
+    let program = Arc::clone(&session.program);
+    let (positions, unbound) = program.markers(marker);
+    for position in &positions {
+        session.set_breakpoint(*position);
+    }
+
+    let mut notes = Vec::new();
+    if !positions.is_empty() {
+        notes.push(format!(
+            "{} breakpoint{} from {} markers — B clears them",
+            positions.len(),
+            if positions.len() == 1 { "" } else { "s" },
+            marker
+        ));
+    }
+    if !unbound.is_empty() {
+        let lines: Vec<String> = unbound.iter().map(usize::to_string).collect();
+        notes.push(format!(
+            "no instruction after the {} on line {}",
+            marker,
+            lines.join(", ")
+        ));
+    }
+    if !notes.is_empty() {
+        session.note(notes.join("; "), Note::Info);
+    }
 }
 
 /// Where a runtime error happened, when the error knows.
@@ -338,6 +410,8 @@ mod tests {
             input: input.map(str::to_owned),
             input_file: file.map(PathBuf::from),
             breakpoints: Vec::new(),
+            marker: '@',
+            no_markers: false,
             run: false,
             display: "hex".into(),
         }
@@ -356,6 +430,19 @@ mod tests {
     #[test]
     fn a_newline_that_is_already_there_is_not_doubled() {
         assert_eq!(read_input(&cli(Some("hi\n"), None)).unwrap(), b"hi\n");
+    }
+
+    #[test]
+    fn a_marker_that_is_also_an_instruction_is_refused() {
+        let mut c = cli(None, None);
+        c.marker = '+';
+        assert!(marker_char(&c).is_err());
+        c.marker = '*';
+        assert!(marker_char(&c).is_err());
+        c.marker = '@';
+        assert_eq!(marker_char(&c).unwrap(), Some('@'));
+        c.no_markers = true;
+        assert_eq!(marker_char(&c).unwrap(), None);
     }
 
     #[test]

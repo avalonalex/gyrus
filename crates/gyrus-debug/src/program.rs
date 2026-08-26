@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use gyrus::syntax::LineScanner;
 use gyrus::{BfError, DebugInfo, Instruction, parse_with_debug};
 use gyrus_tui::{Position, SourceDocument};
 
@@ -161,6 +162,45 @@ impl Program {
         matches!(self.instruction_at(index), Some(Instruction::Input))
     }
 
+    /// Breakpoint positions named by `marker` characters in the source.
+    ///
+    /// A marker binds to the next instruction at or after it, scanning forward
+    /// across lines — unlike a cursor, which snaps to the *nearest* instruction
+    /// on its line. A cursor lands wherever the arrow keys left it; a marker was
+    /// typed immediately before the thing it means.
+    ///
+    /// Markers inside a `*` line comment are ignored, so a header comment
+    /// carrying an email address does not set breakpoints.
+    ///
+    /// Returns the positions to break at, and the lines of any markers with no
+    /// instruction after them.
+    pub fn markers(&self, marker: char) -> (Vec<Position>, Vec<usize>) {
+        let mut breakpoints = Vec::new();
+        let mut unbound = Vec::new();
+        let mut scanner = LineScanner::new();
+
+        for line_number in 1..=self.document.line_count() {
+            scanner.start_line();
+            let line = self.document.line(line_number).unwrap_or("");
+            for (column_index, ch) in line.chars().enumerate() {
+                scanner.classify(ch);
+                if ch != marker || scanner.in_comment() {
+                    continue;
+                }
+                let from = (line_number, column_index + 1);
+                match self.indices.range(from..).next() {
+                    Some((position, _)) => {
+                        if !breakpoints.contains(position) {
+                            breakpoints.push(*position);
+                        }
+                    }
+                    None => unbound.push(line_number),
+                }
+            }
+        }
+        (breakpoints, unbound)
+    }
+
     /// The half-open instruction range a loop occupies, given the index of its
     /// `[`. Returns `None` when `index` is not a loop head.
     ///
@@ -273,6 +313,44 @@ mod tests {
         assert!(program.reads_input(1));
         assert!(!program.reads_input(2));
         assert!(!program.reads_input(99));
+    }
+
+    #[test]
+    fn a_marker_binds_to_the_next_instruction_after_it() {
+        let program = program("+++@[->+<]");
+        let (breakpoints, unbound) = program.markers('@');
+        // The `[` at column 5, not the `+` at column 3.
+        assert_eq!(breakpoints, vec![(1, 5)]);
+        assert!(unbound.is_empty());
+    }
+
+    #[test]
+    fn a_marker_scans_forward_across_lines() {
+        let program = program("+@\n\n  >");
+        assert_eq!(program.markers('@').0, vec![(3, 3)]);
+    }
+
+    #[test]
+    fn a_marker_with_nothing_after_it_is_reported_rather_than_dropped() {
+        // `char.bf` ends with a bare `@` on its own line.
+        let program = program(".+[.+]\n@");
+        let (breakpoints, unbound) = program.markers('@');
+        assert!(breakpoints.is_empty());
+        assert_eq!(unbound, vec![2]);
+    }
+
+    #[test]
+    fn a_marker_inside_a_line_comment_is_ignored() {
+        // The most likely accident in a program someone just wrote.
+        let program = program("+ * mail me at foo@bar.com\n>");
+        assert!(program.markers('@').0.is_empty());
+        assert!(program.markers('@').1.is_empty());
+    }
+
+    #[test]
+    fn two_markers_binding_to_the_same_instruction_set_one_breakpoint() {
+        let program = program("+@@>");
+        assert_eq!(program.markers('@').0, vec![(1, 4)]);
     }
 
     #[test]

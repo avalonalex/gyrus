@@ -5,15 +5,23 @@ PRD is deleted rather than archived — the code and `docs/` describe what is
 built, and git history keeps the reasoning for anyone who wants it.
 
 That rule cost this directory about 6,000 lines of completed-milestone records
-in August 2026, and another 1,300 when the TUI debugger and tutorial shipped.
-It is the rule that keeps this directory readable.
+in August 2026, another 1,300 when the TUI debugger and tutorial shipped, and
+200 more when breakpoint markers did. It is the rule that keeps this directory
+readable.
+
+It has a second effect worth naming: a shipped PRD is often *wrong* by the time
+the code exists, and deleting it is how that stops mattering. The marker design
+argued for an opt-in flag on the strength of three programs in the corpus that
+contain `@`. Checking whether those markers would actually *fire* — which the
+design did not do — showed that two of the three cannot, so the feature shipped
+on by default instead. Git history keeps the reasoning; the directory does not
+keep the wrong conclusion.
 
 ## Active
 
 | Document | Status | Priority |
 |---|---|---|
 | [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design reviewed and scoped 2026-08-25, unimplemented | **Medium — the next thing to build** |
-| [source-breakpoint-markers.md](source-breakpoint-markers.md) | Designed 2026-08-26, unimplemented | Low — small and self-contained, but its first step (moving the `*` comment rule into `gyrus::syntax`) is worth doing regardless |
 
 ## Future
 

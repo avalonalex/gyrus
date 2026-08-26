@@ -101,6 +101,52 @@ gyrus-debug programs/basic/hello_world.bf --break 1:12 --run
 instruction, which is what you want when you have set the breakpoint you care
 about.
 
+## Markers in the source
+
+A `@` in the source is a breakpoint. Every BrainFuck implementation ignores
+every character that is not one of the eight commands, so a marked program runs
+identically everywhere — under `gyrus`, under `--jit`, under anyone else's
+interpreter — and the breakpoint becomes something you commit rather than
+something you retype:
+
+```
++++@[->+<]        stops at the [
+```
+
+A marker binds to the **next** instruction at or after it, scanning forward
+across lines. That is deliberately not what `--break LINE:COLUMN` does — a
+cursor snaps to the *nearest* instruction on its line, because it lands wherever
+the arrow keys left it, whereas a marker was typed immediately before the thing
+it means.
+
+Markers inside a `*` line comment are ignored, so a header comment carrying an
+email address does not set breakpoints.
+
+They are read by default, and the count is announced rather than applied
+quietly — a program you did not write may contain `@` for its own reasons, and
+an unexplained stop is worse than an unwanted one:
+
+```
+4 breakpoints from @ markers — B clears them
+```
+
+`B` clears them like any other breakpoint. Nothing is written back to the file:
+markers you add with `b` during a session live only as long as the session, and
+the debugger never edits your source.
+
+```bash
+gyrus-debug program.bf --no-markers     # ignore them
+gyrus-debug program.bf --marker '#'     # use a different character
+```
+
+`--marker` refuses the eight commands and `*`: a marker that is also an
+instruction would break on every one of them, and `*` starts a comment, so every
+marker would sit inside one and never bind.
+
+A marker with no instruction after it is reported rather than silently dropped —
+`programs/third-party/advanced/char.bf` ends with a bare `@`, and the debugger
+says so.
+
 ## Stepping over and out
 
 Step over (`n`) and step out (`o`) are both "run until execution leaves this

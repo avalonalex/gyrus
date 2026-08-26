@@ -105,6 +105,94 @@ pub struct HighlightedSpan {
     pub end: usize,   // End position in line
 }
 
+/// What one source character is, before loop nesting is taken into account.
+///
+/// This is the language's own rule about what counts as code, and it had three
+/// separate encodings before this existed: the highlighter's, the TUI's, and
+/// the one the debugger's breakpoint markers needed. Three copies of a rule
+/// that decides whether a character *executes* is two too many.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharClass {
+    /// `>` or `<`
+    Movement,
+    /// `+` or `-`
+    Arithmetic,
+    /// `.` or `,`
+    Io,
+    /// `[`
+    LoopStart,
+    /// `]`
+    LoopEnd,
+    /// Whitespace outside a comment
+    Whitespace,
+    /// A `*`, anything after one on the same line, or any character that is not
+    /// a BrainFuck command
+    Comment,
+}
+
+impl CharClass {
+    /// Whether a character of this class is executed.
+    pub fn is_instruction(self) -> bool {
+        !matches!(self, CharClass::Comment | CharClass::Whitespace)
+    }
+}
+
+/// Classifies a line one character at a time, remembering `*` comments.
+///
+/// `*` starts a comment that runs to the end of the line, so a character cannot
+/// be classified on its own — `+` is an instruction or a comment depending on
+/// what came before it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LineScanner {
+    in_comment: bool,
+}
+
+impl LineScanner {
+    /// A scanner positioned at the start of a line.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Begin a new line, ending any comment the previous one started.
+    pub fn start_line(&mut self) {
+        self.in_comment = false;
+    }
+
+    /// Whether the scanner is inside a `*` comment.
+    ///
+    /// A `*` puts it inside one, so this is true from the `*` onward.
+    pub fn in_comment(&self) -> bool {
+        self.in_comment
+    }
+
+    /// Classify the next character of the current line.
+    pub fn classify(&mut self, ch: char) -> CharClass {
+        if ch == '*' {
+            self.in_comment = true;
+        }
+        if self.in_comment {
+            return CharClass::Comment;
+        }
+        match ch {
+            '>' | '<' => CharClass::Movement,
+            '+' | '-' => CharClass::Arithmetic,
+            '.' | ',' => CharClass::Io,
+            '[' => CharClass::LoopStart,
+            ']' => CharClass::LoopEnd,
+            _ if ch.is_whitespace() => CharClass::Whitespace,
+            _ => CharClass::Comment,
+        }
+    }
+}
+
+/// Classify every character of one line, honoring `*` comments.
+///
+/// The result lines up with `line.chars()`, not with byte offsets.
+pub fn classify_line(line: &str) -> Vec<CharClass> {
+    let mut scanner = LineScanner::new();
+    line.chars().map(|ch| scanner.classify(ch)).collect()
+}
+
 /// Style category for a span of text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpanStyle {
@@ -144,40 +232,36 @@ impl SyntaxHighlighter {
     pub fn highlight(&self, source: &str) -> HighlightedCode {
         let mut lines = Vec::new();
         let mut nesting_depth = 0;
+        let mut scanner = LineScanner::new();
 
         for (line_num, line) in source.lines().enumerate() {
             let mut spans = Vec::new();
             let mut current_pos = 0;
 
-            // Line comment state for this line
-            let mut in_line_comment = false;
+            // `*` comments end at the newline.
+            scanner.start_line();
 
             for ch in line.chars() {
                 let char_len = ch.len_utf8();
-                let style = if in_line_comment {
-                    SpanStyle::Comment
-                } else {
-                    match ch {
-                        '>' | '<' => SpanStyle::Movement,
-                        '+' | '-' => SpanStyle::Arithmetic,
-                        ',' | '.' => SpanStyle::Io,
-                        '[' => {
-                            let depth = nesting_depth;
-                            nesting_depth += 1;
-                            SpanStyle::LoopStart(depth)
-                        }
-                        ']' => {
-                            // Prevent underflow if brackets are unmatched
-                            nesting_depth = nesting_depth.saturating_sub(1);
-                            SpanStyle::LoopEnd(nesting_depth)
-                        }
-                        '*' => {
-                            in_line_comment = true;
-                            SpanStyle::Comment
-                        }
-                        _ if ch.is_whitespace() => SpanStyle::Whitespace,
-                        _ => SpanStyle::Comment, // Non-BF chars are implicit comments
+                // The what-is-this-character question is answered in one place;
+                // all this adds is the nesting depth, which is a property of the
+                // program rather than of the character.
+                let style = match scanner.classify(ch) {
+                    CharClass::Movement => SpanStyle::Movement,
+                    CharClass::Arithmetic => SpanStyle::Arithmetic,
+                    CharClass::Io => SpanStyle::Io,
+                    CharClass::LoopStart => {
+                        let depth = nesting_depth;
+                        nesting_depth += 1;
+                        SpanStyle::LoopStart(depth)
                     }
+                    CharClass::LoopEnd => {
+                        // Prevent underflow if brackets are unmatched
+                        nesting_depth = nesting_depth.saturating_sub(1);
+                        SpanStyle::LoopEnd(nesting_depth)
+                    }
+                    CharClass::Whitespace => SpanStyle::Whitespace,
+                    CharClass::Comment => SpanStyle::Comment,
                 };
 
                 spans.push(HighlightedSpan {
@@ -512,5 +596,68 @@ mod tests {
         assert_eq!(spans[3].style, SpanStyle::Arithmetic);
         // ] at depth 0 (closes the [)
         assert_eq!(spans[4].style, SpanStyle::LoopEnd(0));
+    }
+}
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::*;
+    use crate::parse_with_debug;
+    use std::collections::HashSet;
+
+    #[test]
+    fn a_star_comments_out_the_rest_of_its_line_only() {
+        let classes = classify_line("+* +");
+        assert_eq!(classes[0], CharClass::Arithmetic);
+        assert!(classes[1..].iter().all(|c| *c == CharClass::Comment));
+        // A new line starts outside the comment.
+        assert_eq!(classify_line("+")[0], CharClass::Arithmetic);
+    }
+
+    #[test]
+    fn text_that_is_not_a_command_is_a_comment() {
+        assert_eq!(classify_line("hi")[0], CharClass::Comment);
+        assert_eq!(classify_line(" ")[0], CharClass::Whitespace);
+    }
+
+    /// The classifier and the parser must agree about what executes.
+    ///
+    /// They are separate implementations — the parser skips a `*` comment by
+    /// scanning ahead, the classifier decides one character at a time — and the
+    /// thing they disagree about would be which characters are *code*. Anything
+    /// built on the classifier, from syntax colours to breakpoint markers,
+    /// inherits that disagreement.
+    #[test]
+    fn the_classifier_agrees_with_the_parser_about_what_executes() {
+        let sources = [
+            "+++[->+<]",
+            "+ * this is ignored: +++[>]\n-",
+            "comments are anything else +\n* and a whole line here [>+<]\n>",
+            "*\n*+\n+",
+            "",
+            "[[+]]",
+        ];
+        for source in sources {
+            let (_, debug) = parse_with_debug(source).expect("parses");
+            let executed: HashSet<(usize, usize)> = (0..debug.len())
+                .filter_map(|index| debug.lookup(index))
+                .map(|location| (location.line, location.column))
+                .collect();
+
+            for (line_index, line) in source.lines().enumerate() {
+                for (column_index, class) in classify_line(line).into_iter().enumerate() {
+                    let position = (line_index + 1, column_index + 1);
+                    // `]` is a command the parser does not number: it is the
+                    // loop's structure, not a step, which is why the debugger
+                    // cannot stop on one either.
+                    let expected = class.is_instruction() && class != CharClass::LoopEnd;
+                    assert_eq!(
+                        executed.contains(&position),
+                        expected,
+                        "{source:?} at {position:?}: classifier says {class:?}"
+                    );
+                }
+            }
+        }
     }
 }
