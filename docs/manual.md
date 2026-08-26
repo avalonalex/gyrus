@@ -124,7 +124,8 @@ the tape as it was just before that character was produced. Execution stops
 | | |
 |---|---|
 | `space` | execute one instruction |
-| `c` | run to the next breakpoint |
+| `s` | run in slow motion — `+` and `-` change the speed |
+| `c` | run to the next breakpoint, at full speed |
 | `n` / `o` | step over a loop / step out of one |
 | `b` | breakpoint at the cursor |
 | `w` | watch something |

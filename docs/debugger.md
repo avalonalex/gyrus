@@ -36,6 +36,8 @@ table the key handler uses.
 | Key | Does |
 |---|---|
 | `space` | execute one instruction |
+| `s` | run in slow motion |
+| `+` / `-` | faster / slower |
 | `n` | step over: run the whole loop, if the next instruction is a `[` |
 | `o` | step out: run to the end of the enclosing loop |
 | `c` / `enter` | continue to the next breakpoint |
@@ -166,6 +168,29 @@ A marker with no instruction after it is reported rather than silently dropped.
 The two claims above about bundled programs — `char.bf`'s trailing marker and
 `calc.bf`'s four — are checked by a test rather than left to rot, since both
 would break silently the moment either file were edited.
+
+## Watching a loop turn
+
+`c` runs the program faster than anything can be read, and `space` is one
+instruction at a time. `s` is the middle: it runs, at a speed you can follow.
+
+```
+ gyrus-debug │ hello_world.bf │ slow · 10/s
+ ran 26   at 1:27   depth 2   ptr 4   cell 3   changed 1   next #26 of 103
+ p pause  + - speed  c full speed
+```
+
+`+` and `-` move through 1, 2, 5, 10, 25 and 50 instructions a second, during
+the run or before it starts — pressing `-` on a stopped program means "go, but
+slowly". `c` returns to full speed and `p` stops.
+
+It is `continue` with a speed limit and nothing more, so breakpoints, output
+watches and everything else still stop it exactly as they would at full speed.
+
+The wait between instructions is spent listening for a keystroke rather than
+sleeping. At one instruction a second a sleep would leave the debugger ignoring
+the keyboard for a second at a time, so `p` and `q` would feel broken precisely
+when someone is reaching for them.
 
 ## Watching what the program prints
 

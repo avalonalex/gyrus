@@ -69,6 +69,8 @@ pub struct DebuggerHook {
     output_stops: [bool; 256],
     /// The `watch_revision` the table was built from.
     watch_revision: u64,
+    /// The gap between instructions in a paced run, if one is in progress.
+    pace: Option<Duration>,
 }
 
 impl DebuggerHook {
@@ -88,6 +90,7 @@ impl DebuggerHook {
             watches_output: false,
             output_stops: [false; 256],
             watch_revision: u64::MAX,
+            pace: None,
         };
         let guard = lock(&shared);
         hook.sync(&guard);
@@ -100,6 +103,7 @@ impl DebuggerHook {
         self.run = session.run;
         self.exiting = session.exit.is_some();
         self.watches_output = session.watches_output();
+        self.pace = session.pace.delay();
         if self.stops_revision != session.breakpoint_revision() {
             self.stops = session.breakpoint_bitmap();
             self.stops_revision = session.breakpoint_revision();
@@ -159,6 +163,17 @@ impl DebuggerHook {
         };
 
         if reason.is_none() {
+            // Slow motion draws every instruction rather than every sixtieth of
+            // a second: the point is to see each one land.
+            if let Some(delay) = self.pace {
+                let shared = Arc::clone(&self.session);
+                let mut session = lock(&shared);
+                observe(&mut session, context, true);
+                let decision = ui::paced(&mut session, delay);
+                self.sync(&session);
+                return decision;
+            }
+
             self.since_poll += 1;
             if self.since_poll < POLL_INTERVAL {
                 return HookDecision::Continue;

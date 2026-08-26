@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gyrus::{ExecutionStats, SourceLocation};
 use gyrus_tui::{CellDisplay, Position, Theme, Tui};
@@ -193,6 +193,83 @@ impl Watches {
             *entry = self.list.iter().any(|watch| watch.matches_output(byte));
         }
         table
+    }
+}
+
+/// The speeds slow motion steps through, in instructions per second.
+///
+/// A ladder rather than a free number: the useful range spans two orders of
+/// magnitude, and nobody wants to type "17". The top is capped where a redraw
+/// per instruction stops being something an eye can follow — past that, `c` is
+/// the answer.
+pub const PACES: [u32; 6] = [1, 2, 5, 10, 25, 50];
+
+/// The speed slow motion starts at.
+const DEFAULT_PACE: usize = 3;
+
+/// How fast a paced run goes, or `None` for as fast as it can.
+///
+/// Deliberately not a [`RunState`]: pacing is a constraint on running, not a
+/// way of running. It applies equally to `Continue`, to a run-to-cursor, and to
+/// stepping over a loop, and breakpoints and watches still stop it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pace {
+    index: usize,
+    running: bool,
+}
+
+impl Default for Pace {
+    fn default() -> Self {
+        Self {
+            index: DEFAULT_PACE,
+            running: false,
+        }
+    }
+}
+
+impl Pace {
+    /// Instructions per second, when pacing is on.
+    pub fn per_second(self) -> Option<u32> {
+        self.running.then(|| PACES[self.index])
+    }
+
+    /// How long to wait between instructions, when pacing is on.
+    pub fn delay(self) -> Option<Duration> {
+        self.per_second()
+            .map(|rate| Duration::from_secs_f64(1.0 / f64::from(rate)))
+    }
+
+    /// Whether a paced run is in progress.
+    pub fn is_running(self) -> bool {
+        self.running
+    }
+
+    /// Start pacing, at the speed last chosen.
+    pub fn start(&mut self) {
+        self.running = true;
+    }
+
+    /// Run as fast as the interpreter can again.
+    pub fn stop(&mut self) {
+        self.running = false;
+    }
+
+    /// One rung faster. Starts pacing if it was off, so the key does something
+    /// visible whichever state it is pressed in.
+    pub fn faster(&mut self) {
+        self.running = true;
+        self.index = (self.index + 1).min(PACES.len() - 1);
+    }
+
+    /// One rung slower.
+    pub fn slower(&mut self) {
+        self.running = true;
+        self.index = self.index.saturating_sub(1);
+    }
+
+    /// The speed, whether or not it is in use.
+    pub fn rate(self) -> u32 {
+        PACES[self.index]
     }
 }
 
@@ -439,6 +516,8 @@ pub struct Session {
     pub watches: Watches,
     /// Why execution stopped, set where that is decided.
     pub stop_reason: StopReason,
+    /// How fast a running program is allowed to go.
+    pub pace: Pace,
     pub output: Vec<u8>,
 
     /// Bytes queued for the program's next `,`.
@@ -486,6 +565,7 @@ impl Session {
             breakpoint_revision: 0,
             watches: Watches::default(),
             stop_reason: StopReason::Stepped,
+            pace: Pace::default(),
             output: Vec::new(),
             pending_input: VecDeque::new(),
             consumed_input: Vec::new(),
@@ -849,5 +929,63 @@ mod watch_list_tests {
         assert_eq!(watches.revision(), after, "a rejected add is not a change");
         watches.remove(0);
         assert_ne!(watches.revision(), after);
+    }
+}
+
+#[cfg(test)]
+mod pace_tests {
+    use super::*;
+
+    #[test]
+    fn pacing_is_off_until_asked_for() {
+        let pace = Pace::default();
+        assert!(!pace.is_running());
+        assert_eq!(pace.per_second(), None);
+        assert_eq!(pace.delay(), None);
+        // The speed exists even while unused, so `s` resumes at what you chose.
+        assert_eq!(pace.rate(), 10);
+    }
+
+    #[test]
+    fn the_ladder_stops_at_both_ends() {
+        let mut pace = Pace::default();
+        for _ in 0..20 {
+            pace.faster();
+        }
+        assert_eq!(pace.rate(), *PACES.last().expect("ladder is not empty"));
+        for _ in 0..20 {
+            pace.slower();
+        }
+        assert_eq!(pace.rate(), PACES[0]);
+    }
+
+    #[test]
+    fn changing_speed_starts_pacing() {
+        // Otherwise `-` during a full-speed run does nothing visible.
+        let mut pace = Pace::default();
+        pace.slower();
+        assert!(pace.is_running());
+        pace.stop();
+        pace.faster();
+        assert!(pace.is_running());
+    }
+
+    #[test]
+    fn stopping_keeps_the_speed_for_next_time() {
+        let mut pace = Pace::default();
+        pace.slower();
+        let rate = pace.rate();
+        pace.stop();
+        assert_eq!(pace.rate(), rate);
+        pace.start();
+        assert_eq!(pace.per_second(), Some(rate));
+    }
+
+    #[test]
+    fn the_delay_is_the_reciprocal_of_the_rate() {
+        let mut pace = Pace::default();
+        pace.start();
+        let delay = pace.delay().expect("running");
+        assert!((delay.as_secs_f64() - 1.0 / f64::from(pace.rate())).abs() < 1e-9);
     }
 }

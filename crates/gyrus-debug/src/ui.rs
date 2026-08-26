@@ -1,7 +1,7 @@
 //! Drawing the debugger, and the keys that drive it.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gyrus::hooks::HookDecision;
 use gyrus_tui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -73,6 +73,57 @@ pub fn tick(session: &mut Session) -> HookDecision {
             Err(_) => break,
         }
     }
+    if session.exit.is_some() {
+        HookDecision::Break
+    } else {
+        HookDecision::Continue
+    }
+}
+
+/// Draw one frame of a paced run, and wait out the gap before the next.
+///
+/// The wait is `event::poll`, not a sleep: at one instruction per second a sleep
+/// would make the debugger ignore the keyboard for a second at a time, so `p`
+/// and `q` would feel broken exactly when someone is most likely to reach for
+/// them. Polling waits the same length and wakes on the first key.
+pub fn paced(session: &mut Session, delay: Duration) -> HookDecision {
+    if let Err(error) = draw(session) {
+        session.exit = Some(Exit::Failed(error));
+        return HookDecision::Break;
+    }
+
+    let deadline = Instant::now() + delay;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match event::poll(remaining) {
+            Ok(true) => match event::read() {
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                    if handle_key(session, key) == Flow::Break {
+                        return HookDecision::Break;
+                    }
+                    // A key may have stopped the run or changed the speed, and
+                    // either way the screen is now out of date.
+                    if draw(session).is_err() || !session.pace.is_running() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            },
+            // Waited the whole gap without a key: time for the next instruction.
+            Ok(false) => break,
+            Err(_) => break,
+        }
+    }
+
+    // The note that started this run has had its frame. Leaving it up would
+    // cover the status row for the whole run, and watching those numbers move
+    // is the entire point of running slowly.
+    session.message = None;
+    session.touch_draw();
     if session.exit.is_some() {
         HookDecision::Break
     } else {
@@ -340,6 +391,9 @@ fn run_state_label(session: &Session) -> (String, Color) {
         },
         (None, false) => match session.run {
             RunState::Step => ("paused".to_string(), theme.accent),
+            _ if session.pace.is_running() => {
+                (format!("slow · {}/s", session.pace.rate()), theme.modified)
+            }
             RunState::Continue => ("running".to_string(), theme.modified),
             RunState::RunTo(_) => ("running to cursor".to_string(), theme.modified),
             RunState::Leave { .. } => ("stepping over".to_string(), theme.modified),
@@ -393,14 +447,18 @@ fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
     let mut hints = match session.run {
         RunState::Step => vec![
             ("space", "step"),
+            ("s", "slow"),
+            ("c", "continue"),
             ("n", "over"),
             ("o", "out"),
-            ("c", "continue"),
             ("g", "to cursor"),
             ("b", "break"),
             ("r", "restart"),
         ],
-        _ => vec![("p", "pause")],
+        _ if session.pace.is_running() => {
+            vec![("p", "pause"), ("+ -", "speed"), ("c", "full speed")]
+        }
+        _ => vec![("p", "pause"), ("s", "slow")],
     };
     // First, so that it is the last thing a narrow terminal drops. `i` is the
     // one key the program is currently waiting on, and it is otherwise buried
@@ -439,9 +497,17 @@ const HELP: &[Section<'static>] = &[
         "Execution",
         &[
             ("space", "execute one instruction"),
+            ("s", "run in slow motion, so you can watch a loop turn"),
+            (
+                "+ / -",
+                "faster / slower, while it runs or before it starts",
+            ),
             ("n", "step over: run the whole loop, if this is a `[`"),
             ("o", "step out: run to the end of the enclosing loop"),
-            ("c / enter", "continue to the next breakpoint"),
+            (
+                "c / enter",
+                "continue at full speed, to the next breakpoint",
+            ),
             ("g", "run to the cursor"),
             ("p / esc", "pause a running program"),
             ("r", "restart from the beginning"),
@@ -557,11 +623,39 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
 
         // Execution
         KeyCode::Char(' ') => resume(session, RunState::Step),
-        KeyCode::Char('c') | KeyCode::Enter => resume(session, RunState::Continue),
+        KeyCode::Char('c') | KeyCode::Enter => {
+            session.pace.stop();
+            resume(session, RunState::Continue)
+        }
+        // Slow motion is `continue` with a speed limit, so breakpoints, watches
+        // and `p` all behave exactly as they do at full speed.
+        KeyCode::Char('s') => {
+            session.pace.start();
+            let flow = resume(session, RunState::Continue);
+            if flow == Flow::Resume {
+                session.note(
+                    format!(
+                        "running at {} instructions a second — + - to adjust, c for full speed",
+                        session.pace.rate()
+                    ),
+                    Note::Info,
+                );
+            }
+            flow
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            session.pace.faster();
+            adjust_pace(session)
+        }
+        KeyCode::Char('-') | KeyCode::Char('_') => {
+            session.pace.slower();
+            adjust_pace(session)
+        }
         KeyCode::Char('n') => step_over(session),
         KeyCode::Char('o') => step_out(session),
         KeyCode::Char('g') => run_to_cursor(session),
         KeyCode::Char('p') | KeyCode::Esc => {
+            session.pace.stop();
             // Esc is a reflex key. Answering it costs a line and stops the
             // debugger from looking unresponsive to someone trying to get out.
             if session.run == RunState::Step || session.finished {
@@ -777,6 +871,18 @@ pub fn parse_output_watch(text: &str) -> Result<Watch, String> {
     };
     byte.map(Watch::Output)
         .ok_or_else(|| format!("{text:?} is not a character, an escape, #0..#255, or \"any\""))
+}
+
+/// Note the new speed, and start moving if the program was sitting still.
+fn adjust_pace(session: &mut Session) -> Flow {
+    let rate = session.pace.rate();
+    session.note(format!("{rate} instructions a second"), Note::Info);
+    // Pressing `-` while stopped means "go, but slowly", not "note a number".
+    if session.finished || session.run != RunState::Step {
+        return Flow::Stay;
+    }
+    session.run = RunState::Continue;
+    Flow::Resume
 }
 
 /// Whether the instruction about to run is a `,` with nothing queued to read.
