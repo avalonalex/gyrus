@@ -52,12 +52,14 @@ scripts/check-readme-commands.py   # every flag the docs use really exists
 scripts/check-doc-links.py         # every relative Markdown link resolves
 scripts/check-examples.sh          # every example runs, not just compiles
 scripts/check-tape-access.py       # the tape is indexed only where the contract is enforced
+scripts/capture-debugger-svg.py --check   # the README's screenshot is what the debugger draws
 ```
 
 `check-readme-commands.py` needs `cargo build --release --workspace` first.
 
-The five scripts guard claims that rot quietly, and each of them exists because
-the claim it checks was wrong at least once:
+The six scripts guard claims that rot quietly, and each of them exists because
+the claim it checks was wrong at least once — or, in the screenshot's case,
+because it is the kind of claim that would rot in total silence:
 
 - **MSRV** was declared 1.85 by inference from the edition. It was actually 1.88
   — let-chains — and is now 1.95, which is Cranelift's floor. The script reads
@@ -76,6 +78,13 @@ the claim it checks was wrong at least once:
   every read and write goes through `VmState::cell`/`cell_at`, because that is
   where the bound lives. A site that genuinely needs a direct index says why
   with a `// tape-access-ok:` note.
+
+- **The debugger screenshot** is generated rather than taken. Panel titles, the
+  status row, and the key hints have each changed at least once since the
+  debugger was written, and a stale image would still look plausible.
+  `capture-debugger-svg.py` drives the real binary in a pty and renders the
+  bytes it writes to an SVG — text in, text out, so the result is diffable and
+  no binary blob enters the repository.
 
 When adding a claim to the docs, ask whether a script could check it. If it
 could, write the script: an unexecuted claim is one that will eventually be

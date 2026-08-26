@@ -71,6 +71,9 @@ jobs:
     - run: scripts/check-readme-commands.py
     - run: scripts/check-doc-links.py
     - run: scripts/check-tape-access.py
+    # The README's debugger screenshot is generated from the real binary, so it
+    # can go stale without anyone noticing. This regenerates it and diffs.
+    - run: scripts/capture-debugger-svg.py --check
     # Runs each example rather than only building it: clippy already builds
     # them, and building was not enough when MemoryAddress became signed.
     - run: scripts/check-examples.sh
