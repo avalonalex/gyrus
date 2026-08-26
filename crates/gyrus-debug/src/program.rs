@@ -105,6 +105,17 @@ impl Program {
         self.indices.get(&position).copied()
     }
 
+    /// The first instruction at or after `position`, scanning forward across
+    /// lines.
+    ///
+    /// The counterpart to [`Self::nearest_on_line`]: that one snaps to the
+    /// closest instruction on the cursor's line, because a cursor lands wherever
+    /// the arrow keys left it. This one only ever looks forward, because its
+    /// caller is a marker somebody typed immediately before the thing it means.
+    pub fn first_instruction_at_or_after(&self, position: Position) -> Option<Position> {
+        self.indices.range(position..).next().map(|(p, _)| *p)
+    }
+
     /// The instruction nearest `position` on the same line.
     ///
     /// A cursor lands wherever the arrow keys left it, which is usually a
@@ -112,6 +123,14 @@ impl Program {
     /// what makes `b` do the obvious thing instead of nothing.
     pub fn nearest_on_line(&self, position: Position) -> Option<(Position, usize)> {
         let (line, column) = position;
+        // `--break` takes a number straight from the command line. Without this,
+        // a line past the end builds `(line, column)..(line + 1, 0)`, which
+        // overflows or inverts -- and BTreeMap panics on an inverted range,
+        // after the terminal is already in raw mode, so the backtrace lands on a
+        // screen that cannot show it.
+        if line == 0 || line > self.document.line_count() {
+            return None;
+        }
         let after = self
             .indices
             .range((line, column)..(line + 1, 0))
@@ -181,20 +200,28 @@ impl Program {
 
         for line_number in 1..=self.document.line_count() {
             scanner.start_line();
-            let line = self.document.line(line_number).unwrap_or("");
+            let Some(line) = self.document.line(line_number) else {
+                break;
+            };
             for (column_index, ch) in line.chars().enumerate() {
                 scanner.classify(ch);
                 if ch != marker || scanner.in_comment() {
                     continue;
                 }
                 let from = (line_number, column_index + 1);
-                match self.indices.range(from..).next() {
-                    Some((position, _)) => {
-                        if !breakpoints.contains(position) {
-                            breakpoints.push(*position);
+                match self.first_instruction_at_or_after(from) {
+                    Some(position) => {
+                        if !breakpoints.contains(&position) {
+                            breakpoints.push(position);
                         }
                     }
-                    None => unbound.push(line_number),
+                    // Once per line, however many trailing markers it holds:
+                    // the message names lines, not occurrences.
+                    None => {
+                        if unbound.last() != Some(&line_number) {
+                            unbound.push(line_number);
+                        }
+                    }
                 }
             }
         }
@@ -351,6 +378,50 @@ mod tests {
     fn two_markers_binding_to_the_same_instruction_set_one_breakpoint() {
         let program = program("+@@>");
         assert_eq!(program.markers('@').0, vec![(1, 4)]);
+    }
+
+    #[test]
+    fn several_markers_on_one_unbound_line_are_reported_once() {
+        let program = program("+\n@@@");
+        assert_eq!(program.markers('@').1, vec![2]);
+    }
+
+    #[test]
+    fn an_absurd_break_line_does_not_panic() {
+        // `--break` takes a number straight from the command line.
+        let program = program("+++");
+        assert_eq!(program.nearest_on_line((usize::MAX, 1)), None);
+        assert_eq!(program.nearest_on_line((usize::MAX, usize::MAX)), None);
+    }
+
+    #[test]
+    fn an_empty_program_has_one_line_and_no_markers() {
+        let program = program("");
+        assert_eq!(program.document.line_count(), 1);
+        assert_eq!(program.markers('@'), (Vec::new(), Vec::new()));
+    }
+
+    /// The bundled programs the debugger's documentation cites by name.
+    ///
+    /// Both claims break silently the moment either file is edited, which is
+    /// exactly the kind of documentation this repository writes checks for.
+    #[test]
+    fn the_bundled_programs_the_docs_cite_still_say_what_the_docs_say() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+
+        // docs/debugger.md: char.bf ends with a bare `@` that binds to nothing.
+        let char_bf = Program::load(&root.join("programs/third-party/advanced/char.bf"))
+            .expect("char.bf parses");
+        let (breakpoints, unbound) = char_bf.markers('@');
+        assert!(breakpoints.is_empty(), "char.bf: {breakpoints:?}");
+        assert_eq!(unbound, vec![3], "char.bf's trailing @ is on line 3");
+
+        // docs/debugger.md quotes calc.bf's marker count in its sample output.
+        let calc = Program::load(&root.join("programs/third-party/advanced/calc.bf"))
+            .expect("calc.bf parses");
+        assert_eq!(calc.markers('@').0.len(), 4, "calc.bf's @ count");
     }
 
     #[test]

@@ -130,19 +130,17 @@ pub enum CharClass {
     Comment,
 }
 
-impl CharClass {
-    /// Whether a character of this class is executed.
-    pub fn is_instruction(self) -> bool {
-        !matches!(self, CharClass::Comment | CharClass::Whitespace)
-    }
-}
-
 /// Classifies a line one character at a time, remembering `*` comments.
 ///
 /// `*` starts a comment that runs to the end of the line, so a character cannot
 /// be classified on its own — `+` is an instruction or a comment depending on
 /// what came before it.
-#[derive(Debug, Default, Clone, Copy)]
+///
+/// Deliberately not `Copy`: it carries state that [`Self::classify`] advances,
+/// and a scanner passed by value would fork that state rather than advance it —
+/// leaving the caller outside a comment it had entered, so every character after
+/// a `*` came back as code.
+#[derive(Debug, Default, Clone)]
 pub struct LineScanner {
     in_comment: bool,
 }
@@ -620,6 +618,39 @@ mod classifier_tests {
         assert_eq!(classify_line(" ")[0], CharClass::Whitespace);
     }
 
+    /// A marker character changes nothing about what a program does.
+    ///
+    /// This is the premise breakpoint markers rest on: `@` is a comment to every
+    /// BrainFuck implementation, so a marked program is not a special build. If
+    /// it ever stopped being true, marking a program would change its meaning.
+    #[test]
+    fn a_marker_character_does_not_change_the_program() {
+        use crate::io::StringIo;
+        use crate::{ExecutionConfig, interpret_with_io, parse};
+
+        let plain = "++++++++[>++++++++<-]>+.";
+        let marked = "+++@+++++[>@++++++++<-]>+.@";
+
+        assert_eq!(parse(plain).unwrap(), parse(marked).unwrap());
+
+        let run = |source: &str| {
+            let instructions = parse(source).unwrap();
+            let mut input = StringIo::empty();
+            let mut output = StringIo::empty();
+            interpret_with_io(
+                &instructions,
+                ExecutionConfig::default(),
+                &mut input,
+                &mut output,
+                None,
+            )
+            .unwrap();
+            output.output_string()
+        };
+        assert_eq!(run(plain), run(marked));
+        assert_eq!(run(plain), "A");
+    }
+
     /// The classifier and the parser must agree about what executes.
     ///
     /// They are separate implementations — the parser skips a `*` comment by
@@ -649,8 +680,15 @@ mod classifier_tests {
                     let position = (line_index + 1, column_index + 1);
                     // `]` is a command the parser does not number: it is the
                     // loop's structure, not a step, which is why the debugger
-                    // cannot stop on one either.
-                    let expected = class.is_instruction() && class != CharClass::LoopEnd;
+                    // cannot stop on one either. Spelled out rather than hidden
+                    // behind a predicate, because that is the whole subtlety.
+                    let expected = matches!(
+                        class,
+                        CharClass::Movement
+                            | CharClass::Arithmetic
+                            | CharClass::Io
+                            | CharClass::LoopStart
+                    );
                     assert_eq!(
                         executed.contains(&position),
                         expected,

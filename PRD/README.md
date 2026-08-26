@@ -10,12 +10,9 @@ in August 2026, another 1,300 when the TUI debugger and tutorial shipped, and
 readable.
 
 It has a second effect worth naming: a shipped PRD is often *wrong* by the time
-the code exists, and deleting it is how that stops mattering. The marker design
-argued for an opt-in flag on the strength of three programs in the corpus that
-contain `@`. Checking whether those markers would actually *fire* — which the
-design did not do — showed that two of the three cannot, so the feature shipped
-on by default instead. Git history keeps the reasoning; the directory does not
-keep the wrong conclusion.
+the code exists — the breakpoint-marker design reached the opposite conclusion
+from the one that shipped — and deleting it is how that stops mattering. Why a
+design changed belongs in the commit that changed it.
 
 ## Active
 

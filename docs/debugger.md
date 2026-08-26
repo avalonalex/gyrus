@@ -119,20 +119,36 @@ cursor snaps to the *nearest* instruction on its line, because it lands wherever
 the arrow keys left it, whereas a marker was typed immediately before the thing
 it means.
 
-Markers inside a `*` line comment are ignored, so a header comment carrying an
-email address does not set breakpoints.
+Markers inside a `*` line comment are ignored — the most likely accident in a
+program you are writing, where a header comment might carry an email address.
 
-They are read by default, and the count is announced rather than applied
-quietly — a program you did not write may contain `@` for its own reasons, and
-an unexplained stop is worse than an unwanted one:
+**That is the only comment style the scan can exclude**, and it is not the only
+one BrainFuck has. Prose outside any marker is a comment because none of its
+characters are commands, and there is no syntax that says where it ends; the
+other common idiom wraps prose in `[ … ]` whose cell is zero, so it never runs
+but is genuinely parsed. A `@` in either of those still binds. Of the fifty-two
+bundled programs, three contain `@`, and this is what happens to them:
+
+| Program | Where | Result |
+|---|---|---|
+| `calc.bf` | four, in live code | four breakpoints, all of which fire |
+| `pi.bf` | an email address inside a `[ … ]` block comment | binds inside the comment loop, which never runs |
+| `char.bf` | alone on the line after the program | nothing to bind to, reported |
+
+So one program in fifty-two gets breakpoints it did not ask for. They are read
+by default anyway, because a feature you have to remember to switch on is not
+worth having — but the count is announced rather than applied quietly, since an
+unexplained stop is worse than an unwanted one:
 
 ```
 4 breakpoints from @ markers — B clears them
 ```
 
-`B` clears them like any other breakpoint. Nothing is written back to the file:
-markers you add with `b` during a session live only as long as the session, and
-the debugger never edits your source.
+`B` clears them like any other breakpoint. Nothing is ever written back:
+breakpoints you add with `b` during a session live only as long as the session,
+and the debugger does not edit your source. A marker in the file and a
+breakpoint set with `b` are the same thing with one difference — which of them
+is still there tomorrow.
 
 ```bash
 gyrus-debug program.bf --no-markers     # ignore them
@@ -143,9 +159,11 @@ gyrus-debug program.bf --marker '#'     # use a different character
 instruction would break on every one of them, and `*` starts a comment, so every
 marker would sit inside one and never bind.
 
-A marker with no instruction after it is reported rather than silently dropped —
-`programs/third-party/advanced/char.bf` ends with a bare `@`, and the debugger
-says so.
+A marker with no instruction after it is reported rather than silently dropped.
+
+The two claims above about bundled programs — `char.bf`'s trailing marker and
+`calc.bf`'s four — are checked by a test rather than left to rot, since both
+would break silently the moment either file were edited.
 
 ## Stepping over and out
 

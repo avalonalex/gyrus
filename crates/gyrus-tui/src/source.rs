@@ -23,10 +23,21 @@ pub type Position = (usize, usize);
 ///
 /// Rebuilding this every frame would re-classify the whole program sixty times
 /// a second; building it once per edit costs nothing.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SourceDocument {
     lines: Vec<String>,
     categories: Vec<Vec<Category>>,
+}
+
+impl Default for SourceDocument {
+    /// One empty line, the same as `SourceDocument::new("")`.
+    ///
+    /// Not derived: a derived `Default` gives no lines at all, while
+    /// `line_count()` reports one, and a caller iterating `1..=line_count()`
+    /// then gets `None` for a line that is supposed to exist.
+    fn default() -> Self {
+        Self::new("")
+    }
 }
 
 impl SourceDocument {
@@ -41,9 +52,9 @@ impl SourceDocument {
         Self { lines, categories }
     }
 
-    /// Number of lines. Always at least 1.
+    /// Number of lines. Always at least 1: an empty program is one empty line.
     pub fn line_count(&self) -> usize {
-        self.lines.len().max(1)
+        self.lines.len()
     }
 
     /// The text of a 1-indexed line.
