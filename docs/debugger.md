@@ -62,8 +62,8 @@ table the key handler uses.
 | `home` / `end` | jump to the start or the end |
 | `m` | memory display: hex, decimal, ASCII |
 | `f` | follow the pointer on or off |
-| `w` | watch a cell |
-| `O` | stop before the program prints something |
+| `w` | watch — a cell number, or `out X` to stop when X is printed |
+| `O` | the same prompt with `out` already typed |
 | `W` | remove the selected watch |
 | `G` | scroll memory to a cell address |
 | `L` | move the cursor to a source line |
@@ -178,9 +178,22 @@ gyrus-debug program.bf --break-output '\n'    # before each line ends
 gyrus-debug program.bf --break-output '#10'   # the same, by byte value
 ```
 
-`O` does the same from inside, and both land in the watch panel beside the
-cells, where `W` removes them and a `●` marks the ones that stop execution
-rather than only being shown:
+`w` does the same from inside. It is one prompt for both kinds of watch, and an
+output condition is spelled the way the panel displays it back:
+
+```
+w  →  3          watch cell 3
+w  →  out        stop before anything is printed
+w  →  out W      stop before a W is printed
+w  →  out \n     stop before each line ends
+```
+
+A bare number is a cell, because that is what `w` has always meant, so `5`
+watches cell 5 and `out 5` stops on the digit. `O` opens the same prompt with
+`out` already typed.
+
+Both kinds land in the watch panel, where `W` removes them and a `●` marks the
+ones that stop execution rather than only being shown:
 
 ```
 ┌ Watch ───────────────────────────────┐

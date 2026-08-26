@@ -251,7 +251,7 @@ fn draw(session: &mut Session) -> io::Result<()> {
         if panes.right_bottom.height > 0 {
             frame.render_widget(
                 WatchList::new(&watches, theme)
-                    .empty_hint("none — w cell, O output")
+                    .empty_hint("none — press w")
                     .selected(if watches.is_empty() {
                         None
                     } else {
@@ -623,6 +623,15 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
             });
             Flow::Stay
         }
+        // The same prompt with the prefix already typed, so there is one parser
+        // and one label rather than two of each.
+        KeyCode::Char('O') => {
+            session.ui.prompt = Some(Prompt {
+                kind: PromptKind::Watch,
+                buffer: "out ".to_string(),
+            });
+            Flow::Stay
+        }
         KeyCode::Char('W') => {
             if session.watches.is_empty() {
                 session.note("nothing is being watched", Note::Warn);
@@ -632,13 +641,6 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
                     session.note(format!("stopped watching {}", watch.label()), Note::Info);
                 }
             }
-            Flow::Stay
-        }
-        KeyCode::Char('O') => {
-            session.ui.prompt = Some(Prompt {
-                kind: PromptKind::OutputWatch,
-                buffer: String::new(),
-            });
             Flow::Stay
         }
         KeyCode::Char('G') => {
@@ -714,6 +716,39 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
         }
         _ => Flow::Stay,
     }
+}
+
+/// Read a watch: a cell address, or a condition on what the program prints.
+///
+/// A bare number is a cell, because that is what `w` has always meant. Output
+/// conditions are spelled the way the watch panel displays them — `out`,
+/// `out W`, `out \n` — so what you type and what you read back match.
+///
+/// The value after `out ` is taken exactly, not trimmed: a space is a byte
+/// someone may reasonably want to stop on.
+pub fn parse_watch(text: &str) -> Result<Watch, String> {
+    let start = text.trim_start();
+    // The prefix is tested before the bare words, because `out ` followed by a
+    // space is the space byte -- and trimming first would reduce it to `out`
+    // and answer "any byte" instead.
+    for prefix in ["output ", "out "] {
+        if let Some(value) = start.strip_prefix(prefix) {
+            return parse_output_watch(value);
+        }
+    }
+    if matches!(start.trim_end(), "any" | "out" | "output") {
+        return Ok(Watch::AnyOutput);
+    }
+    start
+        .trim_end()
+        .parse::<usize>()
+        .map(Watch::Cell)
+        .map_err(|_| {
+            format!(
+                "{:?} is not a cell number — try 5, or `out W` to stop when W is printed",
+                start.trim_end()
+            )
+        })
 }
 
 /// Read a `--break-output`-style value: `any`, one character, an escape, or `#N`.
@@ -828,36 +863,24 @@ fn apply_prompt(session: &mut Session, prompt: Prompt) {
     // reasonably want to stop on, and trimming would turn it into the empty
     // answer, which means "any byte" -- silently, and with a note that reads
     // like confirmation.
+    // The watch prompt is not trimmed: `out ` followed by a space names the
+    // space byte, and trimming would turn it into the empty answer, which means
+    // any byte -- silently, and with a note that reads like confirmation.
     let text = match prompt.kind {
-        PromptKind::OutputWatch => prompt.buffer.clone(),
+        PromptKind::Watch => prompt.buffer.clone(),
         _ => prompt.buffer.trim().to_string(),
     };
     match prompt.kind {
-        PromptKind::Watch => match text.parse::<usize>() {
-            Ok(address) => {
-                let watch = Watch::Cell(address);
-                if session.add_watch(watch) {
-                    session.note(format!("watching {}", watch.label()), Note::Info);
+        PromptKind::Watch => match parse_watch(&text) {
+            Ok(watch) if session.add_watch(watch) => {
+                let note = if watch.stops() {
+                    format!("stopping before {} — W removes it", watch.label())
                 } else {
-                    session.note(format!("already watching {}", watch.label()), Note::Warn);
-                }
+                    format!("watching {}", watch.label())
+                };
+                session.note(note, Note::Info);
             }
-            Err(_) => session.note(format!("not a cell address: {text:?}"), Note::Error),
-        },
-        PromptKind::OutputWatch => match parse_output_watch(&text) {
-            Ok(watch) => {
-                if session.add_watch(watch) {
-                    session.note(
-                        format!("stopping before {} — W removes it", watch.label()),
-                        Note::Info,
-                    );
-                } else {
-                    session.note(
-                        format!("already stopping before {}", watch.label()),
-                        Note::Warn,
-                    );
-                }
-            }
+            Ok(watch) => session.note(format!("already watching {}", watch.label()), Note::Warn),
             Err(why) => session.note(why, Note::Error),
         },
         PromptKind::GotoCell => match text.parse::<usize>() {
@@ -981,6 +1004,42 @@ pub fn parse_display(name: &str) -> Option<CellDisplay> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_number_is_a_cell() {
+        assert_eq!(parse_watch("5").unwrap(), Watch::Cell(5));
+        assert_eq!(parse_watch("  12  ").unwrap(), Watch::Cell(12));
+    }
+
+    #[test]
+    fn out_reads_the_way_the_panel_writes_it() {
+        assert_eq!(parse_watch("out").unwrap(), Watch::AnyOutput);
+        assert_eq!(parse_watch("output").unwrap(), Watch::AnyOutput);
+        assert_eq!(parse_watch("any").unwrap(), Watch::AnyOutput);
+        assert_eq!(parse_watch("out W").unwrap(), Watch::Output(b'W'));
+        assert_eq!(parse_watch("output W").unwrap(), Watch::Output(b'W'));
+        assert_eq!(parse_watch("out \\n").unwrap(), Watch::Output(b'\n'));
+        assert_eq!(parse_watch("out #10").unwrap(), Watch::Output(10));
+    }
+
+    #[test]
+    fn out_followed_by_a_space_means_the_space_byte() {
+        // Trimming the answer would make this "any byte" instead, silently.
+        assert_eq!(parse_watch("out  ").unwrap(), Watch::Output(b' '));
+    }
+
+    #[test]
+    fn a_digit_after_out_is_the_character_not_the_cell() {
+        assert_eq!(parse_watch("5").unwrap(), Watch::Cell(5));
+        assert_eq!(parse_watch("out 5").unwrap(), Watch::Output(b'5'));
+    }
+
+    #[test]
+    fn an_answer_that_is_neither_says_what_both_look_like() {
+        let error = parse_watch("W").unwrap_err();
+        assert!(error.contains("cell number"), "{error}");
+        assert!(error.contains("out W"), "{error}");
+    }
 
     #[test]
     fn any_is_the_word_and_the_empty_answer() {

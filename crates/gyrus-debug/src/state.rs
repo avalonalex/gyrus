@@ -286,10 +286,8 @@ pub struct Prompt {
 /// What answering a [`Prompt`] does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptKind {
-    /// Add a watch on a cell address.
+    /// Add a watch: a cell to show, or a condition on what is printed.
     Watch,
-    /// Add a stop condition on what the program prints.
-    OutputWatch,
     /// Scroll the memory panel to a cell address.
     GotoCell,
     /// Move the cursor to a source line.
@@ -302,8 +300,7 @@ impl PromptKind {
     /// The label drawn in front of the answer.
     pub fn label(self) -> &'static str {
         match self {
-            PromptKind::Watch => "watch cell",
-            PromptKind::OutputWatch => "stop before printing (a character, any, \\n, or #10)",
+            PromptKind::Watch => "watch (a cell number, or `out` / `out X` for output)",
             PromptKind::GotoCell => "go to cell",
             PromptKind::GotoLine => "go to line",
             PromptKind::Input => "input (queued for the next `,`)",

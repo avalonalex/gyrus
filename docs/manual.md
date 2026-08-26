@@ -119,6 +119,9 @@ question you actually have: the output is wrong at some character, and you want
 the tape as it was just before that character was produced. Execution stops
 *before* the `.`, so the cell holding it is still there to look at.
 
+Inside the debugger the same thing is `w`, which takes either kind of watch —
+`3` for a cell, `out W` to stop when a W is printed.
+
 [The debugger](debugger.md) has the key list and the rest.
 
 ## When it is slow
