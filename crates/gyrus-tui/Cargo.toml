@@ -1,0 +1,13 @@
+[package]
+name = "gyrus-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Shared terminal-UI widgets for the gyrus debugger and tutorial"
+
+[dependencies]
+gyrus.workspace = true
+ratatui.workspace = true

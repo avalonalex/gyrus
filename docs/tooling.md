@@ -4,6 +4,10 @@
 minification, syntax highlighting, and inspection of what the parser and
 optimizer did.
 
+The two full-screen tools have their own pages: [the debugger](debugger.md) for
+stepping through a program, and [the tutorial](tutorial.md) for learning the
+language.
+
 Back to the [README](../README.md).
 
 ## Program Validation

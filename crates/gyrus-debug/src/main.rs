@@ -1,0 +1,305 @@
+//! `gyrus-debug` — step through a BrainFuck program and watch the tape.
+//!
+//! The debugger is built entirely on the library's public surface: it registers
+//! an [`ExecutionHook`](gyrus::hooks::ExecutionHook) that decides when to stop,
+//! and supplies its own [`BfInput`](gyrus::io::BfInput) and
+//! [`BfOutput`](gyrus::io::BfOutput) so the program's bytes land in a panel
+//! rather than in the middle of the interface.
+//!
+//! It runs the tree-walking interpreter, not the optimized one. Debugging needs
+//! source locations for every instruction and a hook on every step, and the
+//! optimized path deliberately has neither.
+
+mod hook;
+mod program;
+mod state;
+mod ui;
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use clap::Parser;
+use gyrus::{
+    BfError, CellModel, EofBehavior, ExecutionConfig, ExecutionConfigBuilder, SourceLocation,
+    interpret_with_io,
+};
+use gyrus_tui::TerminalGuard;
+
+use hook::{DebugInput, DebugOutput, DebuggerHook, Shared};
+use program::Program;
+use state::{Exit, Outcome, RunState, Session};
+
+#[derive(Parser)]
+#[command(name = "gyrus-debug")]
+#[command(about = "Step through a BrainFuck program, with the tape in view", long_about = None)]
+#[command(after_help = "Press ? inside the debugger for the full key list.")]
+struct Cli {
+    /// BrainFuck source file to debug
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    /// Memory size in bytes (for the fixed model)
+    #[arg(long, default_value = "30000")]
+    memory_size: usize,
+
+    /// Memory model: fixed or unbounded
+    #[arg(long, default_value = "fixed")]
+    memory_model: String,
+
+    /// Cell model: wrapping (default) or checked (errors on overflow)
+    #[arg(long, default_value = "wrapping")]
+    cell_model: String,
+
+    /// Initial memory size for the unbounded model
+    #[arg(long, default_value = "1000")]
+    unbounded_initial: usize,
+
+    /// Maximum memory size for the unbounded model
+    #[arg(long, default_value = "1000000")]
+    unbounded_max: usize,
+
+    /// EOF behavior: zero, neg-one, no-change, or error
+    #[arg(long, default_value = "zero")]
+    eof_behavior: String,
+
+    /// Maximum number of execution steps (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    max_steps: u64,
+
+    /// Execution timeout in milliseconds (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    timeout: u64,
+
+    /// Bytes to feed the program's `,` instructions
+    #[arg(long, value_name = "TEXT")]
+    input: Option<String>,
+
+    /// Read the program's input from a file instead
+    #[arg(long, value_name = "FILE", conflicts_with = "input")]
+    input_file: Option<PathBuf>,
+
+    /// Set a breakpoint at LINE or LINE:COLUMN. Repeatable
+    #[arg(short = 'b', long = "break", value_name = "LINE[:COL]")]
+    breakpoints: Vec<String>,
+
+    /// Start running instead of stopping at the first instruction
+    #[arg(long)]
+    run: bool,
+
+    /// Initial memory display: hex, decimal, or ascii
+    #[arg(long, default_value = "hex")]
+    display: String,
+}
+
+fn main() {
+    if let Err(message) = run() {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let cli = Cli::parse();
+
+    let program = Arc::new(Program::load(&cli.file).map_err(|error| error.format_detailed())?);
+    let display = ui::parse_display(&cli.display).ok_or_else(|| {
+        format!(
+            "Error: Invalid display '{}'. Valid options: hex, decimal, ascii",
+            cli.display
+        )
+    })?;
+    let initial_input = read_input(&cli)?;
+    let initial_memory = initial_memory_size(&cli)?;
+
+    // Validate the execution settings before taking over the terminal, so a
+    // typo in a flag prints an error instead of flashing an empty screen.
+    build_config(&cli, None)?;
+
+    let (_guard, terminal) = TerminalGuard::enter()
+        .map_err(|error| format!("Error: could not set up the terminal: {error}"))?;
+
+    let mut session = Session::new(Arc::clone(&program), terminal, initial_memory);
+    session.ui.memory_display = display;
+    session.pending_input = initial_input.into();
+    for spec in &cli.breakpoints {
+        apply_breakpoint(&mut session, spec)?;
+    }
+    let initial_run = if cli.run {
+        RunState::Continue
+    } else {
+        RunState::Step
+    };
+    session.run = initial_run;
+
+    let shared: Shared = Arc::new(Mutex::new(session));
+
+    loop {
+        let config = build_config(&cli, Some(Arc::clone(&shared)))?;
+        let mut input = DebugInput::new(Arc::clone(&shared));
+        let mut output = DebugOutput::new(Arc::clone(&shared));
+
+        let result = interpret_with_io(
+            &program.instructions,
+            config,
+            &mut input,
+            &mut output,
+            Some(&program.debug),
+        );
+
+        let mut session = shared.lock().expect("debugger session poisoned");
+        match result {
+            Ok(stats) => session.outcome = Some(Outcome::Completed(Box::new(stats))),
+            // The only thing that pauses execution here is this debugger asking
+            // it to, so an `ExecutionPaused` is the user having pressed quit or
+            // restart, not a failure.
+            Err(BfError::ExecutionPaused { .. }) if session.exit.is_some() => {}
+            Err(error) => {
+                // Point the source panel at the instruction that failed. The
+                // interpreter stopped there, so the tape on screen is the state
+                // it failed in — which is the reason to be in a debugger at all.
+                if let Some(location) = error_location(&error) {
+                    session.snapshot.location = Some(location);
+                }
+                session.outcome = Some(Outcome::Failed(error.format_detailed()));
+            }
+        }
+
+        if session.exit.is_none() {
+            // The program stopped on its own. Show the final state and let the
+            // user look around before deciding what to do.
+            ui::post_mortem(&mut session)
+                .map_err(|error| format!("Error: terminal failure: {error}"))?;
+        }
+
+        match session.exit.take() {
+            Some(Exit::Restart) => {
+                session.reset(initial_memory);
+                session.run = initial_run;
+            }
+            _ => break,
+        }
+    }
+
+    Ok(())
+}
+
+/// Where a runtime error happened, when the error knows.
+fn error_location(error: &BfError) -> Option<SourceLocation> {
+    match error {
+        BfError::MemoryOutOfBounds {
+            source_location, ..
+        }
+        | BfError::StepLimitExceeded {
+            source_location, ..
+        }
+        | BfError::CellOverflow {
+            source_location, ..
+        }
+        | BfError::CellUnderflow {
+            source_location, ..
+        } => *source_location,
+        _ => None,
+    }
+}
+
+/// The tape length the debugger should show before the first instruction runs.
+fn initial_memory_size(cli: &Cli) -> Result<usize, String> {
+    match cli.memory_model.to_lowercase().as_str() {
+        "fixed" => Ok(cli.memory_size),
+        "unbounded" => Ok(cli.unbounded_initial),
+        other => Err(format!(
+            "Error: Invalid memory model '{other}'. Valid options: fixed, unbounded"
+        )),
+    }
+}
+
+fn read_input(cli: &Cli) -> Result<Vec<u8>, String> {
+    match (&cli.input, &cli.input_file) {
+        (Some(text), _) => Ok(text.as_bytes().to_vec()),
+        (_, Some(path)) => std::fs::read(path)
+            .map_err(|error| format!("Error: could not read {}: {error}", path.display())),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Build the execution config, optionally with the debugger hook attached.
+///
+/// A config owns its hooks and is consumed by the interpreter, so restarting
+/// means building a fresh one. Everything that has to survive a restart lives
+/// in the [`Session`] instead.
+fn build_config(cli: &Cli, session: Option<Shared>) -> Result<ExecutionConfig, String> {
+    let cell_model: CellModel = cli.cell_model.parse().map_err(|_| {
+        format!(
+            "Error: Invalid cell model '{}'. Valid options: wrapping, checked",
+            cli.cell_model
+        )
+    })?;
+    let eof_behavior: EofBehavior = cli.eof_behavior.parse().map_err(|_| {
+        format!(
+            "Error: Invalid EOF behavior '{}'. Valid options: zero, neg-one, no-change, error",
+            cli.eof_behavior
+        )
+    })?;
+
+    let builder = ExecutionConfigBuilder::new();
+    let builder = match cli.memory_model.to_lowercase().as_str() {
+        "fixed" => builder.with_memory_size(cli.memory_size),
+        "unbounded" => builder
+            .with_unbounded_memory(cli.unbounded_initial, cli.unbounded_max)
+            .map_err(|error| format!("Error: {error}"))?,
+        other => {
+            return Err(format!(
+                "Error: Invalid memory model '{other}'. Valid options: fixed, unbounded"
+            ));
+        }
+    };
+
+    let builder = builder
+        .with_cell_model(cell_model)
+        .with_eof_behavior(eof_behavior);
+    let builder = if cli.max_steps > 0 {
+        builder.with_max_steps(cli.max_steps)
+    } else {
+        builder
+    };
+    let builder = if cli.timeout > 0 {
+        builder.with_timeout_ms(cli.timeout)
+    } else {
+        builder
+    };
+    let builder = match session {
+        Some(session) => builder.with_hook(Box::new(DebuggerHook::new(session))),
+        None => builder,
+    };
+
+    Ok(builder.build())
+}
+
+/// Apply one `--break LINE[:COL]` argument.
+fn apply_breakpoint(session: &mut Session, spec: &str) -> Result<(), String> {
+    let (line, column) = match spec.split_once(':') {
+        Some((line, column)) => (
+            line.parse::<usize>()
+                .map_err(|_| format!("Error: not a line number: {spec:?}"))?,
+            column
+                .parse::<usize>()
+                .map_err(|_| format!("Error: not a column: {spec:?}"))?,
+        ),
+        None => (
+            spec.parse::<usize>()
+                .map_err(|_| format!("Error: not a line number: {spec:?}"))?,
+            1,
+        ),
+    };
+
+    match session.program.nearest_on_line((line, column)) {
+        Some((position, _)) => {
+            session.breakpoints.insert(position);
+            session.rebuild_breakpoints();
+            Ok(())
+        }
+        None => Err(format!(
+            "Error: no instruction on line {line} to break at (--break {spec})"
+        )),
+    }
+}

@@ -23,6 +23,9 @@ file used to open with "136 total tests" long after there were far more. Run
 | `crates/gyrus-jit/tests/corpus.rs` | The same corpus under the JIT, driven from the manifest |
 | `crates/gyrus-jit/tests/differential.rs` | JIT against the optimized interpreter on the bundled programs |
 | `crates/gyrus-jit/tests/generated.rs` | JIT against the interpreter on generated programs, every configuration |
+| `crates/gyrus-tui/src/**` | Widgets rendered into ratatui's `TestBackend` and read back as text, plus the scroll and layout arithmetic |
+| `crates/gyrus-debug/src/**` | The rule for when execution stops, and the map between source positions and instruction indices |
+| `crates/gyrus-tutorial/src/**` | The editor, and three tests that hold the lesson table together |
 | `crates/gyrus/benches/` | Criterion micro-benchmarks for the interpreter and the parser |
 | `scripts/` | Checks that guard claims the code cannot make on its own |
 
@@ -229,3 +232,11 @@ false.
 - **An optimizer or JIT change**: nothing hand-written is as good as the
   differential harness. If a new pattern is recognized, make sure the generator
   can produce it, so `generated.rs` exercises it on every run.
+- **A widget**: render it into a `TestBackend` and assert on the text that comes
+  back. Asserting on the buffer as strings catches the things that actually go
+  wrong — a marker in the wrong column, a title that no longer fits — and
+  ignores styling, which no assertion should be pinned to.
+- **A tutorial lesson**: nothing, if you are only adding to the table in
+  `lesson.rs`. The three tests there already cover every entry: the answer must
+  satisfy the check, the starter must parse and run, and the starter must not
+  already be the answer.

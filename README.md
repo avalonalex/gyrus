@@ -57,6 +57,8 @@ cargo build --release
 ./target/release/gyrus programs/basic/hello_world.bf     # Hello World!
 ./target/release/gyrus --verbose programs/basic/hello_world.bf
 ./target/release/gyrus-tool view programs/basic/simple.bf --line-numbers
+./target/release/gyrus-debug programs/basic/hello_world.bf
+./target/release/gyrus-tutorial
 ```
 
 `rust-toolchain.toml` pins the compiler, so `cargo` picks the right one on its
@@ -99,6 +101,14 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 - `compile` — turn a string into a BrainFuck program that prints it
 - `generate` — random program generation for fuzzing
 
+**Terminal interfaces**
+- `gyrus-debug` — step through a program with the source, the tape, and the
+  output on screen at once; breakpoints on individual characters, step
+  over and out of loops, watched cells, and a restart that replays the input
+  you typed
+- `gyrus-tutorial` — thirteen lessons that teach BrainFuck by running it, with
+  every step of your program recorded so you can walk backwards through a loop
+
 **Language**
 - All eight commands, arbitrarily nested
 - `*` line comments, so programs can be documented without accidental
@@ -112,6 +122,8 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 | [Errors and diagnostics](docs/errors.md) | What gyrus reports when a program is wrong |
 | [Memory, cells, and EOF](docs/execution-models.md) | The three orthogonal execution knobs |
 | [Development tools](docs/tooling.md) | `gyrus-tool`: validate, minify, view, inspect |
+| [The debugger](docs/debugger.md) | `gyrus-debug`: breakpoints, stepping, and the tape in view |
+| [The tutorial](docs/tutorial.md) | `gyrus-tutorial`: thirteen lessons in BrainFuck |
 | [Development](docs/development.md) | Building, testing, benchmarking |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
 | [Performance](docs/performance.md) | How it got fast, what didn't work, and why — with a glossary |
@@ -121,14 +133,15 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 
 **Working**: the parser with full source locations, four execution modes
 (optimized, JIT, debug, tracing), the optimizer, the hook system, static
-validation, minification, syntax highlighting, and the `gyrus-tool`
-subcommands. The JIT is `gyrus --jit program.bf`: the same bytes and the same
-errors as the interpreters, with source locations, three and a half times
-faster on mandelbrot -- and slower on programs that finish before it has
-finished compiling. See [execution models](docs/execution-models.md#the-jit).
+validation, minification, syntax highlighting, the `gyrus-tool` subcommands,
+and two terminal interfaces — the debugger and the tutorial. The JIT is
+`gyrus --jit program.bf`: the same bytes and the same errors as the
+interpreters, with source locations, three and a half times faster on
+mandelbrot -- and slower on programs that finish before it has finished
+compiling. See [execution models](docs/execution-models.md#the-jit).
 
-**Planned**: a TUI debugger with breakpoints and memory visualization, a REPL,
-and an AOT build on the JIT's translator. Designs live in [`PRD/`](PRD/).
+**Planned**: a REPL, an AOT build on the JIT's translator, and a macro
+preprocessor. Only the last has a design; it lives in [`PRD/`](PRD/).
 
 ## Development
 

@@ -5,6 +5,9 @@ members = [
     "crates/gyrus-tool",
     "crates/gyrus-jit",
     "crates/gyrus-corpus",
+    "crates/gyrus-tui",
+    "crates/gyrus-debug",
+    "crates/gyrus-tutorial",
 ]
 resolver = "2"
 
@@ -46,6 +49,7 @@ rust-version = "1.95"
 gyrus = { path = "crates/gyrus" }
 gyrus-jit = { path = "crates/gyrus-jit" }
 gyrus-corpus = { path = "crates/gyrus-corpus" }
+gyrus-tui = { path = "crates/gyrus-tui" }
 
 # Error handling
 thiserror = "2"
@@ -69,6 +73,11 @@ cranelift-frontend = "0.135"
 cranelift-module = "0.135"
 cranelift-jit = "0.135"
 cranelift-native = "0.135"
+
+# Terminal UI, for the debugger and tutorial (`gyrus-tui` and its two binaries).
+# Default features are the crossterm backend and the widget set; the other
+# backends stay off.
+ratatui = "0.30"
 
 # Property-based testing
 proptest = "1"
