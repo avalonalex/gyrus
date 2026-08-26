@@ -153,12 +153,8 @@ pub fn expand(source: &str) -> Result<Expansion, MacroError> {
     Scanner::new(source).run()
 }
 
-/// A macro definition: its parameters, and where its body is.
-///
-/// The body is a span of the original source rather than a copy of it, so
-/// invoking a macro is moving the cursor, and every position inside a body is
-/// a real position in the file.
-#[derive(Debug, Clone)]
+/// A macro definition: its parameters, and the span its body occupies.
+#[derive(Debug)]
 struct MacroDef {
     params: Vec<String>,
     /// Where the body starts, and the offset one past its last character.
@@ -197,6 +193,31 @@ enum Position {
     Unknown(SourceLocation),
 }
 
+/// One macro invocation being expanded.
+struct Invocation {
+    name: String,
+    /// What was invoked, so a parameter resolves by position.
+    def: Rc<MacroDef>,
+    /// The arguments, in the definition's parameter order.
+    ///
+    /// A `HashMap` keyed by parameter name was allocated and filled per
+    /// invocation, cloning every parameter name into it, to be searched by a
+    /// handful of lookups. A body has a handful of parameters, so position is
+    /// cheaper and simpler. That, and not formatting an error message per
+    /// invocation, is most of why 100,000 invocations went from 73.6ms to
+    /// 45.8ms, and 6.4ms from 11.0ms with no arguments to bind.
+    arguments: Vec<(Symbol, SourceLocation)>,
+    /// Where the body starts: a directive must begin its line, and the start
+    /// of a body counts as one, or `@macro reset { @clear }` would read its
+    /// own invocation as prose.
+    boundary: usize,
+    /// Where the invocation was written. The outermost frame's is what an
+    /// emitted byte reports.
+    call_site: SourceLocation,
+    /// Where to resume once the body has been scanned.
+    resume: SourceLocation,
+}
+
 /// A `[` whose `]` has not been reached.
 struct OpenLoop {
     location: SourceLocation,
@@ -217,29 +238,19 @@ struct Scanner {
     chars: Vec<char>,
     at: SourceLocation,
     symbols: HashMap<String, (Symbol, SourceLocation)>,
-    /// A macro's parameters, bound for the length of one invocation.
+    /// One entry per macro invocation in flight, innermost last.
     ///
-    /// Only the innermost frame is visible, not a chain: a body sees its own
-    /// parameters and the file's names, and never its caller's. That is what
-    /// makes a macro readable in isolation.
-    parameters: Vec<HashMap<String, (Symbol, SourceLocation)>>,
-    /// Macros currently being expanded, innermost last. A name already here
-    /// is a cycle, and the stack is the chain the error prints. Its depth is
-    /// also the recursion depth, which is why it is bounded.
-    expanding: Vec<String>,
+    /// This was four fields -- the parameter frames, the names being expanded,
+    /// the line-start boundary and the origin override -- pushed and popped
+    /// together by hand around one `scan_until`. Every one of them is a
+    /// function of this stack, so each is an accessor now rather than an
+    /// invariant somebody has to maintain: the depth is `len`, the cycle test
+    /// is over the names, the boundary is the innermost frame's, and the
+    /// origin override is `first`, which is what "the outermost invocation"
+    /// means. The flag that used to compute that last one went with it.
+    frames: Vec<Invocation>,
     /// Invocations so far, against [`INVOCATION_LIMIT`].
     invocations: u64,
-    /// The offset the current scan began at: zero, or a macro body's first
-    /// character. A directive must start its line, and the start of a body
-    /// counts as one -- otherwise `@macro reset { @clear }` would read its
-    /// own invocation as prose, and only bodies spread over several lines
-    /// could use another macro.
-    boundary: usize,
-    /// Where an emitted byte should say it came from, while expanding a macro.
-    ///
-    /// Set on the outermost invocation only, so every byte points at a line of
-    /// the program rather than into a definition that may be used many times.
-    origin_override: Option<SourceLocation>,
     /// Insertion order, for the "did you mean" list. A HashMap alone would
     /// suggest names in an order that changes between runs.
     defined: Vec<String>,
@@ -260,11 +271,8 @@ impl Scanner {
             chars: source.chars().collect(),
             at: SourceLocation::start(),
             symbols: HashMap::new(),
-            parameters: Vec::new(),
-            expanding: Vec::new(),
+            frames: Vec::new(),
             invocations: 0,
-            boundary: 0,
-            origin_override: None,
             defined: Vec::new(),
             position: Position::Known(0),
             net: 0,
@@ -290,11 +298,8 @@ impl Scanner {
 
     /// Expand characters up to `end`.
     ///
-    /// Bounded rather than "to the end of the input" because a macro body is a
-    /// span of this same source: invoking one moves the cursor to the body and
-    /// scans to its closing brace. Nothing is copied, and every position
-    /// inside a body is a real position in the file -- which is what lets a
-    /// macro error point into the definition.
+    /// Bounded rather than "to the end of the input" because a macro body is
+    /// a span of this same source; see this module's documentation.
     fn scan_until(&mut self, end: usize) -> Result<(), MacroError> {
         while self.at.offset < end {
             let Some(c) = self.peek() else { break };
@@ -325,8 +330,20 @@ impl Scanner {
     ///
     /// Asked only when the cursor is on `@`, which is rare, so walking back to
     /// the newline is cheaper than a flag every `bump` would have to maintain.
+    /// The offset the current scan began at: zero, or the innermost body's
+    /// first character.
+    fn boundary(&self) -> usize {
+        self.frames.last().map_or(0, |frame| frame.boundary)
+    }
+
+    /// Whether a macro body is being expanded.
+    fn inside_a_macro(&self) -> bool {
+        !self.frames.is_empty()
+    }
+
     fn at_line_start(&self) -> bool {
-        self.chars[self.boundary.min(self.at.offset)..self.at.offset]
+        let boundary = self.boundary();
+        self.chars[boundary.min(self.at.offset)..self.at.offset]
             .iter()
             .rev()
             .take_while(|&&c| c != '\n')
@@ -431,9 +448,9 @@ impl Scanner {
         // from the definition. The map holds one position per byte and a
         // macro gives a byte two, so this is a choice: the invocation is the
         // line of the program the reader wrote, and a definition used twenty
-        // times would not say which of them failed. Nested invocations keep
-        // the outermost, so no origin ever points inside a body.
-        let origin = self.origin_override.unwrap_or(origin);
+        // times would not say which of them failed. `first` is what "the
+        // outermost invocation" means, so no origin points inside a body.
+        let origin = self.frames.first().map_or(origin, |frame| frame.call_site);
         let total = self.out.len().saturating_add(count as usize);
         if total > EXPANSION_LIMIT {
             return Err(MacroError::ExpansionTooLarge {
@@ -532,28 +549,20 @@ impl Scanner {
         }
 
         let body = body.trim();
+        let bad = |detail: String| MacroError::BadRepeatCount {
+            detail,
+            location: open,
+        };
         let count = match classify(body) {
             Operand::Number(value) => value,
-            Operand::Name(named) => self.resolve(&named, open)?,
-            // Reporting u64::MAX here would put a number in front of the user
-            // that they never typed.
-            Operand::TooBig => {
-                return Err(MacroError::BadRepeatCount {
-                    detail: format!("'{body}' does not fit in a 64-bit number"),
-                    location: open,
-                });
+            Operand::Name(named) => self.resolve(named, open)?,
+            Operand::Empty => {
+                return Err(bad(
+                    "empty. Write a number, as in +{65}, or a name defined with @define"
+                        .to_string(),
+                ));
             }
-            Operand::Neither => {
-                return Err(MacroError::BadRepeatCount {
-                    detail: match body.is_empty() {
-                        true => "empty. Write a number, as in +{65}, or a name defined with \
-                                 @define"
-                            .to_string(),
-                        false => format!("'{body}' is neither a number nor a name"),
-                    },
-                    location: open,
-                });
-            }
+            Operand::Bad(detail) => return Err(bad(detail)),
         };
 
         if count > REPEAT_LIMIT {
@@ -572,10 +581,7 @@ impl Scanner {
         name: &str,
         location: SourceLocation,
     ) -> Result<(Symbol, SourceLocation), MacroError> {
-        self.parameters
-            .last()
-            .and_then(|frame| frame.get(name))
-            .or_else(|| self.symbols.get(name))
+        self.binding(name)
             .cloned()
             .ok_or_else(|| MacroError::UndefinedSymbol {
                 name: name.to_string(),
@@ -626,32 +632,19 @@ impl Scanner {
         // Only declarations that could actually take effect. One inside a
         // macro body is refused outright, so advertising it would send the
         // reader to move their code below a definition that will never run.
-        let mut inside_a_body = 0usize;
-        rest.lines().any(|line| {
-            let trimmed = line.trim_start();
-            let declares = inside_a_body == 0
-                && Directive::ALL
-                    .into_iter()
-                    .filter(|d| d.declaration().is_some())
-                    .filter_map(|d| trimmed.strip_prefix(&format!("@{}", d.spelling())))
-                    .any(|tail| {
-                        tail.trim_start()
-                            .strip_prefix(name)
-                            .is_some_and(|after| !after.starts_with(is_identifier_char))
-                    });
-            // Crude but sufficient for a hint: a repeat count's braces sit
-            // against an instruction, and a body's do not.
-            let mut previous = ' ';
-            for c in line.chars() {
-                match c {
-                    '{' if !REPEATABLE.contains(&previous) => inside_a_body += 1,
-                    '}' if inside_a_body > 0 => inside_a_body -= 1,
-                    _ => {}
-                }
-                previous = c;
+        //
+        // A plain loop rather than `.any()` over a closure mutating its own
+        // capture: the depth has to be read before the line updates it, and
+        // stating that as an order of statements is clearer than as a value
+        // computed at the top of a closure and returned at the bottom.
+        let mut depth = 0usize;
+        for line in rest.lines() {
+            if depth == 0 && declares(line.trim_start(), name) {
+                return true;
             }
-            declares
-        })
+            depth = brace_depth_after(line, depth);
+        }
+        false
     }
 
     fn directive(&mut self) -> Result<(), MacroError> {
@@ -683,19 +676,31 @@ impl Scanner {
         }
     }
 
-    /// The macro a name means here, parameters included.
+    /// What a name is bound to here: the innermost body's parameters first,
+    /// then the file's names.
     ///
-    /// Through the same precedence as every other name. Reading `self.symbols`
-    /// directly meant a parameter was honoured inside a body by `+{name}` and
-    /// ignored by `@name`, so one name meant two things in one body.
-    fn macro_named(&self, name: &str) -> Option<Rc<MacroDef>> {
-        match self
-            .parameters
+    /// One copy of the precedence rule. Writing it twice is what made a
+    /// parameter honoured inside a body by `+{name}` and ignored by `@name`,
+    /// so one name meant two things in one body -- and the first fix for that
+    /// was to copy the rule again rather than share it.
+    ///
+    /// Only the innermost frame's parameters are visible, not a chain: a body
+    /// sees its own parameters and the file's names, never its caller's, which
+    /// is what makes a macro readable in isolation.
+    fn binding(&self, name: &str) -> Option<&(Symbol, SourceLocation)> {
+        self.frames
             .last()
-            .and_then(|frame| frame.get(name))
+            .and_then(|frame| {
+                let index = frame.def.params.iter().position(|param| param == name)?;
+                frame.arguments.get(index)
+            })
             .or_else(|| self.symbols.get(name))
-        {
-            Some((Symbol::Macro(def), _)) => Some(Rc::clone(def)),
+    }
+
+    /// The macro a name means here, parameters included.
+    fn macro_named(&self, name: &str) -> Option<Rc<MacroDef>> {
+        match self.binding(name)? {
+            (Symbol::Macro(def), _) => Some(Rc::clone(def)),
             _ => None,
         }
     }
@@ -705,32 +710,32 @@ impl Scanner {
     /// written rather than on the second call.
     fn refuse_inside_a_macro(
         &self,
-        directive: &'static str,
+        directive: Directive,
         location: SourceLocation,
     ) -> Result<(), MacroError> {
-        if self.expanding.is_empty() {
+        if !self.inside_a_macro() {
             return Ok(());
         }
         Err(MacroError::DeclarationInsideMacro {
-            directive,
+            directive: directive.spelling(),
             location,
         })
     }
 
     /// `@macro NAME { body }` or `@macro NAME(a, b) { body }`.
     fn macro_definition(&mut self, location: SourceLocation) -> Result<(), MacroError> {
-        self.refuse_inside_a_macro("macro", location)?;
+        self.refuse_inside_a_macro(Directive::Macro, location)?;
         self.skip_blanks();
         let at_name = self.at;
         let name = self.identifier();
         if name.is_empty() {
-            return Err(MacroError::MalformedDirective {
-                directive: "macro".to_string(),
-                detail: "expected a name, as in `@macro clear { [-] }`".to_string(),
-                location: at_name,
-            });
+            return Err(malformed(
+                Directive::Macro.spelling(),
+                "expected a name, as in `@macro clear { [-] }`".to_string(),
+                at_name,
+            ));
         }
-        self.refuse_a_directive_name(&name, "macro", at_name)?;
+        self.refuse_a_directive_name(&name, Directive::Macro, at_name)?;
         if let Some((_, first)) = self.symbols.get(&name) {
             return Err(MacroError::Redefinition {
                 name,
@@ -743,11 +748,11 @@ impl Scanner {
 
         self.skip_blanks();
         if self.peek() != Some('{') {
-            return Err(MacroError::MalformedDirective {
-                directive: "macro".to_string(),
-                detail: format!("expected '{{' to open the body of '{name}'"),
-                location: self.at,
-            });
+            return Err(malformed(
+                Directive::Macro.spelling(),
+                format!("expected '{{' to open the body of '{name}'"),
+                self.at,
+            ));
         }
         self.bump();
         let body_start = self.at;
@@ -778,7 +783,8 @@ impl Scanner {
     /// Writing it once also stopped both from accepting a trailing comma.
     fn paren_list<T>(
         &mut self,
-        what: &str,
+        directive: &str,
+        what: impl Fn() -> String,
         mut item: impl FnMut(&mut Self) -> Result<T, MacroError>,
     ) -> Result<Vec<T>, MacroError> {
         let mut items = Vec::new();
@@ -803,11 +809,11 @@ impl Scanner {
                     return Ok(items);
                 }
                 _ => {
-                    return Err(MacroError::MalformedDirective {
-                        directive: "macro".to_string(),
-                        detail: format!("expected ',' or ')' in {what}"),
-                        location: self.at,
-                    });
+                    return Err(malformed(
+                        directive,
+                        format!("expected ',' or ')' in {}", what()),
+                        self.at,
+                    ));
                 }
             }
         }
@@ -815,28 +821,32 @@ impl Scanner {
 
     /// `(a, b)` after a macro's name, or nothing.
     fn parameter_list(&mut self, name: &str) -> Result<Vec<String>, MacroError> {
-        let params = self.paren_list(&format!("the parameters of '{name}'"), |s| {
-            let at_param = s.at;
-            let param = s.identifier();
-            if param.is_empty() {
-                return Err(MacroError::MalformedDirective {
-                    directive: "macro".to_string(),
-                    detail: "expected a parameter name".to_string(),
-                    location: at_param,
-                });
-            }
-            Ok((param, at_param))
-        })?;
+        let params = self.paren_list(
+            Directive::Macro.spelling(),
+            || format!("the parameters of '{name}'"),
+            |s| {
+                let at_param = s.at;
+                let param = s.identifier();
+                if param.is_empty() {
+                    return Err(malformed(
+                        Directive::Macro.spelling(),
+                        "expected a parameter name".to_string(),
+                        at_param,
+                    ));
+                }
+                Ok((param, at_param))
+            },
+        )?;
 
         // Checked after the list rather than inside it, so the list parser
         // knows nothing about what it is collecting.
         for (index, (param, at)) in params.iter().enumerate() {
             if params[..index].iter().any(|(seen, _)| seen == param) {
-                return Err(MacroError::MalformedDirective {
-                    directive: "macro".to_string(),
-                    detail: format!("'{name}' already has a parameter called '{param}'"),
-                    location: *at,
-                });
+                return Err(malformed(
+                    Directive::Macro.spelling(),
+                    format!("'{name}' already has a parameter called '{param}'"),
+                    *at,
+                ));
             }
         }
         Ok(params.into_iter().map(|(param, _)| param).collect())
@@ -849,17 +859,21 @@ impl Scanner {
     /// body. Getting either wrong would end the body in the wrong place.
     fn skip_body(&mut self, name: &str, location: SourceLocation) -> Result<usize, MacroError> {
         let mut depth = 1usize;
+        // Set once per character at the foot of the loop, rather than at the
+        // end of each arm: `*`, `{` and `}` are not repeatable, so all five
+        // assignments were the same expression about the character that
+        // entered the arm.
         let mut after_instruction = false;
         loop {
-            match self.peek() {
-                None => {
-                    return Err(MacroError::MalformedDirective {
-                        directive: "macro".to_string(),
-                        detail: format!("the body of '{name}' is never closed with '}}'"),
-                        location,
-                    });
-                }
-                Some('*') => {
+            let Some(c) = self.peek() else {
+                return Err(malformed(
+                    Directive::Macro.spelling(),
+                    format!("the body of '{name}' is never closed with '}}'"),
+                    location,
+                ));
+            };
+            match c {
+                '*' => {
                     // To the end of the line, or to the brace that closes the
                     // body, whichever comes first. Otherwise a one-line
                     // `@macro clear { [-] * clears it }` -- the natural thing
@@ -871,9 +885,8 @@ impl Scanner {
                     {
                         self.bump();
                     }
-                    after_instruction = false;
                 }
-                Some('{') if after_instruction => {
+                '{' if after_instruction => {
                     // A repeat count, not a nested brace.
                     while self.peek().is_some_and(|c| c != '}' && c != '\n') {
                         self.bump();
@@ -881,27 +894,22 @@ impl Scanner {
                     if self.peek() == Some('}') {
                         self.bump();
                     }
-                    after_instruction = false;
                 }
-                Some('{') => {
+                '{' => {
                     depth += 1;
                     self.bump();
-                    after_instruction = false;
                 }
-                Some('}') => {
+                '}' => {
                     depth -= 1;
                     let end = self.at.offset;
                     self.bump();
                     if depth == 0 {
                         return Ok(end);
                     }
-                    after_instruction = false;
                 }
-                Some(c) => {
-                    after_instruction = REPEATABLE.contains(&c);
-                    self.bump();
-                }
+                _ => self.bump(),
             }
+            after_instruction = REPEATABLE.contains(&c);
         }
     }
 
@@ -923,8 +931,9 @@ impl Scanner {
         }
         self.end_of_directive(Directive::Macro)?;
 
-        if self.expanding.contains(&name) {
-            let mut chain = self.expanding.clone();
+        if self.frames.iter().any(|frame| frame.name == name) {
+            let mut chain: Vec<String> =
+                self.frames.iter().map(|frame| frame.name.clone()).collect();
             chain.push(name.clone());
             return Err(MacroError::CircularMacro {
                 name,
@@ -932,12 +941,9 @@ impl Scanner {
                 location,
             });
         }
-        // Cycles are caught by name; depth and volume are not, and both abort
-        // rather than report if left to themselves -- the first by exhausting
-        // the stack, the second by running for hours with nothing to show.
-        if self.expanding.len() >= MACRO_DEPTH_LIMIT {
+        // Cycles are caught by name; depth and volume are not.
+        if self.frames.len() >= MACRO_DEPTH_LIMIT {
             return Err(MacroError::MacroTooDeep {
-                depth: self.expanding.len() + 1,
                 limit: MACRO_DEPTH_LIMIT,
                 location,
             });
@@ -945,83 +951,72 @@ impl Scanner {
         self.invocations += 1;
         if self.invocations > INVOCATION_LIMIT {
             return Err(MacroError::TooManyInvocations {
-                invocations: self.invocations,
                 limit: INVOCATION_LIMIT,
                 location,
             });
         }
 
-        let frame: HashMap<String, (Symbol, SourceLocation)> =
-            def.params.iter().cloned().zip(arguments).collect();
+        // A push, a scan, a pop. What used to be saved and restored around
+        // this by hand lives in the frame, so there is no invariant left to
+        // break -- and no way for an early return to leak half of it.
+        let (body_start, body_end) = (def.body_start, def.body_end);
+        self.frames.push(Invocation {
+            name,
+            def,
+            arguments,
+            boundary: body_start.offset,
+            call_site: location,
+            resume: self.at,
+        });
+        self.at = body_start;
 
-        // The body is a span of this same source, so expanding it is moving
-        // the cursor and scanning to the brace. Nothing is copied, and a macro
-        // error inside a body points at the body.
-        let resume = self.at;
-        let outer_boundary = self.boundary;
-        let outermost = self.origin_override.is_none();
-        if outermost {
-            self.origin_override = Some(location);
-        }
-        self.parameters.push(frame);
-        self.expanding.push(name);
-        self.at = def.body_start;
-        self.boundary = def.body_start.offset;
+        let result = self.scan_until(body_end);
 
-        let result = self.scan_until(def.body_end);
-
-        self.expanding.pop();
-        self.parameters.pop();
-        if outermost {
-            self.origin_override = None;
-        }
-        self.boundary = outer_boundary;
-        self.at = resume;
+        self.at = self.frames.pop().expect("pushed above").resume;
         result
     }
 
     /// `(65, counter)` after an invocation, resolved in the caller's scope.
     fn argument_list(&mut self, name: &str) -> Result<Vec<(Symbol, SourceLocation)>, MacroError> {
-        self.paren_list(&format!("the arguments of '@{name}'"), |s| {
-            let at_argument = s.at;
-            let mut token = String::new();
-            while s
-                .peek()
-                .is_some_and(|c| c != ',' && c != ')' && !c.is_whitespace())
-            {
-                token.push(s.peek().expect("just peeked"));
-                s.bump();
-            }
-            // A number is a constant; a name is whatever it already means, so
-            // a cell or another macro passes as readily as a count.
-            let symbol = match classify(&token) {
-                Operand::Number(value) => Symbol::Constant(value),
-                Operand::Name(named) => s.lookup(&named, at_argument)?.0,
-                Operand::TooBig => {
-                    return Err(MacroError::MalformedDirective {
-                        directive: "macro".to_string(),
-                        detail: format!("'{token}' does not fit in a 64-bit number"),
-                        location: at_argument,
-                    });
+        // Reported against the invoked name rather than `macro`: `@set(9x)`
+        // said "Malformed @macro", and `@macro` appears nowhere in a program
+        // that only invokes one. `what` is a closure because it is used only
+        // on the error path, and was being formatted on every invocation.
+        self.paren_list(
+            name,
+            || format!("the arguments of '@{name}'"),
+            |s| {
+                let at_argument = s.at;
+                let mut token = String::new();
+                while s
+                    .peek()
+                    .is_some_and(|c| c != ',' && c != ')' && !c.is_whitespace())
+                {
+                    token.push(s.peek().expect("just peeked"));
+                    s.bump();
                 }
-                Operand::Neither => {
-                    return Err(MacroError::MalformedDirective {
-                        directive: "macro".to_string(),
-                        detail: match token.is_empty() {
-                            true => "expected an argument".to_string(),
-                            false => format!("'{token}' is neither a number nor a name"),
-                        },
-                        location: at_argument,
-                    });
-                }
-            };
-            Ok((symbol, at_argument))
-        })
+                // A number is a constant; a name is whatever it already means, so
+                // a cell or another macro passes as readily as a count.
+                let symbol = match classify(&token) {
+                    Operand::Number(value) => Symbol::Constant(value),
+                    Operand::Name(named) => s.lookup(named, at_argument)?.0,
+                    Operand::Empty => {
+                        return Err(malformed(
+                            name,
+                            "expected an argument".to_string(),
+                            at_argument,
+                        ));
+                    }
+                    Operand::Bad(detail) => return Err(malformed(name, detail, at_argument)),
+                };
+                Ok((symbol, at_argument))
+            },
+        )
     }
 
     /// `@var NAME at N` -- name a cell.
     fn var(&mut self, location: SourceLocation) -> Result<(), MacroError> {
-        self.refuse_inside_a_macro("var", location)?;
+        self.refuse_inside_a_macro(Directive::Var, location)?;
         let name = self.declared_name(Declaration::Var, location)?;
 
         self.skip_blanks();
@@ -1136,7 +1131,7 @@ impl Scanner {
                 location: at_name,
             });
         }
-        self.refuse_a_directive_name(&name, declaring.directive().spelling(), at_name)?;
+        self.refuse_a_directive_name(&name, declaring.directive(), at_name)?;
         if let Some((_, first)) = self.symbols.get(&name) {
             return Err(MacroError::Redefinition {
                 name,
@@ -1156,19 +1151,17 @@ impl Scanner {
     fn refuse_a_directive_name(
         &self,
         name: &str,
-        directive: &str,
+        directive: Directive,
         location: SourceLocation,
     ) -> Result<(), MacroError> {
         if Directive::from_spelling(name).is_none() {
             return Ok(());
         }
-        Err(MacroError::MalformedDirective {
-            directive: directive.to_string(),
-            detail: format!(
-                "'{name}' is the name of a directive, so `@{name}` would never reach this"
-            ),
+        Err(malformed(
+            directive.spelling(),
+            format!("'{name}' is the name of a directive, so `@{name}` would never reach this"),
             location,
-        })
+        ))
     }
 
     /// A decimal number or the name of a constant.
@@ -1187,21 +1180,12 @@ impl Scanner {
             self.bump();
         }
 
-        let malformed = |detail: String| MacroError::MalformedDirective {
-            directive: declaring.directive().spelling().to_string(),
-            detail,
-            location: at_value,
-        };
+        let spelling = declaring.directive().spelling();
         match classify(&token) {
             Operand::Number(value) => Ok(value),
-            Operand::Name(named) => self.resolve(&named, at_value),
-            Operand::TooBig => Err(malformed(format!(
-                "'{token}' does not fit in a 64-bit number"
-            ))),
-            Operand::Neither if token.is_empty() => Err(malformed(declaring.missing_value(name))),
-            Operand::Neither => Err(malformed(format!(
-                "'{token}' is neither a number nor a name"
-            ))),
+            Operand::Name(named) => self.resolve(named, at_value),
+            Operand::Empty => Err(malformed(spelling, declaring.missing_value(name), at_value)),
+            Operand::Bad(detail) => Err(malformed(spelling, detail, at_value)),
         }
     }
 
@@ -1218,7 +1202,7 @@ impl Scanner {
             // read its own closing brace as junk after the invocation.
             // Asked of `expanding`, which records being inside a body, rather
             // than of `boundary`, which only happens to today.
-            Some('}') if !self.expanding.is_empty() => Ok(()),
+            Some('}') if self.inside_a_macro() => Ok(()),
             Some('*') => {
                 self.skip_line();
                 Ok(())
@@ -1241,7 +1225,7 @@ impl Scanner {
     }
 
     fn define(&mut self, location: SourceLocation) -> Result<(), MacroError> {
-        self.refuse_inside_a_macro("define", location)?;
+        self.refuse_inside_a_macro(Directive::Define, location)?;
         let name = self.declared_name(Declaration::Define, location)?;
         self.skip_blanks();
         let at_value = self.at;
@@ -1257,28 +1241,75 @@ impl Scanner {
 /// The three-way decision was written out at each of the three places that
 /// make it -- a repeat count, a declaration's value, an argument -- and they
 /// had already drifted on how to word the same failure.
-enum Operand {
+enum Operand<'a> {
     Number(u64),
-    /// All digits, but past what a `u64` holds.
-    TooBig,
-    Name(String),
-    Neither,
+    /// Borrowed from the token the caller already holds. Owning it meant a
+    /// heap copy per name resolved, and a body is re-scanned per invocation.
+    Name(&'a str),
+    /// Nothing was written. Each site says what it wanted there, because only
+    /// the site knows.
+    Empty,
+    /// Not a value, and why. The wording lives here rather than at each of
+    /// the three sites that report it -- which is where it drifted before.
+    Bad(String),
 }
 
-fn classify(token: &str) -> Operand {
+fn classify(token: &str) -> Operand<'_> {
     if token.is_empty() {
-        return Operand::Neither;
+        return Operand::Empty;
     }
     if token.chars().all(|c| c.is_ascii_digit()) {
         return match token.parse() {
             Ok(value) => Operand::Number(value),
-            Err(_) => Operand::TooBig,
+            // Never the u64::MAX it failed to parse into: that is a number
+            // the user did not type.
+            Err(_) => Operand::Bad(format!("'{token}' does not fit in a 64-bit number")),
         };
     }
     if is_identifier(token) {
-        return Operand::Name(token.to_string());
+        return Operand::Name(token);
     }
-    Operand::Neither
+    Operand::Bad(format!("'{token}' is neither a number nor a name"))
+}
+
+/// A `MalformedDirective`, without the five-line struct literal it was written
+/// as at eight new sites -- each of which spelled the directive out as a
+/// string, in the one crate whose `directive` module exists because that
+/// vocabulary had been spelled out five times and drifted.
+fn malformed(directive: &str, detail: String, location: SourceLocation) -> MacroError {
+    MacroError::MalformedDirective {
+        directive: directive.to_string(),
+        detail,
+        location,
+    }
+}
+
+/// Whether a line declares `name`, for the "defined below" hint.
+fn declares(trimmed: &str, name: &str) -> bool {
+    Directive::ALL
+        .into_iter()
+        .filter(|d| d.declaration().is_some())
+        .filter_map(|d| trimmed.strip_prefix(&format!("@{}", d.spelling())))
+        .any(|tail| {
+            tail.trim_start()
+                .strip_prefix(name)
+                .is_some_and(|after| !after.starts_with(is_identifier_char))
+        })
+}
+
+/// Brace depth after a line, for the same hint. Crude but sufficient for one:
+/// a repeat count's brace sits against an instruction, and a body's does not.
+fn brace_depth_after(line: &str, mut depth: usize) -> usize {
+    let mut previous = ' ';
+    for c in line.chars() {
+        match c {
+            '{' if !REPEATABLE.contains(&previous) => depth += 1,
+            '}' if depth > 0 => depth -= 1,
+            _ => {}
+        }
+        previous = c;
+    }
+    depth
 }
 
 fn is_identifier_char(c: char) -> bool {
@@ -1297,8 +1328,11 @@ fn is_identifier(text: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn expanded(source: &str) -> String {
-        expand(source).expect("expands").brainfuck().to_string()
+    pub(super) fn expanded(source: &str) -> String {
+        expand(source)
+            .unwrap_or_else(|e| panic!("{}", e.format_with_source(source)))
+            .brainfuck()
+            .to_string()
     }
 
     /// Every emitted byte points at a character that could have emitted it.
@@ -1312,72 +1346,85 @@ mod tests {
     pub(super) fn assert_origins_are_exact(source: &str) {
         let expansion = expand(source).expect("expands");
         let chars: Vec<char> = source.chars().collect();
+        // Which names are macros, read as the expander reads them rather than
+        // by searching the file for the text "@macro NAME". `Directive::emits`
+        // exists so this helper does not spell the vocabulary out a second
+        // time, and a substring search would match any `@foo` whose name
+        // happened to appear after "@macro " anywhere in the source.
+        let macros: Vec<String> = source
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("@macro "))
+            .map(|rest| {
+                rest.trim_start()
+                    .chars()
+                    .take_while(|c| is_identifier_char(*c))
+                    .collect()
+            })
+            .collect();
         let mut directions: std::collections::HashMap<usize, char> =
             std::collections::HashMap::new();
+
         for (offset, emitted) in expansion.brainfuck().chars().enumerate() {
             let origin = expansion
                 .origin(offset)
                 .unwrap_or_else(|| panic!("byte {offset} has no origin"));
-            // `@to` is the one construct that emits an instruction not
-            // written literally, so its bytes point at the directive that
-            // generated them. Everything else still points at itself.
-            if chars[origin.offset] == '@' {
-                let spelling: String = chars[origin.offset + 1..]
-                    .iter()
-                    .take_while(|c| is_identifier_char(**c))
-                    .collect();
-                let emitting_directive =
-                    Directive::from_spelling(&spelling).is_some_and(Directive::emits);
-                let macro_invocation = source.contains(&format!("@macro {spelling}"));
-                assert!(
-                    emitting_directive || macro_invocation,
-                    "byte {offset} points at @{spelling}, which does not emit"
-                );
-                if macro_invocation {
-                    // A macro emits whatever its body does, so the
-                    // one-direction rule below is only about `@to`.
-                    continue;
-                }
-                assert!(
-                    emitted == '>' || emitted == '<',
-                    "@to emitted {emitted:?}, which is not a move"
-                );
-                // A single `@to` moves one way. Recording the direction per
-                // directive occurrence is what makes this exact rather than
-                // "points at some @to": a byte misattributed to a different
-                // `@to` shows up here whenever the two move oppositely, and
-                // a run split across directives shows up as a contradiction.
-                // A macro emits whatever its body does, so the one-direction
-                // rule is only about `@to`.
-                if !macro_invocation
-                    && let Some(previous) = directions.insert(origin.offset, emitted)
-                {
-                    assert_eq!(
-                        previous, emitted,
-                        "the @to at offset {} is credited with both directions",
-                        origin.offset
-                    );
-                }
-            } else {
-                assert_eq!(
-                    chars[origin.offset], emitted,
-                    "byte {offset} ({emitted}) points at {:?} in the macro source",
-                    chars[origin.offset]
-                );
-            }
-            // The line and column must agree with the offset, or a caret lands
-            // on the wrong character even though the offset is right.
+
+            // First, because it holds for every byte however it was emitted.
+            // It used to sit at the foot of the loop, past a `continue`, so
+            // no byte a macro emitted was checked against it at all.
             let before: String = chars[..origin.offset].iter().collect();
             assert_eq!(
                 origin.line,
                 before.matches('\n').count() + 1,
                 "line disagrees with offset at byte {offset}"
             );
-            let column = before.chars().rev().take_while(|&c| c != '\n').count() + 1;
             assert_eq!(
-                origin.column, column,
+                origin.column,
+                before.chars().rev().take_while(|&c| c != '\n').count() + 1,
                 "column disagrees with offset at byte {offset}"
             );
+
+            // `@to` and a macro invocation are the two constructs that emit
+            // instructions nobody wrote, so their bytes point at the
+            // directive. Everything else still points at itself.
+            if chars[origin.offset] != '@' {
+                assert_eq!(
+                    chars[origin.offset], emitted,
+                    "byte {offset} ({emitted}) points at {:?} in the macro source",
+                    chars[origin.offset]
+                );
+                continue;
+            }
+
+            let spelling: String = chars[origin.offset + 1..]
+                .iter()
+                .take_while(|c| is_identifier_char(**c))
+                .collect();
+            if macros.contains(&spelling) {
+                // A macro emits whatever its body does, so nothing more can
+                // be said about which instruction it was.
+                continue;
+            }
+            assert!(
+                Directive::from_spelling(&spelling).is_some_and(Directive::emits),
+                "byte {offset} points at @{spelling}, which does not emit"
+            );
+            assert!(
+                emitted == '>' || emitted == '<',
+                "@to emitted {emitted:?}, which is not a move"
+            );
+            // A single `@to` moves one way. Recording the direction per
+            // directive occurrence is what makes this exact rather than
+            // "points at some @to": a byte misattributed to a different `@to`
+            // shows up whenever the two move oppositely, and a run split
+            // across directives shows up as a contradiction.
+            if let Some(previous) = directions.insert(origin.offset, emitted) {
+                assert_eq!(
+                    previous, emitted,
+                    "the @to at offset {} is credited with both directions",
+                    origin.offset
+                );
+            }
         }
     }
 
@@ -1865,15 +1912,8 @@ mod tests {
 
 #[cfg(test)]
 mod macro_tests {
-    use super::tests::assert_origins_are_exact;
+    use super::tests::{assert_origins_are_exact, expanded};
     use super::*;
-
-    fn expanded(source: &str) -> String {
-        expand(source)
-            .unwrap_or_else(|e| panic!("{}", e.format_with_source(source)))
-            .brainfuck()
-            .to_string()
-    }
 
     #[test]
     fn a_macro_without_parameters_expands_its_body() {
@@ -2076,18 +2116,8 @@ mod macro_tests {
         assert_origins_are_exact("@macro five { +{5} }\n@five\n@five\n");
         assert_origins_are_exact("@var a at 0\n@var b at 3\n@macro go {\n@to b\n}\n@go\n");
     }
-}
 
-#[cfg(test)]
-mod macro_limits_and_scope {
-    use super::*;
-
-    fn expanded(source: &str) -> String {
-        expand(source)
-            .unwrap_or_else(|e| panic!("{}", e.format_with_source(source)))
-            .brainfuck()
-            .to_string()
-    }
+    // ---- limits, scope, and what a body may not do ---------------------
 
     #[test]
     fn a_deep_chain_of_distinct_macros_is_refused_rather_than_exhausting_the_stack() {

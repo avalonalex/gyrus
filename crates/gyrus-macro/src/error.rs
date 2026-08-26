@@ -124,16 +124,14 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
-    #[error("Macros are nested {depth} deep at {location}, past the limit of {limit}")]
+    #[error("Macros at {location} are nested deeper than the limit of {limit}")]
     MacroTooDeep {
-        depth: usize,
         limit: usize,
         location: SourceLocation,
     },
 
-    #[error("Expanding this used {invocations} macro invocations, past the limit of {limit}")]
+    #[error("Expanding this passed the limit of {limit} macro invocations, at {location}")]
     TooManyInvocations {
-        invocations: u64,
         limit: u64,
         location: SourceLocation,
     },
