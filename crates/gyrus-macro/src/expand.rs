@@ -7,10 +7,13 @@
 //!
 //! # What it understands
 //!
-//! - `@define NAME VALUE` -- a named constant. `VALUE` is a decimal number or
-//!   a name defined earlier. Definition precedes use: one pass, as `cpp` has.
+//! - `@define NAME VALUE` -- a named constant. Definition precedes use: one
+//!   pass, as `cpp` has.
 //! - `@var NAME at N` -- a named cell, and `@to NAME` to move the cursor
 //!   there: the expander tracks where the cursor is and emits the difference.
+//!   `@var NAME` alone has a cell chosen for it, which is the half that makes
+//!   a layout maintainable -- the point of naming cells is to stop counting
+//!   them, and `at N` still makes you count them once.
 //! - `@here NAME` -- tell the expander where the cursor is without moving it.
 //! - `@macro NAME(a, b) { ... }`, invoked as `@NAME(1, 2)` -- a body expanded
 //!   in place. An argument is evaluated in the caller's scope and bound to the
@@ -19,6 +22,11 @@
 //!   is a number or a defined name. `+{0}` is nothing, which is legal.
 //! - `*` to end of line, and any character that is not a BrainFuck instruction:
 //!   comments, dropped from the expansion.
+//!
+//! Wherever a number may be written, so may a character or a hexadecimal
+//! number: `'A'`, `'\n'` and `0x41` are all 65. They go through one
+//! classifier, so a repeat count, a `@define`, a `@var`'s cell and a macro
+//! argument all understand them without any of them being told.
 //!
 //! # Two rules about what is reserved
 //!
@@ -260,6 +268,9 @@ struct Scanner {
     frames: Vec<Invocation>,
     /// Invocations so far, against [`INVOCATION_LIMIT`].
     invocations: u64,
+    /// Cells a `@var` has already named, so that one written without `at` can
+    /// be given one nobody is using.
+    cells_taken: std::collections::BTreeSet<i64>,
     /// Insertion order, for the "did you mean" list. A HashMap alone would
     /// suggest names in an order that changes between runs.
     defined: Vec<String>,
@@ -282,6 +293,7 @@ impl Scanner {
             symbols: HashMap::new(),
             frames: Vec::new(),
             invocations: 0,
+            cells_taken: std::collections::BTreeSet::new(),
             defined: Vec::new(),
             position: Position::Known(0),
             net: 0,
@@ -398,6 +410,36 @@ impl Scanner {
             .iter()
             .copied()
             .eq(want.chars())
+    }
+
+    /// A token at the cursor, ending at the first character `ends` accepts
+    /// that is not inside a character literal.
+    ///
+    /// The quotes are why this is shared rather than written at each of the
+    /// three places that read a value. `@define SPACE ' '` ends its token on a
+    /// space, `@print(',')` on a comma and `+{'}'}` on a brace -- each of them
+    /// the delimiter that reader would otherwise stop at, and each of them the
+    /// obvious thing to write.
+    fn token(&mut self, ends: impl Fn(char) -> bool) -> String {
+        let mut token = String::new();
+        let mut quoted = false;
+        let mut escaped = false;
+        while let Some(c) = self.peek() {
+            // A newline ends a token whatever the quoting, so an unclosed
+            // quote cannot swallow the rest of the file looking for its pair
+            // and then blame a line far below the one it is on.
+            if c == '\n' || (!quoted && ends(c)) {
+                break;
+            }
+            match c {
+                '\\' if quoted => escaped = !escaped,
+                '\'' if !escaped => quoted = !quoted,
+                _ => escaped = false,
+            }
+            token.push(c);
+            self.bump();
+        }
+        token
     }
 
     /// An identifier at the cursor: a letter or `_`, then letters, digits, `_`.
@@ -534,29 +576,23 @@ impl Scanner {
         let open = self.at;
         self.bump(); // past '{'
 
-        let mut body = String::new();
-        loop {
-            match self.peek() {
-                Some('}') => {
-                    self.bump();
-                    break;
-                }
-                // A newline inside a repeat count means the '}' was forgotten;
-                // scanning on would swallow the rest of the program looking
-                // for one, and blame a line far below the mistake.
-                None | Some('\n') => {
-                    return Err(MacroError::BadRepeatCount {
-                        detail: "no closing '}'".to_string(),
-                        location: open,
-                    });
-                }
-                Some(c) => {
-                    body.push(c);
-                    self.bump();
-                }
-            }
+        let body = self.token(|c| c == '}' || c == '\n');
+        // A newline inside a repeat count means the '}' was forgotten;
+        // scanning on would swallow the rest of the program looking for one,
+        // and blame a line far below the mistake.
+        if self.peek() != Some('}') {
+            // Which of the two is missing, since an unclosed quote reaches
+            // the end of the line without the brace being the problem.
+            let detail = match body.starts_with('\'') && !body.ends_with('\'') {
+                true => format!("{body} has no closing quote"),
+                false => "no closing '}'".to_string(),
+            };
+            return Err(MacroError::BadRepeatCount {
+                detail,
+                location: open,
+            });
         }
-
+        self.bump();
         let body = body.trim();
         let bad = |detail: String| MacroError::BadRepeatCount {
             detail,
@@ -996,14 +1032,7 @@ impl Scanner {
             || format!("the arguments of '@{name}'"),
             |s| {
                 let at_argument = s.at;
-                let mut token = String::new();
-                while s
-                    .peek()
-                    .is_some_and(|c| c != ',' && c != ')' && !c.is_whitespace())
-                {
-                    token.push(s.peek().expect("just peeked"));
-                    s.bump();
-                }
+                let token = s.token(|c| c == ',' || c == ')' || c.is_whitespace());
                 // A number is a constant; a name is whatever it already means, so
                 // a cell or another macro passes as readily as a count.
                 let symbol = match classify(&token) {
@@ -1023,40 +1052,66 @@ impl Scanner {
         )
     }
 
-    /// `@var NAME at N` -- name a cell.
+    /// `@var NAME at N` -- name a cell. Or `@var NAME`, and one is chosen.
+    ///
+    /// Choosing is the half that makes a layout maintainable: the point of
+    /// naming cells is to stop counting them, and `at N` still makes you count
+    /// them once. Writing the number remains available, because a program that
+    /// cares where a cell sits -- one laying out a string to scan over, say --
+    /// has to be able to say so.
     fn var(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         self.refuse_inside_a_macro(Directive::Var, location)?;
         let name = self.declared_name(Declaration::Var, location)?;
-
         self.skip_blanks();
-        let at_keyword = self.at;
-        if !self.identifier_is("at") {
-            return Err(MacroError::MalformedDirective {
-                directive: "var".to_string(),
-                detail: format!("expected `at`, as in `@var {name} at 0`"),
-                location: at_keyword,
-            });
-        }
 
-        self.skip_blanks();
-        let at_value = self.at;
-        let cell = self.number_or_name(Declaration::Var, &name, at_value)?;
-        // Reaching cell N costs N moves, so a cell past the expansion budget
-        // is one no program could ever move to. Refusing it here is also what
-        // keeps every tracked position small enough that the arithmetic on
-        // them cannot overflow.
-        if cell > EXPANSION_LIMIT as u64 {
-            return Err(MacroError::CellTooFar {
-                cell,
-                limit: EXPANSION_LIMIT,
-                location: at_value,
-            });
-        }
-        let cell = cell as i64;
+        let cell = match self.peek() {
+            // Nothing follows the name, so choose a cell for it.
+            None | Some('\n') | Some('*') => self.next_free_cell(),
+            _ => {
+                let at_keyword = self.at;
+                if !self.identifier_is("at") {
+                    return Err(malformed(
+                        Directive::Var.spelling(),
+                        format!(
+                            "expected `at`, as in `@var {name} at 0` -- or nothing after the \
+                             name, to have a cell chosen"
+                        ),
+                        at_keyword,
+                    ));
+                }
+                self.skip_blanks();
+                let at_value = self.at;
+                let cell = self.number_or_name(Declaration::Var, &name, at_value)?;
+                // Reaching cell N costs N moves, so a cell past the expansion
+                // budget is one no program could move to. Refusing it here is
+                // also what keeps every tracked position small enough that the
+                // arithmetic on them cannot overflow.
+                if cell > EXPANSION_LIMIT as u64 {
+                    return Err(MacroError::CellTooFar {
+                        cell,
+                        limit: EXPANSION_LIMIT,
+                        location: at_value,
+                    });
+                }
+                cell as i64
+            }
+        };
 
         self.end_of_directive(Directive::Var)?;
+        self.cells_taken.insert(cell);
         self.declare(name, Symbol::Variable(cell), location);
         Ok(())
+    }
+
+    /// The lowest cell no `@var` has named.
+    ///
+    /// Lowest rather than next-after-the-last, so that mixing the two spellings
+    /// does not leave a hole: `@var scratch at 9` followed by three plain
+    /// `@var`s gives cells 0, 1 and 2, not 10, 11 and 12.
+    fn next_free_cell(&self) -> i64 {
+        (0..)
+            .find(|cell| !self.cells_taken.contains(cell))
+            .expect("i64 is not exhausted")
     }
 
     /// The cell a `@to` or `@here` names, and its own name for the error.
@@ -1065,11 +1120,11 @@ impl Scanner {
         let at_name = self.at;
         let name = self.identifier();
         if name.is_empty() {
-            return Err(MacroError::MalformedDirective {
-                directive: directive.spelling().to_string(),
-                detail: "expected the name of a cell declared with @var".to_string(),
-                location: at_name,
-            });
+            return Err(malformed(
+                directive.spelling(),
+                "expected the name of a cell declared with @var".to_string(),
+                at_name,
+            ));
         }
         let cell = self.resolve_cell(&name, at_name)?;
         self.end_of_directive(directive)?;
@@ -1180,15 +1235,7 @@ impl Scanner {
         name: &str,
         at_value: SourceLocation,
     ) -> Result<u64, MacroError> {
-        let mut token = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_whitespace() {
-                break;
-            }
-            token.push(c);
-            self.bump();
-        }
-
+        let token = self.token(char::is_whitespace);
         let spelling = declaring.directive().spelling();
         match classify(&token) {
             Operand::Number(value) => Ok(value),
@@ -1267,6 +1314,25 @@ fn classify(token: &str) -> Operand<'_> {
     if token.is_empty() {
         return Operand::Empty;
     }
+    // `'A'` and `0x41` mean 65, and read better than it wherever a byte is
+    // what is meant. Both land here rather than at the sites that want a
+    // number, so a repeat count, a `@define`, a `@var`'s cell and a macro
+    // argument all understand them without any of them being told.
+    if token.starts_with('\'') {
+        return match character(token) {
+            Ok(byte) => Operand::Number(u64::from(byte)),
+            Err(why) => Operand::Bad(format!("{token} is not a character: {why}")),
+        };
+    }
+    if let Some(digits) = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+    {
+        return match u64::from_str_radix(digits, 16) {
+            Ok(value) if !digits.is_empty() => Operand::Number(value),
+            _ => Operand::Bad(format!("'{token}' is not a hexadecimal number")),
+        };
+    }
     if token.chars().all(|c| c.is_ascii_digit()) {
         return match token.parse() {
             Ok(value) => Operand::Number(value),
@@ -1279,6 +1345,35 @@ fn classify(token: &str) -> Operand<'_> {
         return Operand::Name(token);
     }
     Operand::Bad(format!("'{token}' is neither a number nor a name"))
+}
+
+/// The byte a `'x'` literal means.
+///
+/// One byte, because a cell holds one: `'\u{e9}'` is 233 and fits, and a
+/// character that does not is a mistake rather than something to truncate --
+/// which is the same rule the test manifest applies to its expected output.
+fn character(token: &str) -> Result<u8, String> {
+    let body = token
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+        .ok_or("it has no closing quote")?;
+    let mut chars = body.chars();
+    let value = match chars.next().ok_or("it is empty")? {
+        '\\' => match chars.next().ok_or("nothing follows the backslash")? {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            '0' => '\0',
+            '\\' => '\\',
+            '\'' => '\'',
+            other => return Err(format!("\\{other} is not an escape this understands")),
+        },
+        plain => plain,
+    };
+    if chars.next().is_some() {
+        return Err("it holds more than one character".to_string());
+    }
+    u8::try_from(u32::from(value)).map_err(|_| format!("{value:?} does not fit in a cell"))
 }
 
 /// A `MalformedDirective`, without the five-line struct literal it was written
@@ -1808,7 +1903,10 @@ mod tests {
 
     #[test]
     fn a_var_says_what_it_expected() {
-        for source in ["@var\n", "@var x\n", "@var x 0\n", "@var x at\n"] {
+        // `@var x` alone is not in this list any more: a cell is chosen for
+        // it. What is left is a name missing, a cell missing after `at`, and
+        // an `at` missing before one.
+        for source in ["@var\n", "@var x 0\n", "@var x at\n"] {
             assert!(
                 matches!(
                     expand(source).unwrap_err(),
@@ -2255,5 +2353,101 @@ mod macro_tests {
             !hint.contains("defined below"),
             "the hint points at a dead end: {hint}"
         );
+    }
+}
+
+#[cfg(test)]
+mod readable_constants {
+    use super::tests::expanded;
+    use super::*;
+
+    #[test]
+    fn a_var_without_a_cell_is_given_one() {
+        // The point of naming cells is to stop counting them, and `at N` still
+        // makes you count them once.
+        assert_eq!(expanded("@var a\n@var b\n@var c\n@to c\n"), ">>");
+    }
+
+    #[test]
+    fn a_chosen_cell_never_lands_on_one_already_named() {
+        // Lowest free rather than next-after-the-last, so mixing the two
+        // spellings leaves no hole.
+        assert_eq!(expanded("@var scratch at 9\n@var a\n@var b\n@to b\n"), ">");
+        assert_eq!(expanded("@var a\n@var pinned at 1\n@var b\n@to b\n"), ">>");
+    }
+
+    #[test]
+    fn a_character_is_the_byte_it_stands_for() {
+        assert_eq!(expanded("@define A 'A'\n+{A}\n").len(), 65);
+        assert_eq!(expanded("+{'A'}\n").len(), 65);
+        assert_eq!(expanded("@define NEWLINE '\\n'\n+{NEWLINE}\n").len(), 10);
+        assert_eq!(expanded("@define TAB '\\t'\n+{TAB}\n").len(), 9);
+        // 'é' is 233, which fits in a cell.
+        assert_eq!(expanded("+{'\u{e9}'}\n").len(), 233);
+    }
+
+    #[test]
+    fn hexadecimal_is_the_number_it_spells() {
+        assert_eq!(expanded("@define MASK 0x10\n+{MASK}\n").len(), 16);
+        assert_eq!(expanded("+{0xff}\n").len(), 255);
+        assert_eq!(expanded("+{0XFF}\n").len(), 255);
+    }
+
+    #[test]
+    fn a_quote_holds_the_delimiter_the_reader_would_have_stopped_at() {
+        // Each of these is the obvious thing to write, and each ends its token
+        // on the character the reader would otherwise have stopped at.
+        assert_eq!(expanded("@define SPACE ' '\n+{SPACE}\n").len(), 32);
+        assert_eq!(expanded("+{'}'}\n").len(), 125);
+        assert_eq!(
+            expanded("@macro n(c) {\n+{c}\n}\n@n(',')\n").len(),
+            usize::from(b',')
+        );
+    }
+
+    #[test]
+    fn a_character_and_a_number_may_be_written_wherever_the_other_may() {
+        // They go through one classifier, so nothing had to be told about
+        // them twice.
+        assert_eq!(expanded("@var a at 0\n@var b at 0x2\n@to b\n"), ">>");
+        assert_eq!(
+            expanded("@define N 3\n@macro m(c) {\n+{c}\n}\n@m(0xA)\n").len(),
+            10
+        );
+    }
+
+    #[test]
+    fn a_malformed_literal_says_what_is_wrong_with_it() {
+        for (source, expected) in [
+            ("+{'ab'}\n", "more than one character"),
+            ("+{''}\n", "it is empty"),
+            ("+{'\\q'}\n", "is not an escape"),
+            ("+{'a}\n", "no closing quote"),
+            ("+{0x}\n", "not a hexadecimal"),
+            ("+{0xzz}\n", "not a hexadecimal"),
+        ] {
+            let error = expand(source).unwrap_err();
+            let MacroError::BadRepeatCount { detail, .. } = &error else {
+                panic!("{source:?}: expected a bad repeat count, got {error:?}");
+            };
+            assert!(
+                detail.contains(expected),
+                "{source:?}: {detail:?} does not mention {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_character_too_wide_for_a_cell_is_refused() {
+        let error = expand("+{'\u{20ac}'}\n").unwrap_err();
+        let MacroError::BadRepeatCount { detail, .. } = &error else {
+            panic!("expected a bad repeat count, got {error:?}");
+        };
+        assert!(detail.contains("does not fit in a cell"), "{detail}");
+    }
+
+    #[test]
+    fn origins_survive_the_new_spellings() {
+        super::tests::assert_origins_are_exact("@var a\n@var b\n@to b\n+{'A'}\n");
     }
 }

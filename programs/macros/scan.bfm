@@ -1,14 +1,20 @@
 * A string laid out in cells, printed by a scan loop -- the shape that makes
 * the expander lose track of the cursor, and @here the way back.
-@var first at 0
+*
+* The letters are written as letters. `+{'H'}` and `+{72}` expand to the same
+* sixty-eight characters of BrainFuck; only one of them says what it is for.
+
+@var first
+@var second
+@var third
 @var after at 3
 
 @to first
-+{72}
->
-+{105}
->
-+{33}
++{'H'}
+@to second
++{'i'}
+@to third
++{'!'}
 
 @to first
 [
@@ -20,5 +26,5 @@
 * know that; saying so costs nothing and emits nothing.
 @here after
 @to after
-+{10}
++{'\n'}
 .
