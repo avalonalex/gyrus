@@ -5,9 +5,13 @@
 //! read a parse error should recognize the same `[` in the debugger's source
 //! panel without having to re-learn what magenta means.
 
+use gyrus::syntax::CharClass;
 use ratatui::style::{Color, Modifier, Style};
 
 /// What a source character is, for coloring purposes.
+///
+/// A presentation-side view of [`gyrus::syntax::CharClass`], which is where the
+/// language's rule about what counts as code actually lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     /// `>` and `<`
@@ -22,18 +26,14 @@ pub enum Category {
     Comment,
 }
 
-impl Category {
-    /// Classify a single source character, ignoring line-comment context.
-    ///
-    /// Private because `*` comments make per-character classification wrong on
-    /// its own; [`classify_line`] is the entry point.
-    fn of(ch: char) -> Self {
-        match ch {
-            '>' | '<' => Category::Movement,
-            '+' | '-' => Category::Arithmetic,
-            '.' | ',' => Category::Io,
-            '[' | ']' => Category::Loop,
-            _ => Category::Comment,
+impl From<CharClass> for Category {
+    fn from(class: CharClass) -> Self {
+        match class {
+            CharClass::Movement => Category::Movement,
+            CharClass::Arithmetic => Category::Arithmetic,
+            CharClass::Io => Category::Io,
+            CharClass::LoopStart | CharClass::LoopEnd => Category::Loop,
+            CharClass::Whitespace | CharClass::Comment => Category::Comment,
         }
     }
 }
@@ -41,20 +41,12 @@ impl Category {
 /// Classify every character of one source line, honoring `*` line comments.
 ///
 /// Returns one category per `char` of `line`, so the result lines up with
-/// `line.chars()` — not with byte offsets.
+/// `line.chars()` -- not with byte offsets. The rule itself is the library's:
+/// whether a `+` executes is a fact about BrainFuck, not about this panel.
 pub fn classify_line(line: &str) -> Vec<Category> {
-    let mut in_comment = false;
-    line.chars()
-        .map(|ch| {
-            if ch == '*' {
-                in_comment = true;
-            }
-            if in_comment {
-                Category::Comment
-            } else {
-                Category::of(ch)
-            }
-        })
+    gyrus::syntax::classify_line(line)
+        .into_iter()
+        .map(Category::from)
         .collect()
 }
 

@@ -27,7 +27,7 @@ use gyrus_tui::TerminalGuard;
 
 use hook::{DebugInput, DebugOutput, DebuggerHook, Shared};
 use program::Program;
-use state::{Exit, Outcome, RunState, Session};
+use state::{Exit, Note, Outcome, RunState, Session};
 
 #[derive(Parser)]
 #[command(name = "gyrus-debug")]
@@ -83,6 +83,15 @@ struct Cli {
     #[arg(short = 'b', long = "break", value_name = "LINE[:COL]")]
     breakpoints: Vec<String>,
 
+    /// Character in the source that marks a breakpoint. Must not be a
+    /// BrainFuck command or `*`
+    #[arg(long, value_name = "CHAR", default_value = "@")]
+    marker: char,
+
+    /// Ignore breakpoint markers in the source
+    #[arg(long, conflicts_with = "marker")]
+    no_markers: bool,
+
     /// Start running instead of stopping at the first instruction
     #[arg(long)]
     run: bool,
@@ -112,9 +121,15 @@ fn run() -> Result<(), String> {
     let initial_input = read_input(&cli)?;
     let initial_memory = initial_memory_size(&cli)?;
 
-    // Validate the execution settings before taking over the terminal, so a
-    // typo in a flag prints an error instead of flashing an empty screen.
+    // Validate everything before taking over the terminal, so a typo in a flag
+    // prints an error instead of flashing an empty screen at it.
     build_config(&cli, None)?;
+    let marker = marker_char(&cli)?;
+    let breakpoints: Vec<(usize, usize)> = cli
+        .breakpoints
+        .iter()
+        .map(|spec| parse_breakpoint(spec))
+        .collect::<Result<_, _>>()?;
 
     let (_guard, terminal) = TerminalGuard::enter()
         .map_err(|error| format!("Error: could not set up the terminal: {error}"))?;
@@ -122,9 +137,10 @@ fn run() -> Result<(), String> {
     let mut session = Session::new(Arc::clone(&program), terminal, initial_memory);
     session.ui.memory_display = display;
     session.pending_input = initial_input.into();
-    for spec in &cli.breakpoints {
-        apply_breakpoint(&mut session, spec)?;
+    for position in breakpoints {
+        apply_breakpoint(&mut session, position)?;
     }
+    apply_markers(marker, &mut session);
     let initial_run = if cli.run {
         RunState::Continue
     } else {
@@ -187,6 +203,81 @@ fn run() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// The marker character to scan for, or `None` when markers are off.
+///
+/// Rejects the eight commands and `*`: a marker that is also an instruction
+/// would put a breakpoint on every one of them, and `*` starts a comment, so
+/// every marker would be inside one and none would ever bind.
+fn marker_char(cli: &Cli) -> Result<Option<char>, String> {
+    if cli.no_markers {
+        return Ok(None);
+    }
+    if "><+-.,[]*".contains(cli.marker) {
+        return Err(format!(
+            "Error: --marker '{}' is a BrainFuck command or a comment character, \
+             so it cannot mark anything",
+            cli.marker
+        ));
+    }
+    // Whitespace would put a breakpoint on nearly every instruction of a
+    // normally formatted program, so `continue` would become single-stepping;
+    // a newline never appears in a line at all, so it would silently do nothing.
+    if cli.marker.is_whitespace() || cli.marker.is_control() {
+        return Err(format!(
+            "Error: --marker {:?} is whitespace or a control character, which \
+             cannot mark a position in the source",
+            cli.marker
+        ));
+    }
+    Ok(Some(cli.marker))
+}
+
+/// Read the source's breakpoint markers, and say what was found.
+///
+/// On by default. Every BrainFuck implementation ignores every character that
+/// is not one of the eight commands, so a marked program runs identically
+/// everywhere and a breakpoint becomes something you can commit.
+///
+/// The count is announced rather than applied quietly: a program you did not
+/// write may contain the marker character for its own reasons, and an
+/// unexplained stop is worse than an unwanted one. `B` clears them all.
+fn apply_markers(marker: Option<char>, session: &mut Session) {
+    let Some(marker) = marker else {
+        return;
+    };
+
+    let program = Arc::clone(&session.program);
+    let (positions, unbound) = program.markers(marker);
+    // Count what was actually added: a marker can land where `--break` already
+    // put one, and claiming it twice would overstate what `B` is about to clear.
+    let added = positions
+        .iter()
+        .filter(|position| session.set_breakpoint(**position))
+        .count();
+
+    let mut notes = Vec::new();
+    if added > 0 {
+        notes.push(format!(
+            "{} breakpoint{} from {} markers — B clears them",
+            added,
+            if added == 1 { "" } else { "s" },
+            marker
+        ));
+    }
+    if !unbound.is_empty() {
+        let lines: Vec<String> = unbound.iter().map(usize::to_string).collect();
+        notes.push(format!(
+            "no instruction after the {} on line{} {}",
+            marker,
+            if unbound.len() == 1 { "" } else { "s" },
+            lines.join(", ")
+        ));
+    }
+    if !notes.is_empty() {
+        session.note(notes.join("; "), Note::Info);
+    }
 }
 
 /// Where a runtime error happened, when the error knows.
@@ -292,30 +383,33 @@ fn build_config(cli: &Cli, session: Option<Shared>) -> Result<ExecutionConfig, S
     Ok(builder.build())
 }
 
-/// Apply one `--break LINE[:COL]` argument.
-fn apply_breakpoint(session: &mut Session, spec: &str) -> Result<(), String> {
-    let (line, column) = match spec.split_once(':') {
-        Some((line, column)) => (
-            line.parse::<usize>()
-                .map_err(|_| format!("Error: not a line number: {spec:?}"))?,
+/// Parse one `--break LINE[:COL]` argument.
+///
+/// Separate from applying it so a malformed one is caught before the terminal
+/// is taken, alongside every other flag.
+fn parse_breakpoint(spec: &str) -> Result<(usize, usize), String> {
+    let bad_line = || format!("Error: not a line number: {spec:?}");
+    match spec.split_once(':') {
+        Some((line, column)) => Ok((
+            line.parse::<usize>().map_err(|_| bad_line())?,
             column
                 .parse::<usize>()
                 .map_err(|_| format!("Error: not a column: {spec:?}"))?,
-        ),
-        None => (
-            spec.parse::<usize>()
-                .map_err(|_| format!("Error: not a line number: {spec:?}"))?,
-            1,
-        ),
-    };
+        )),
+        None => Ok((spec.parse::<usize>().map_err(|_| bad_line())?, 1)),
+    }
+}
 
-    match session.program.nearest_on_line((line, column)) {
-        Some((position, _)) => {
-            session.set_breakpoint(position);
+/// Apply one parsed `--break` position.
+fn apply_breakpoint(session: &mut Session, position: (usize, usize)) -> Result<(), String> {
+    match session.program.nearest_on_line(position) {
+        Some((snapped, _)) => {
+            session.set_breakpoint(snapped);
             Ok(())
         }
         None => Err(format!(
-            "Error: no instruction on line {line} to break at (--break {spec})"
+            "Error: no instruction on line {} to break at",
+            position.0
         )),
     }
 }
@@ -338,6 +432,8 @@ mod tests {
             input: input.map(str::to_owned),
             input_file: file.map(PathBuf::from),
             breakpoints: Vec::new(),
+            marker: '@',
+            no_markers: false,
             run: false,
             display: "hex".into(),
         }
@@ -356,6 +452,31 @@ mod tests {
     #[test]
     fn a_newline_that_is_already_there_is_not_doubled() {
         assert_eq!(read_input(&cli(Some("hi\n"), None)).unwrap(), b"hi\n");
+    }
+
+    #[test]
+    fn a_malformed_break_is_rejected_before_anything_else_happens() {
+        assert!(parse_breakpoint("abc").is_err());
+        assert!(parse_breakpoint("12:x").is_err());
+        assert_eq!(parse_breakpoint("12").unwrap(), (12, 1));
+        assert_eq!(parse_breakpoint("12:5").unwrap(), (12, 5));
+    }
+
+    #[test]
+    fn a_marker_that_is_also_an_instruction_is_refused() {
+        let mut c = cli(None, None);
+        c.marker = '+';
+        assert!(marker_char(&c).is_err());
+        c.marker = '*';
+        assert!(marker_char(&c).is_err());
+        c.marker = ' ';
+        assert!(marker_char(&c).is_err(), "whitespace is not a marker");
+        c.marker = '\n';
+        assert!(marker_char(&c).is_err(), "a newline is not a marker");
+        c.marker = '@';
+        assert_eq!(marker_char(&c).unwrap(), Some('@'));
+        c.no_markers = true;
+        assert_eq!(marker_char(&c).unwrap(), None);
     }
 
     #[test]

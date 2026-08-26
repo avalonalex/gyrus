@@ -101,6 +101,70 @@ gyrus-debug programs/basic/hello_world.bf --break 1:12 --run
 instruction, which is what you want when you have set the breakpoint you care
 about.
 
+## Markers in the source
+
+A `@` in the source is a breakpoint. Every BrainFuck implementation ignores
+every character that is not one of the eight commands, so a marked program runs
+identically everywhere — under `gyrus`, under `--jit`, under anyone else's
+interpreter — and the breakpoint becomes something you commit rather than
+something you retype:
+
+```
++++@[->+<]        stops at the [
+```
+
+A marker binds to the **next** instruction at or after it, scanning forward
+across lines. That is deliberately not what `--break LINE:COLUMN` does — a
+cursor snaps to the *nearest* instruction on its line, because it lands wherever
+the arrow keys left it, whereas a marker was typed immediately before the thing
+it means.
+
+Markers inside a `*` line comment are ignored — the most likely accident in a
+program you are writing, where a header comment might carry an email address.
+
+**That is the only comment style the scan can exclude**, and it is not the only
+one BrainFuck has. Prose outside any marker is a comment because none of its
+characters are commands, and there is no syntax that says where it ends; the
+other common idiom wraps prose in `[ … ]` whose cell is zero, so it never runs
+but is genuinely parsed. A `@` in either of those still binds. Of the fifty-two
+bundled programs, three contain `@`, and this is what happens to them:
+
+| Program | Where | Result |
+|---|---|---|
+| `calc.bf` | four, in live code | four breakpoints, all of which fire |
+| `pi.bf` | an email address inside a `[ … ]` block comment | binds inside the comment loop, which never runs |
+| `char.bf` | alone on the line after the program | nothing to bind to, reported |
+
+So one program in fifty-two gets breakpoints it did not ask for. They are read
+by default anyway, because a feature you have to remember to switch on is not
+worth having — but the count is announced rather than applied quietly, since an
+unexplained stop is worse than an unwanted one:
+
+```
+4 breakpoints from @ markers — B clears them
+```
+
+`B` clears them like any other breakpoint. Nothing is ever written back:
+breakpoints you add with `b` during a session live only as long as the session,
+and the debugger does not edit your source. A marker in the file and a
+breakpoint set with `b` are the same thing with one difference — which of them
+is still there tomorrow.
+
+```bash
+gyrus-debug program.bf --no-markers     # ignore them
+gyrus-debug program.bf --marker '#'     # use a different character
+```
+
+`--marker` refuses the eight commands and `*`: a marker that is also an
+instruction would break on every one of them, and `*` starts a comment, so every
+marker would sit inside one and never bind.
+
+A marker with no instruction after it is reported rather than silently dropped.
+
+The two claims above about bundled programs — `char.bf`'s trailing marker and
+`calc.bf`'s four — are checked by a test rather than left to rot, since both
+would break silently the moment either file were edited.
+
 ## Stepping over and out
 
 Step over (`n`) and step out (`o`) are both "run until execution leaves this
