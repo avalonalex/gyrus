@@ -673,11 +673,13 @@ debug symbols, the string-to-BrainFuck compiler, the program generator, the
 **Not built**: a REPL and an AOT backend on the JIT's translator. Neither has
 code, or anything beyond the idea.
 
-**Being built**: the macro preprocessor (`gyrus-macro`). `@define`, repeat
-counts, `@var`/`@to`/`@here` with cursor tracking, `@macro` with parameters,
-and the source map all work — a runtime error in a `.bfm` reports the line and
-column somebody wrote. `@include`, the conditionals, and the CLI wiring are not
-there yet.
+**Being built**: the macro preprocessor (`gyrus-macro`). The scoped language is
+complete — `@define`, repeat counts, `@var`/`@to`/`@here` with cursor tracking,
+`@macro` with parameters — and so is the source map, so a runtime error in a
+`.bfm` reports the line and column somebody wrote. Its oracle generator
+(`tests/oracle.rs`) is the second thing in the repository that proves
+correctness rather than agreement between engines. `@include`, the
+conditionals, and the CLI wiring are not there yet.
 `PRD/macro-preprocessor-design.md` holds what is still to be decided;
 `docs/architecture.md` describes what the crate does.
 

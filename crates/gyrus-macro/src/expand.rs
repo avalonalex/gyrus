@@ -82,6 +82,15 @@
 //!    the worst way for this to fail. Whether the body balances is not known
 //!    until the `]`, which is why the check lives there.
 //!
+//! These three rules are not novel, and it is worth knowing they were reached
+//! before: Frans Faase's bfmacro
+//! (<https://www.cs.tufts.edu/~couch/bfmacro/bfmacro/>), which the design cites
+//! as its inspiration, tracks the pointer statically through balanced loops,
+//! gives `[>]` as its own example of the case that defeats it, makes its `to`
+//! an error afterwards, and provides an `at` directive to re-anchor. Arriving
+//! at the same answer independently is reassurance rather than a coincidence:
+//! there is not much room in this problem.
+//!
 //! `@here NAME` re-establishes a position without emitting anything, for the
 //! case rule 2 exists for: after `[<]` the programmer knows where the cursor
 //! landed and the expander cannot. It is trusted rather than checked -- the
