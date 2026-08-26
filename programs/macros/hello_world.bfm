@@ -1,0 +1,46 @@
+* Hello World, with the counted runs written as the numbers they are.
+*
+* This expands to programs/basic/hello_world.bf character for character, which
+* is what makes it a test as well as an example: the same program, said in a
+* way you can check, against one whose output the manifest already pins down.
+*
+* Nothing here is a new abstraction yet -- no variables, no macros. It is the
+* smallest thing that shows the point of the preprocessor: a run of eight '+'
+* is a number, and reads better as one.
+
+* --- setup: eight rounds of a loop that fills four cells -------------------
+
+@define SEED   8    * outer counter, in cell 0
+@define ROW    4    * inner counter, and the step back to it
+
+@define FILL_A 2    * what each round adds to the four cells it fills
+@define FILL_B 3
+@define FILL_C 3
+@define FILL_D 1
+
++{SEED}[>+{ROW}[>+{FILL_A}>+{FILL_B}>+{FILL_C}>+{FILL_D}<{ROW}-]>+>+>->>+[<]<-]
+
+* --- print: each adjustment named for the letter it lands on ---------------
+
+@define E_DOWN    3
+@define L_UP      7
+@define O_UP      3
+@define W_DOWN    1
+@define R_UP      3
+@define L_DOWN    6
+@define D_DOWN    8
+@define BANG_UP   1
+@define NEWLINE   2
+
+>>.               * H
+>-{E_DOWN}.       * e
++{L_UP}..         * l l
++{O_UP}.          * o
+>>.               * space
+<-{W_DOWN}.       * W
+<.                * o
++{R_UP}.          * r
+-{L_DOWN}.        * l
+-{D_DOWN}.        * d
+>>+{BANG_UP}.     * !
+>+{NEWLINE}.      * newline

@@ -896,6 +896,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gyrus-macro"
+version = "0.4.0"
+dependencies = [
+ "gyrus",
+ "gyrus-corpus",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "gyrus-tool"
 version = "0.4.0"
 dependencies = [

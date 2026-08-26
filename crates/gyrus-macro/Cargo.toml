@@ -1,0 +1,23 @@
+[package]
+name = "gyrus-macro"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Macro preprocessor for BrainFuck: expands .bfm source to pure BrainFuck, carrying an origin map so runtime errors name the macro source"
+license.workspace = true
+repository.workspace = true
+
+# Deliberately two dependencies. The PRD proposed regex, lazy_static, serde and
+# serde_json as well; none earns its place yet. The scanner is a char loop, as
+# `gyrus`'s parser and `gyrus-corpus`'s TOML reader are, and the JSON source-map
+# export has no reader -- when one appears, `serde_json` is already a workspace
+# dependency.
+[dependencies]
+gyrus.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The same workspace-root helper both corpus suites use, so these tests find
+# programs/ the way every other test in the repository does.
+gyrus-corpus.workspace = true
