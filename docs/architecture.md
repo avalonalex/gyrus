@@ -27,6 +27,7 @@ Back to the [README](../README.md).
 | `gyrus-tui` | Shared terminal widgets: source, memory, tape, output, status, help |
 | `gyrus-debug` | The `gyrus-debug` binary — step through a program with the tape in view |
 | `gyrus-tutorial` | The `gyrus-tutorial` binary — thirteen lessons in BrainFuck |
+| `gyrus-macro` | The `.bfm` preprocessor: expansion, and the map back to macro source |
 | `gyrus-corpus` | Test support: the program manifest, parsed once for both corpus suites |
 
 The file-by-file layout is in [Project Structure](#project-structure) below;
@@ -302,7 +303,13 @@ gyrus/
 │   │       ├── state.rs     # Session state and the rule for when to stop
 │   │       ├── hook.rs      # The ExecutionHook and the I/O adapters
 │   │       └── ui.rs        # Drawing and key handling
-│   ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
+│   ├── gyrus-macro/ # `.bfm` preprocessor — expansion and its source map
+   │   ├── src/
+   │   │   ├── expand.rs    # One pass: @define, repeat counts, comments, brackets
+   │   │   ├── source_map.rs # Origin per emitted byte, and the DebugInfo remap
+   │   │   └── error.rs     # Located errors, rendered like a parse error
+   │   └── tests/           # Round trip against a manifest program, and locations
+   ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
 │   │   └── src/
 │   │       ├── lesson.rs    # The thirteen lessons and their criteria
 │   │       ├── trace.rs     # Recording every step of a run, for scrubbing

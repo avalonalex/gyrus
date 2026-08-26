@@ -8,9 +8,9 @@
 //!
 //! # How it reaches the error messages
 //!
-//! It composes onto `gyrus` with no change to that crate. [`DebugInfo`] is a
-//! map from step index to source location plus the source text, and all three
-//! of `with_source`, `record` and `lookup` are public. So:
+//! Located runtime errors need no change to `gyrus`. [`DebugInfo`] is a map
+//! from step index to source location plus the source text, and all three of
+//! `with_source`, `record` and `lookup` are public. So:
 //!
 //! 1. `parse_with_debug` on the expansion gives step index -> location in the
 //!    *expanded* BrainFuck.
@@ -22,9 +22,24 @@
 //! Runtime errors carry `source_location` and are rendered by
 //! `format_with_source(&source)`, which takes the text separately -- so once
 //! the table is remapped, every located error names the macro source for free.
-//! Loop call stacks come along too: `DebugTrackingHook` builds them from a
-//! plain `debug_info.lookup(index)`, not from the loop metadata this cannot
-//! rebuild from outside `gyrus`.
+//! Loop call stacks come along too, which is not obvious: `DebugTrackingHook`
+//! builds them from a plain `debug_info.lookup(index)`.
+//!
+//! # What a remapped table loses
+//!
+//! Its *loop metadata*, and this crate cannot put it back. `DebugInfo`
+//! exposes `record_loop_metadata`, but `LoopMetadata` lives in a private
+//! module and is not re-exported, so no foreign crate can construct one --
+//! `loop_count()` on a remapped table is zero.
+//!
+//! Nothing in the error path reads it, which is why located errors and loop
+//! call stacks are unaffected. `gyrus-debug` does read it, for loop
+//! navigation, so running a `.bfm` under the debugger will need a change in
+//! `gyrus` -- either exporting `LoopMetadata` or, better, a `DebugInfo::remap`
+//! that keeps the whole table consistent. That is not the only thing standing
+//! between the debugger and `.bfm`: its position map holds one instruction per
+//! position, and remapping is many-to-one, since every instruction of `+{65}`
+//! shares a column.
 
 use gyrus::{DebugInfo, SourceLocation};
 
@@ -42,7 +57,12 @@ pub struct Expansion {
 
 impl Expansion {
     pub(crate) fn new(source: String, brainfuck: String, origins: Vec<SourceLocation>) -> Self {
-        debug_assert_eq!(
+        // Not `debug_assert_eq!`: this is the crate's whole correctness
+        // claim, and a release build is the one users run. An emit path added
+        // later that forgot its origin would otherwise point every byte past
+        // the divergence at a confidently wrong line. It is one comparison per
+        // file.
+        assert_eq!(
             brainfuck.len(),
             origins.len(),
             "every emitted byte must carry an origin"

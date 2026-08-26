@@ -6,6 +6,8 @@
 //! symmetry is the point -- a macro error and a BrainFuck error should be the
 //! same kind of message, because to the person reading them they are.
 
+use std::io::Write;
+
 use gyrus::SourceLocation;
 use thiserror::Error;
 
@@ -24,6 +26,9 @@ pub enum MacroError {
         location: SourceLocation,
         /// Everything defined at the point of use, for the "did you mean" line.
         defined: Vec<String>,
+        /// Whether a later line defines it. Expansion is a single pass, so
+        /// this is a common and otherwise baffling way to fail.
+        defined_later: bool,
     },
 
     #[error("'@{name}' is not implemented yet at {location}")]
@@ -76,10 +81,19 @@ pub enum MacroError {
     #[error("Unmatched ']' at {location}")]
     UnmatchedCloseBracket { location: SourceLocation },
 
-    #[error("Expansion is too large: {count} repetitions at {location} exceeds the {limit} limit")]
-    ExpansionTooLarge {
+    #[error("Repeat count too large: {count} at {location} exceeds the {limit} limit")]
+    RepeatTooLarge {
         count: u64,
         limit: u64,
+        location: SourceLocation,
+    },
+
+    #[error(
+        "Expansion is too large: {emitted} instructions at {location} exceeds the {limit} limit"
+    )]
+    ExpansionTooLarge {
+        emitted: usize,
+        limit: usize,
         location: SourceLocation,
     },
 }
@@ -98,27 +112,49 @@ impl MacroError {
             | MacroError::StrayBrace { location, .. }
             | MacroError::UnmatchedOpenBracket { location }
             | MacroError::UnmatchedCloseBracket { location }
+            | MacroError::RepeatTooLarge { location, .. }
             | MacroError::ExpansionTooLarge { location, .. } => *location,
         }
     }
 
     /// What to try instead.
+    ///
+    /// Matched exhaustively on purpose. A `_ => None` arm compiles for every
+    /// variant added later, so each one would ship hintless by default rather
+    /// than by decision -- and with `@var`, `@to` and `@macro` still to come
+    /// that is a standing invitation. The variants that genuinely have nothing
+    /// to add carry their advice in `detail` and say so here.
     pub fn hint(&self) -> Option<String> {
         match self {
-            MacroError::UndefinedSymbol { name, defined, .. } => Some(match nearest(name, defined) {
-                Some(near) => format!("Did you mean '{near}'? Symbols are defined before use, with @define."),
-                None if defined.is_empty() => {
-                    "Nothing is defined yet. Add `@define NAME VALUE` above this line.".to_string()
+            MacroError::UndefinedSymbol {
+                name,
+                defined,
+                defined_later,
+                ..
+            } => Some(if *defined_later {
+                format!(
+                    "'{name}' is defined below this line. Expansion is a single pass, \
+                     so a @define has to come before every use of it."
+                )
+            } else {
+                match nearest(name, defined) {
+                    Some(near) => format!("Did you mean '{near}'?"),
+                    None if defined.is_empty() => {
+                        "Nothing is defined above this line. Add `@define NAME VALUE` before it."
+                            .to_string()
+                    }
+                    None => format!("Defined above this line: {}.", defined.join(", ")),
                 }
-                None => format!("Defined so far: {}.", defined.join(", ")),
             }),
             MacroError::PlannedDirective { name, .. } => Some(format!(
                 "@{name} is part of the design but not built yet. \
                  Today the expander understands @define and repeat counts like +{{N}}."
             )),
-            MacroError::UnknownDirective { .. } => {
-                Some("The expander understands @define. Write a literal '@' as a comment character anywhere else.".to_string())
-            }
+            MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => Some(
+                "The expander understands @define. A directive must start its line; \
+                 an '@' anywhere else is an ordinary comment character."
+                    .to_string(),
+            ),
             MacroError::Redefinition { first, .. } => Some(format!(
                 "It was first defined at {first}. A symbol is defined once, so that a name means one thing."
             )),
@@ -126,17 +162,34 @@ impl MacroError {
                 "Repeat counts apply to + - < > . and , -- repeating a bracket would not mean anything."
                     .to_string(),
             ),
-            MacroError::UnmatchedOpenBracket { .. } => {
-                Some("Every '[' needs a matching ']'. This is checked before expansion so the position is the one you wrote.".to_string())
+            MacroError::StrayBrace { brace: '{', .. } => Some(
+                "A repeat count attaches to the instruction before it, with nothing between: \
+                 `+{3}`, not `+ {3}`."
+                    .to_string(),
+            ),
+            MacroError::StrayBrace { .. } => {
+                Some("There is no repeat count open here for a '}' to close.".to_string())
             }
+            MacroError::UnmatchedOpenBracket { .. } => Some(
+                "Every '[' needs a matching ']'. This is checked before expansion so the \
+                 position is the one you wrote."
+                    .to_string(),
+            ),
             MacroError::UnmatchedCloseBracket { .. } => {
                 Some("This ']' closes a loop that was never opened.".to_string())
             }
-            MacroError::ExpansionTooLarge { .. } => Some(
+            MacroError::RepeatTooLarge { .. } => Some(
                 "A repeat count this large is almost always a mistake in the constant it came from."
                     .to_string(),
             ),
-            _ => None,
+            MacroError::ExpansionTooLarge { .. } => Some(
+                "The whole file expands to more instructions than this. The map holds a source \
+                 position per emitted byte, so an expansion this size costs far more memory than \
+                 it looks like it should."
+                    .to_string(),
+            ),
+            // Its `detail` is the hint: it names what was expected, in place.
+            MacroError::BadRepeatCount { .. } => None,
         }
     }
 
@@ -190,29 +243,86 @@ fn within_one_edit(a: &str, b: &str) -> bool {
 
 /// Two lines either side of the offending line, with a caret under the column.
 ///
-/// The shape deliberately matches `gyrus`'s own source context -- five-column
-/// line numbers, a `|` gutter -- so that a macro error and a BrainFuck error
-/// look like they came from the same program, because they did.
+/// Rendered by `gyrus`'s own `SyntaxHighlighter`, not by an imitation of it.
+/// An earlier version hand-rolled a `{:5} | ` gutter, which matched the plain
+/// `extract_source_context` -- but `format_with_source` calls the *highlighted*
+/// variant, whose gutter is `   N | ` in colour, so a macro error and a runtime
+/// error for the same file visibly disagreed. Going through the public
+/// highlighter is what makes "they look like they came from the same program"
+/// true rather than asserted.
 fn context(source: &str, location: SourceLocation) -> String {
-    let lines: Vec<&str> = source.lines().collect();
-    let line_idx = location.line.saturating_sub(1);
-    let start = line_idx.saturating_sub(2);
-    let end = (line_idx + 3).min(lines.len());
+    use gyrus::syntax::SyntaxHighlighter;
+    use termcolor::{Ansi, Color, ColorSpec, WriteColor};
 
-    let mut out = String::new();
-    for (number, line) in lines.iter().enumerate().take(end).skip(start) {
-        out.push_str(&format!("{:5} | {}\n", number + 1, line));
-        if number == line_idx {
-            let spaces = " ".repeat(location.column.saturating_sub(1));
-            out.push_str(&format!("      | {spaces}^\n"));
-        }
+    let highlighted = SyntaxHighlighter::new()
+        .show_line_numbers(true)
+        .highlight(source);
+
+    let line_idx = location.line.saturating_sub(1);
+    let total = highlighted.lines().len();
+    let start = line_idx.saturating_sub(2);
+    let end = (line_idx + 3).min(total);
+
+    let mut buffer = Vec::new();
+    if start < total {
+        highlighted
+            .write_ansi_range(&mut buffer, start, (line_idx + 1).min(total))
+            .expect("writing to a Vec cannot fail");
     }
-    out
+
+    // The gutter is "   N | " -- four columns plus three -- and the column is
+    // 1-indexed, so the caret sits at column + 6. Same arithmetic as `gyrus`.
+    let mut ansi = Ansi::new(&mut buffer);
+    write!(ansi, "{}", " ".repeat(location.column + 6)).expect("writing to a Vec cannot fail");
+    let mut caret = ColorSpec::new();
+    caret.set_fg(Some(Color::Red)).set_bold(true);
+    ansi.set_color(&caret)
+        .expect("setting a colour cannot fail");
+    write!(ansi, "^").expect("writing to a Vec cannot fail");
+    ansi.reset().expect("resetting cannot fail");
+    writeln!(ansi).expect("writing to a Vec cannot fail");
+
+    if line_idx + 1 < end {
+        highlighted
+            .write_ansi_range(&mut buffer, line_idx + 1, end)
+            .expect("writing to a Vec cannot fail");
+    }
+
+    String::from_utf8(buffer).expect("the highlighter emits UTF-8")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rendering without its colours. `gyrus`'s highlighter emits an
+    /// escape sequence per character, so no line of the source survives as a
+    /// contiguous substring of the coloured output.
+    fn strip_ansi(rendered: &str) -> String {
+        let mut out = String::new();
+        let mut chars = rendered.chars();
+        while let Some(c) = chars.next() {
+            if c != '\u{1b}' {
+                out.push(c);
+                continue;
+            }
+            if chars.next() == Some('[') {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_stray_open_brace_names_the_space_that_caused_it() {
+        let error = crate::expand("+ {3}\n").unwrap_err();
+        let hint = error.hint().expect("a hint");
+        assert!(hint.contains("nothing between"), "{hint}");
+    }
 
     #[test]
     fn a_caret_lands_under_the_column_it_names() {
@@ -221,14 +331,22 @@ mod tests {
             name: "B".to_string(),
             location: SourceLocation::new(2, 3, 15),
             defined: vec!["A".to_string()],
+            defined_later: false,
         };
-        let rendered = error.format_with_source(source);
+        let rendered = strip_ansi(&error.format_with_source(source));
         let caret = rendered
             .lines()
             .find(|l| l.contains('^'))
             .expect("a caret line");
-        // Column 3 of "+{B}" is the 'B', under a "      | " gutter.
-        assert_eq!(caret, "      |   ^");
+        // The gutter is `gyrus`'s own -- "   N | ", seven characters -- so a
+        // caret for column 3 sits at column + 6.
+        assert_eq!(caret.find('^'), Some(3 + 6), "caret line was {caret:?}");
+        // And it lands under the character it names, on the rendered line.
+        let line = rendered
+            .lines()
+            .find(|l| l.contains("+{B}"))
+            .expect("the offending line");
+        assert_eq!(line.chars().nth(3 + 6), Some('B'), "line was {line:?}");
         assert!(rendered.contains("Did you mean 'A'?"), "{rendered}");
     }
 
@@ -238,7 +356,7 @@ mod tests {
             name: "var".to_string(),
             location: SourceLocation::new(1, 1, 0),
         };
-        let rendered = error.format_with_source("@var x at 0\n");
+        let rendered = strip_ansi(&error.format_with_source("@var x at 0\n"));
         assert!(rendered.contains("not implemented yet"), "{rendered}");
         assert!(rendered.contains("@define"), "{rendered}");
     }

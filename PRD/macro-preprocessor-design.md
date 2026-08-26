@@ -1,7 +1,7 @@
 # PRD: BrainFuck Macro Preprocessor
 
 **Status**: First slice in progress. `gyrus-macro` exists with `@define`,
-repeat counts and the source map; see "Built so far" below
+repeat counts and the source map; see "What is left" below
 **Last Updated**: 2026-08-26
 **Priority**: Medium — the next thing to build, and started
 
@@ -80,6 +80,20 @@ The cost, stated rather than discovered later: `--no-default-features` builds
 without `--jit`, so in that binary a long-running `.bfm` has only the
 tree-walker and no way to trade locations for speed.
 
+**A directive must start its line; `@` elsewhere is prose.** Reserving `@`
+everywhere was the first attempt, and it hard-errors on converting an existing
+program: `calc.bf`, `pi.bf` and `char.bf` all contain one in their comments,
+and BrainFuck prose is free-form by convention. Line-start-only follows `cpp`,
+costs nothing, and keeps directives unambiguous. `{` and `}` stay reserved
+everywhere — no bundled program has either, and reserving them buys the error
+for the likeliest typo there is, a space between an instruction and its count.
+
+The other half of the rule is that a directive *owns* the rest of its line. It
+used to skip to the newline silently, which discarded any instruction written
+after a `@define` — and a discarded `]` went on to report an unmatched `[` that
+the source plainly matched. Refusing is the only acceptable behaviour: quietly
+dropping code somebody wrote is the one thing a preprocessor must not do.
+
 **Brackets are balanced in the expander, not left to the parser.** The parser
 would catch an unbalanced `[`, but it renders the source context into the error
 at parse time, so the position the user sees would be a column in generated
@@ -105,34 +119,31 @@ byte-identical to `programs/basic/hello_world.bf`, which is already a manifest
 case, so the round-trip test inherits an output that three engines already
 check rather than committing a duplicate.
 
-## Built so far
+## What is left
 
-`crates/gyrus-macro/`, against the public API of `gyrus` only:
+The expander exists. What it does is described where every other crate's job
+is, in [`docs/architecture.md`](../docs/architecture.md), and in the code; this
+document keeps only what is still to be decided or built. A running inventory
+of shipped behaviour is exactly the thing this directory deleted twelve
+thousand lines of.
 
-- `@define NAME VALUE` — constants, single pass, define before use. The value
-  may be a number or an earlier name.
-- `OP{N}` for `+ - < > . ,` — repetition by a number or a name. Brackets are
-  deliberately not repeatable.
-- Comments: `*` to end of line, and any non-instruction character.
-- `@var`, `@to`, `@macro`, `@include`, `@ifdef`/`@ifndef`/`@endif` are rejected
-  by name as planned-but-unbuilt, and `{` and `}` are reserved. A `.bfm`
-  written today therefore cannot change meaning when those arrive.
-- The origin map, and `Expansion::remap` onto `DebugInfo`.
-- Errors with the same shape as a parse error: source line, caret, hint, and a
-  one-edit "did you mean" over the defined names.
-
-Tests: expander unit tests including an exact-origin invariant (every emitted
-byte points at a character that *is* that instruction);
-`programs/macros/hello_world.bfm` expanding character for character to
-`programs/basic/hello_world.bf` and printing `Hello World!`; and exact
-line-and-column assertions for a checked-cell overflow, an out-of-bounds
-access and a step limit — including a test that the same failure reports
-expansion coordinates *without* the remap, so the remap cannot be silently
-doing nothing.
-
-**Not built yet**, in the order the plan wants them: `@var`/`@to` with pointer
+**Not built**, in the order the plan wants them: `@var`/`@to` with pointer
 tracking, `@macro` with parameters, the oracle generator, `gyrus-tool expand`,
 and `gyrus` accepting `.bfm`.
+
+**A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
+`DebugInfo` carries locations but not loop metadata, because `LoopMetadata`
+lives in a private module and is not re-exported, so `record_loop_metadata`
+takes a type no foreign crate can build. Nothing in the error path reads it —
+which is why located errors and loop call stacks are unaffected — but
+`gyrus-debug` does, for loop navigation. Closing it means either exporting
+`LoopMetadata` or, better, a `DebugInfo::remap` inside `gyrus` that keeps the
+whole table consistent. It is not the only obstacle: the debugger's position
+map holds one instruction per position, and remapping is many-to-one, since
+every instruction of `+{65}` shares a column.
+
+`crates/gyrus-macro/tests/source_locations.rs` asserts the loss, so closing it
+shows up as a failing test rather than as nobody noticing.
 
 ### The hazard to settle before `@to`
 

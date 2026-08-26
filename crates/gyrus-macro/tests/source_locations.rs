@@ -193,3 +193,26 @@ fn without_the_remap_the_same_failure_reports_expansion_coordinates() {
         "{remapped:?}"
     );
 }
+
+/// The known gap, pinned so it is a fact rather than a claim.
+///
+/// A remapped table carries locations but not loop metadata: `LoopMetadata`
+/// lives in a private module of `gyrus` and is not re-exported, so
+/// `record_loop_metadata` takes a type no foreign crate can build. Nothing in
+/// the error path reads it -- which is why the tests above pass and why loop
+/// call stacks survive -- but `gyrus-debug` does, for loop navigation.
+///
+/// This asserts the loss so that closing it in `gyrus` shows up here as a
+/// failing test rather than as nobody noticing.
+#[test]
+fn a_remapped_table_loses_its_loop_metadata() {
+    let expansion = gyrus_macro::expand("+{2}[>+<-]\n").expect("expands");
+    let (_, expanded) = parse_with_debug(expansion.brainfuck()).expect("parses");
+    assert_eq!(expanded.loop_count(), 1, "the parser found no loop to lose");
+    assert_eq!(
+        expansion.remap(&expanded).loop_count(),
+        0,
+        "loop metadata now survives the remap -- update the note in source_map.rs \
+         and see whether gyrus-debug can take a .bfm"
+    );
+}

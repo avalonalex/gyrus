@@ -14,7 +14,7 @@
 //! function that emits a byte, and there is no path here that emits one
 //! without it.
 //!
-//! ## It needs nothing from `gyrus`
+//! ## Located errors need nothing from `gyrus`
 //!
 //! `Expansion::remap` rewrites the `DebugInfo` that `parse_with_debug`
 //! produced for the expansion so that it names the `.bfm` instead. Everything
@@ -22,6 +22,11 @@
 //! already public, so located runtime errors, loop call stacks included, come
 //! out in macro coordinates without a line changing in the interpreter. That
 //! mirrors how the debugger was built on the hook system.
+//!
+//! One thing a remapped table does *not* carry is loop metadata, which no
+//! foreign crate can construct. Nothing in the error path reads it;
+//! `gyrus-debug` does, so stepping through a `.bfm` will need a change in
+//! `gyrus`. [`Expansion::remap`] says what kind.
 //!
 //! ## What it understands today
 //!

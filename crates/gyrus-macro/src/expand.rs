@@ -14,10 +14,22 @@
 //! - `*` to end of line, and any character that is not a BrainFuck instruction:
 //!   comments, dropped from the expansion.
 //!
-//! `@` followed by anything else is an error rather than a comment, and so are
-//! `{` and `}` outside a repeat count. Reserving them is what lets `@var`,
-//! `@to` and `@macro` arrive later without changing what an existing `.bfm`
-//! means.
+//! # Two rules about what is reserved
+//!
+//! **A directive must start its line**, after optional blanks, and owns the
+//! rest of it. Elsewhere `@` is an ordinary comment character, because
+//! BrainFuck prose is free-form and three programs in `programs/` already
+//! contain one -- reserving `@` everywhere would hard-error on converting them.
+//! Owning the line is the other half: an instruction written after a `@define`
+//! is refused rather than dropped, because silently discarding code somebody
+//! wrote is the one thing a preprocessor must not do.
+//!
+//! **`{` and `}` are reserved everywhere.** Unlike `@` this costs nothing --
+//! no bundled program has either in its prose -- and it buys the error for the
+//! likeliest typo of all, a space between an instruction and its count.
+//!
+//! Between them, a `.bfm` written today cannot change meaning when `@var`,
+//! `@to` and `@macro` arrive.
 //!
 //! # Brackets are checked here
 //!
@@ -42,6 +54,15 @@ use crate::source_map::Expansion;
 /// is already far past useful.
 pub const REPEAT_LIMIT: u64 = 1_000_000;
 
+/// The most instructions one file may expand to, across every repeat count.
+///
+/// [`REPEAT_LIMIT`] alone bounds nothing: fifty legal `+{1000000}` lines are
+/// fifty megabytes of BrainFuck and, because the origin map holds a
+/// `SourceLocation` per emitted byte, more than a gigabyte of map. That is a
+/// 550-byte input, and the next step for this crate is a command line reading
+/// files it did not write.
+pub const EXPANSION_LIMIT: usize = 1_000_000;
+
 /// Instructions a repeat count may follow. Brackets are deliberately absent:
 /// `[{3}` would mean three loop openings, which is not a thing anyone means.
 const REPEATABLE: [char; 6] = ['+', '-', '<', '>', '.', ','];
@@ -52,6 +73,7 @@ pub fn expand(source: &str) -> Result<Expansion, MacroError> {
 }
 
 struct Scanner {
+    source: String,
     chars: Vec<char>,
     at: SourceLocation,
     constants: HashMap<String, (u64, SourceLocation)>,
@@ -66,6 +88,7 @@ struct Scanner {
 impl Scanner {
     fn new(source: &str) -> Self {
         Self {
+            source: source.to_string(),
             chars: source.chars().collect(),
             at: SourceLocation::start(),
             constants: HashMap::new(),
@@ -80,7 +103,7 @@ impl Scanner {
         while let Some(c) = self.peek() {
             match c {
                 '*' => self.skip_line(),
-                '@' => self.directive()?,
+                '@' if self.at_line_start() => self.directive()?,
                 '{' | '}' => {
                     return Err(MacroError::StrayBrace {
                         brace: c,
@@ -99,14 +122,25 @@ impl Scanner {
             });
         }
 
-        let source: String = self.chars.iter().collect();
-        Ok(Expansion::new(source, self.out, self.origins))
+        Ok(Expansion::new(self.source, self.out, self.origins))
     }
 
     // ---- character-level helpers -------------------------------------------
 
     fn peek(&self) -> Option<char> {
         self.chars.get(self.at.offset).copied()
+    }
+
+    /// Whether only blanks precede the cursor on its line.
+    ///
+    /// Asked only when the cursor is on `@`, which is rare, so walking back to
+    /// the newline is cheaper than a flag every `bump` would have to maintain.
+    fn at_line_start(&self) -> bool {
+        self.chars[..self.at.offset]
+            .iter()
+            .rev()
+            .take_while(|&&c| c != '\n')
+            .all(|&c| c == ' ' || c == '\t')
     }
 
     fn bump(&mut self) {
@@ -170,6 +204,16 @@ impl Scanner {
         } else {
             1
         };
+
+        let total = self.out.len().saturating_add(count as usize);
+        if total > EXPANSION_LIMIT {
+            return Err(MacroError::ExpansionTooLarge {
+                emitted: total,
+                limit: EXPANSION_LIMIT,
+                location: origin,
+            });
+        }
+
         for _ in 0..count {
             self.emit(c, origin);
         }
@@ -232,10 +276,11 @@ impl Scanner {
         }
 
         let count = if body.chars().all(|c| c.is_ascii_digit()) {
+            // Reporting u64::MAX here would put a number in front of the user
+            // that they never typed.
             body.parse::<u64>()
-                .map_err(|_| MacroError::ExpansionTooLarge {
-                    count: u64::MAX,
-                    limit: REPEAT_LIMIT,
+                .map_err(|_| MacroError::BadRepeatCount {
+                    detail: format!("'{body}' does not fit in a 64-bit number"),
                     location: open,
                 })?
         } else if is_identifier(body) {
@@ -248,7 +293,7 @@ impl Scanner {
         };
 
         if count > REPEAT_LIMIT {
-            return Err(MacroError::ExpansionTooLarge {
+            return Err(MacroError::RepeatTooLarge {
                 count,
                 limit: REPEAT_LIMIT,
                 location: open,
@@ -265,7 +310,28 @@ impl Scanner {
                 name: name.to_string(),
                 location,
                 defined: self.defined.clone(),
+                defined_later: self.defined_later(name),
             })
+    }
+
+    /// Whether a later line defines `name`.
+    ///
+    /// Asked only on the way to an error, and worth the scan: single-pass
+    /// define-before-use is an unusual constraint, and "nothing is defined
+    /// yet" is a poor thing to read directly above a rendering of the
+    /// definition two lines down.
+    fn defined_later(&self, name: &str) -> bool {
+        let rest: String = self.chars[self.at.offset.min(self.chars.len())..]
+            .iter()
+            .collect();
+        rest.lines().any(|line| {
+            let Some(tail) = line.trim_start().strip_prefix("@define") else {
+                return false;
+            };
+            let tail = tail.trim_start();
+            tail.strip_prefix(name)
+                .is_some_and(|after| !after.starts_with(|c: char| is_identifier_char(c)))
+        })
     }
 
     fn directive(&mut self) -> Result<(), MacroError> {
@@ -298,6 +364,17 @@ impl Scanner {
                 directive: "define".to_string(),
                 detail: "expected a name, as in `@define CHAR_A 65`".to_string(),
                 location: at_name,
+            });
+        }
+
+        // Before resolving the value, not after: a redefinition whose value is
+        // also wrong should report the redefinition, or the user fixes the
+        // value and only then learns the name was taken.
+        if let Some((_, first)) = self.constants.get(&name) {
+            return Err(MacroError::Redefinition {
+                name,
+                first: *first,
+                location,
             });
         }
 
@@ -338,22 +415,34 @@ impl Scanner {
             });
         };
 
-        if let Some((_, first)) = self.constants.get(&name) {
-            return Err(MacroError::Redefinition {
-                name,
-                first: *first,
-                location,
-            });
+        // A directive owns the rest of its line, and says so rather than
+        // dropping what follows. Skipping silently discarded any instruction
+        // written after the value -- and a discarded ']' went on to blame a
+        // '[' that the source plainly matched.
+        self.skip_blanks();
+        match self.peek() {
+            None | Some('\n') => {}
+            Some('*') => self.skip_line(),
+            Some(c) => {
+                return Err(MacroError::MalformedDirective {
+                    directive: "define".to_string(),
+                    detail: format!(
+                        "'{c}' follows the value. A @define takes the rest of its line: \
+                         move this to a line of its own, or start a comment with '*'"
+                    ),
+                    location: self.at,
+                });
+            }
         }
+
         self.constants.insert(name.clone(), (value, location));
         self.defined.push(name);
-
-        // The rest of the line is a comment. Without this a stray instruction
-        // after the value would be emitted, which reads as the definition
-        // having done something it did not.
-        self.skip_line();
         Ok(())
     }
+}
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 fn is_identifier(text: &str) -> bool {
@@ -361,7 +450,7 @@ fn is_identifier(text: &str) -> bool {
     chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && chars.all(is_identifier_char)
 }
 
 #[cfg(test)]
@@ -394,23 +483,15 @@ mod tests {
             );
             // The line and column must agree with the offset, or a caret lands
             // on the wrong character even though the offset is right.
-            let before = &source[..source
-                .char_indices()
-                .nth(origin.offset)
-                .map(|(i, _)| i)
-                .unwrap()];
+            let before: String = chars[..origin.offset].iter().collect();
             assert_eq!(
                 origin.line,
                 before.matches('\n').count() + 1,
                 "line disagrees with offset at byte {offset}"
             );
+            let column = before.chars().rev().take_while(|&c| c != '\n').count() + 1;
             assert_eq!(
-                origin.column,
-                before.chars().count()
-                    - before
-                        .rfind('\n')
-                        .map_or(0, |i| before[..i].chars().count() + 1)
-                    + 1,
+                origin.column, column,
                 "column disagrees with offset at byte {offset}"
             );
         }
@@ -443,22 +524,101 @@ mod tests {
 
     #[test]
     fn comments_do_not_reach_the_expansion() {
-        // A star comment, and characters that are not instructions at all.
         assert_eq!(expanded("+ * this ->>> is prose\nhello +"), "++");
     }
 
     #[test]
-    fn the_rest_of_a_define_line_is_a_comment() {
-        // Without this the trailing '+' would be emitted, and the definition
-        // would appear to have done something.
+    fn a_star_comment_may_follow_a_define() {
         assert_eq!(expanded("@define A 1 * a note +++\n+{A}"), "+");
     }
+
+    // --- what the review found -------------------------------------------
+
+    #[test]
+    fn an_instruction_after_a_define_is_refused_rather_than_dropped() {
+        // This used to expand to "+", silently discarding three instructions
+        // somebody wrote. Dropping code is the one thing a preprocessor must
+        // not do quietly.
+        let error = expand("@define A 1 +++\n+{A}").unwrap_err();
+        let MacroError::MalformedDirective { detail, .. } = &error else {
+            panic!("expected a malformed directive, got {error:?}");
+        };
+        assert!(detail.contains("rest of its line"), "{detail}");
+    }
+
+    #[test]
+    fn a_directive_must_start_its_line() {
+        // Not a directive here, so it is prose -- and the ']' that follows is
+        // a real bracket rather than part of a swallowed comment tail. This
+        // shape used to report an unmatched '[' that the source plainly
+        // matched.
+        assert_eq!(expanded("+[@define A 1 ]+"), "+[]+");
+    }
+
+    #[test]
+    fn prose_may_contain_an_at_sign() {
+        // calc.bf, pi.bf and char.bf all have one. Reserving '@' everywhere
+        // would hard-error on converting any of them.
+        assert_eq!(expanded("+ see @foo for details\n+"), "++");
+    }
+
+    #[test]
+    fn a_name_defined_below_is_told_so_rather_than_that_nothing_is_defined() {
+        let error = expand("+{A}\n@define A 5\n").unwrap_err();
+        let hint = error.hint().expect("a hint");
+        assert!(hint.contains("defined below this line"), "{hint}");
+        assert!(hint.contains("single pass"), "{hint}");
+    }
+
+    #[test]
+    fn the_whole_file_has_an_expansion_budget() {
+        // Each count is legal on its own; together they are not. Fifty of
+        // these was a 550-byte file and more than a gigabyte of origin map.
+        let source = format!("+{{{REPEAT_LIMIT}}}\n+{{{REPEAT_LIMIT}}}\n");
+        let error = expand(&source).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                MacroError::ExpansionTooLarge {
+                    limit: EXPANSION_LIMIT,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_count_too_big_for_a_u64_reports_what_was_written() {
+        // Never the u64::MAX it failed to parse into: that is a number the
+        // user did not type.
+        let error = expand("+{99999999999999999999999}\n").unwrap_err();
+        let MacroError::BadRepeatCount { detail, .. } = &error else {
+            panic!("expected a bad repeat count, got {error:?}");
+        };
+        assert!(detail.contains("99999999999999999999999"), "{detail}");
+        assert!(!detail.contains("18446744073709551615"), "{detail}");
+    }
+
+    #[test]
+    fn a_redefinition_is_reported_before_its_value_is_resolved() {
+        // Otherwise the user fixes the bad value, re-runs, and only then
+        // learns the name was already taken -- two round trips for one line.
+        let error = expand("@define A 1\n@define A NOPE\n").unwrap_err();
+        assert!(
+            matches!(error, MacroError::Redefinition { .. }),
+            "{error:?}"
+        );
+    }
+
+    // --- everything else --------------------------------------------------
 
     #[test]
     fn origins_are_exact_for_every_shape_the_expander_emits() {
         assert_origins_are_exact("@define X 65\n+{X}.\n");
         assert_origins_are_exact("+{3}[>{2}-{4}<{2}]>.\n");
         assert_origins_are_exact("* prose\n\n  +  \n  [ - ]  \n,.\n");
+        assert_origins_are_exact("+ prose with @ and no directive\n[-]\n");
     }
 
     #[test]
@@ -468,6 +628,7 @@ mod tests {
             name,
             location,
             defined,
+            defined_later,
         } = error
         else {
             panic!("expected an undefined symbol, got {error:?}");
@@ -475,6 +636,7 @@ mod tests {
         assert_eq!(name, "B");
         assert_eq!((location.line, location.column), (2, 2));
         assert_eq!(defined, vec!["A".to_string()]);
+        assert!(!defined_later);
     }
 
     #[test]
@@ -492,8 +654,6 @@ mod tests {
 
     #[test]
     fn a_planned_directive_is_refused_rather_than_ignored() {
-        // The alternative -- treating '@var' as a comment -- would mean a .bfm
-        // written today silently changes meaning when @var arrives.
         for directive in ["@var x at 0", "@to x", "@macro clear { [-] }"] {
             let error = expand(directive).unwrap_err();
             assert!(
@@ -541,8 +701,6 @@ mod tests {
 
     #[test]
     fn an_unterminated_count_blames_its_own_line() {
-        // Scanning on for a '}' would swallow the program and blame a line far
-        // below the mistake.
         let error = expand("+{3\n-{2}\n").unwrap_err();
         let MacroError::BadRepeatCount { location, .. } = error else {
             panic!("expected a bad repeat count, got {error:?}");
@@ -571,7 +729,7 @@ mod tests {
         assert!(
             matches!(
                 error,
-                MacroError::ExpansionTooLarge {
+                MacroError::RepeatTooLarge {
                     limit: REPEAT_LIMIT,
                     ..
                 }
