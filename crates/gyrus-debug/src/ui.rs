@@ -289,6 +289,7 @@ fn draw(session: &mut Session) -> io::Result<()> {
 
         frame.render_widget(
             StatusBar::new(&fields, &hints, theme)
+                .always(ESSENTIAL_HINTS)
                 .message(note.as_ref().map(|(text, color)| (text.as_str(), *color))),
             panes.status,
         );
@@ -369,17 +370,15 @@ fn status_fields(session: &Session) -> Vec<(&'static str, String)> {
     fields
 }
 
+/// Hints held back from the fill, so a narrow terminal never drops them.
+const ESSENTIAL_HINTS: &[(&str, &str)] = &[("?", "help"), ("q", "quit")];
+
 fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
     if session.ui.prompt.is_some() {
         return vec![("enter", "accept"), ("esc", "cancel")];
     }
     if session.finished {
-        return vec![
-            ("r", "restart"),
-            ("tab", "panel"),
-            ("?", "help"),
-            ("q", "quit"),
-        ];
+        return vec![("r", "restart"), ("tab", "panel")];
     }
     match session.run {
         RunState::Step => vec![
@@ -390,10 +389,8 @@ fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
             ("g", "to cursor"),
             ("b", "break"),
             ("r", "restart"),
-            ("?", "help"),
-            ("q", "quit"),
         ],
-        _ => vec![("p", "pause"), ("?", "help"), ("q", "quit")],
+        _ => vec![("p", "pause")],
     }
 }
 
@@ -536,6 +533,11 @@ fn handle_key(session: &mut Session, key: KeyEvent) -> Flow {
         KeyCode::Char('o') => step_out(session),
         KeyCode::Char('g') => run_to_cursor(session),
         KeyCode::Char('p') | KeyCode::Esc => {
+            // Esc is a reflex key. Answering it costs a line and stops the
+            // debugger from looking unresponsive to someone trying to get out.
+            if session.run == RunState::Step || session.finished {
+                session.note("already stopped — c continues, q quits", Note::Info);
+            }
             session.run = RunState::Step;
             Flow::Stay
         }
