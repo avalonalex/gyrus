@@ -40,9 +40,19 @@ file.
   own header makes the case.
 - **`macros.bfm`** - the same idiom as a `@macro` with parameters, used three
   times.
+- **`arithmetic.bfm`** - `clear`, `set`, `add_to` and `multiply` composed, with
+  answers the source does not contain: it says 8 times 9, not 72.
+- **`control.bfm`** - a loop opened by one macro and closed by another, which
+  is how the design's standard library proposes to write control flow.
+- **`scan.bfm`** - `[.>]`, which loses the cursor, and `@here`, which is the
+  only way back.
 
-All three are load-bearing rather than illustrative:
-`crates/gyrus-macro/tests/round_trip.rs` reads them.
+All six are load-bearing rather than illustrative:
+`crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
+
+```bash
+cargo run -p gyrus-macro --example expand_and_run -- programs/macros/scan.bfm
+```
 
 There is no `gyrus`-side way to run these yet; they go through the library.
 

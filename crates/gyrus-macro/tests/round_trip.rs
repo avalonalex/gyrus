@@ -105,3 +105,42 @@ fn the_macros_example_prints_hi() {
     // three multiply loops are all there in the output.
     assert_eq!(brainfuck.matches('[').count(), 6, "{brainfuck}");
 }
+
+/// Answers the source does not contain.
+///
+/// `hello_world.bfm` and `variables.bfm` transcribe values a reader could
+/// check by eye. This one computes them: nothing in it says 72 or 105, so the
+/// program has to be right for the output to be "Hi". That is the property a
+/// *generated* program needs before its expected output proves anything, which
+/// is what makes this the shape to generate rather than a bigger example.
+#[test]
+fn the_arithmetic_example_computes_its_answers() {
+    let (_, printed) = run("programs/macros/arithmetic.bfm", 1_000_000);
+    assert_eq!(printed, "Hi");
+}
+
+/// A loop opened by one macro and closed by another.
+///
+/// The standard library the design proposes is built on this -- `while_not_zero`
+/// and `end_while` are separate macros bracketing a region -- and it is not
+/// obvious that the bracket stack and the loop-balance check survive it, since
+/// both are maintained across a body boundary the macro knows nothing about.
+#[test]
+fn the_control_example_brackets_a_loop_across_two_macros() {
+    let (brainfuck, printed) = run("programs/macros/control.bfm", 100_000);
+    assert_eq!(printed, "ABC");
+    // And it comes out as the idiom somebody would have written by hand.
+    assert_eq!(brainfuck.split('[').next_back().expect("a loop"), ">.+<-]");
+}
+
+/// The scan idiom, and the way back from it.
+///
+/// `[.>]` moves the cursor by one each iteration, so after it the expander
+/// cannot say where the cursor is -- and `@here` is the only construct that
+/// can tell it. This is the one path where a wrong answer is silent, so it is
+/// worth a program that runs rather than only a unit test that expands.
+#[test]
+fn the_scan_example_finds_its_way_back() {
+    let (_, printed) = run("programs/macros/scan.bfm", 100_000);
+    assert_eq!(printed, "Hi!\n");
+}

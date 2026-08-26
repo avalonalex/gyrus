@@ -1,0 +1,65 @@
+* Arithmetic with named cells, and answers that are not written down.
+*
+* Nothing in this file says 72 or 105. They are computed, which is the point:
+* the source says 8 times 9, and the program has to be right for the output to
+* be 'H'. That is the property a generated program needs if its expected
+* output is to prove anything.
+
+@var a       at 0
+@var b       at 1
+@var product at 2
+@var scratch at 3
+
+@macro clear(cell) {
+    @to cell
+    [-]
+}
+
+@macro set(cell, value) {
+    @clear(cell)
+    +{value}
+}
+
+* dst = dst + src, leaving src as it was and scratch at zero.
+@macro add_to(src, dst) {
+    @clear(scratch)
+    @to src
+    [
+        @to dst
+        +
+        @to scratch
+        +
+        @to src
+        -
+    ]
+    @to scratch
+    [
+        @to src
+        +
+        @to scratch
+        -
+    ]
+}
+
+* product = x * y, by adding y to it x times. Destroys x, keeps y.
+@macro multiply(x, y) {
+    @clear(product)
+    @to x
+    [
+        @add_to(y, product)
+        @to x
+        -
+    ]
+}
+
+@set(a, 8)
+@set(b, 9)
+@multiply(a, b)
+@to product
+.
+
+@set(a, 7)
+@set(b, 15)
+@multiply(a, b)
+@to product
+.
