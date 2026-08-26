@@ -19,6 +19,10 @@ file used to open with "136 total tests" long after there were far more. Run
 | `crates/gyrus/tests/program_corpus.rs` | The manifest's cases, run end to end through the tree-walker |
 | `crates/gyrus/tests/generated_differential.rs` | Optimizer against the tree-walker on generated programs, and compiled strings against their known output |
 | `crates/gyrus/tests/property_debug_symbols.rs` | Proptest over debug-symbol invariants |
+| `crates/gyrus-macro/src/**` | The expander: expansion, the origin map, the loop rules, and located errors |
+| `crates/gyrus-macro/tests/oracle.rs` | Generated macro programs whose answer is computed in Rust |
+| `crates/gyrus-macro/tests/round_trip.rs` | The bundled `.bfm` programs, expanded and run |
+| `crates/gyrus-macro/tests/source_locations.rs` | That a runtime error names the `.bfm` line somebody wrote |
 | `crates/gyrus-corpus/` | The manifest, parsed once and shared by both corpus suites |
 | `crates/gyrus-jit/tests/corpus.rs` | The same corpus under the JIT, driven from the manifest |
 | `crates/gyrus-jit/tests/differential.rs` | JIT against the optimized interpreter on the bundled programs |
@@ -155,12 +159,31 @@ shape that would prove it wrong.
 Every differential above proves the engines *agree*. Agreement is not
 correctness — a fold wrong in the same way on both sides passes all of them.
 
-`compile_string` closes that gap. It turns a string into a BrainFuck program
-that prints it, so the right answer is known by construction rather than by
-asking another engine, and
+There are two oracles, and they close the gap from different directions.
+
+`compile_string` turns a string into a BrainFuck program that prints it, so the
+right answer is known by construction rather than by asking another engine, and
 `compiled_programs_print_the_string_they_were_built_from` checks it. The
 compiled programs are worth running for their shape too: codegen builds values
 with multiply loops and clears, exactly what the optimizer folds.
+
+`crates/gyrus-macro/tests/oracle.rs` generalises that from strings to programs,
+which is the reason the macro preprocessor was worth building rather than
+something it happens to allow. The same computation is written twice, in two
+languages that share no code: a handful of operations — set, clear, add, copy,
+multiply, print — applied to a `[u8]` in Rust, and applied to a BrainFuck tape
+by a macro library written in `.bfm`. If the expander, the parser, the
+optimizer or either interpreter is wrong, the two answers differ, and nothing
+in it asks another engine what it thinks.
+
+Two properties it holds itself to, both from lessons recorded below:
+
+- **A program that prints nothing proves nothing**, so every generated program
+  ends by printing every cell, and the check refuses an empty expectation.
+- **A generator can only falsify what it can express**, so a test insists that
+  the generated programs reach a cell boundary — 35 of 64 seeds wrap today, and
+  the assertion fails below 16. Without it, a change to the weights could
+  quietly stop them ever wrapping while the suite stayed green.
 
 Two properties of codegen the test has to respect, both real rather than
 workarounds:

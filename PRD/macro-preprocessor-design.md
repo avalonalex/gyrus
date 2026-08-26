@@ -140,9 +140,10 @@ document keeps only what is still to be decided or built. A running inventory
 of shipped behaviour is exactly the thing this directory deleted twelve
 thousand lines of.
 
-**Not built**, in the order the plan wants them: the oracle generator,
-`gyrus-tool expand`, and `gyrus` accepting `.bfm`. The scoped phase-1 language
-is complete.
+**Not built**: `gyrus-tool expand`, and `gyrus` accepting `.bfm`. The scoped
+phase-1 language is complete, and so is the oracle generator that was the
+stated reason for building it -- see `docs/testing.md`. What remains is
+plumbing: nothing can run a `.bfm` from a terminal yet.
 
 **A decision `@include` would force.** The origin map holds one position per
 emitted byte against one source, which `@macro` fits by policy -- a byte names
@@ -167,7 +168,9 @@ shows up as a failing test rather than as nobody noticing.
 
 Add a macro preprocessor system that allows writing BrainFuck programs with high-level abstractions including named constants, variables, parameterized macros, and eventually an assembly-like syntax. This enables maintainable BF development while preserving the ability to compile down to pure BrainFuck.
 
-**Inspiration**: Frans Faase's bfmacro system (Tufts University) and the classic Mandelbrot BF program (created using C preprocessor as macro compiler).
+**Inspiration**: Frans Faase's bfmacro system (Tufts University,
+<https://www.cs.tufts.edu/~couch/bfmacro/bfmacro/>) and the classic Mandelbrot
+BF program (created using C preprocessor as macro compiler).
 
 ## Goals
 
@@ -1145,7 +1148,12 @@ unmeasurable here or a different project.
 ## Related Work
 
 ### Similar Systems
-- **bfmacro** (Frans Faase, Tufts) - Original inspiration
+- **bfmacro** (Frans Faase, Tufts) - Original inspiration.
+  <https://www.cs.tufts.edu/~couch/bfmacro/bfmacro/>. Worth reading before
+  designing anything further here: it reached the same static-pointer-tracking
+  rules independently, and has two things this does not -- cells bound to
+  addresses automatically rather than by hand, and constants written as
+  characters and hex (`C='C';`, `B=0xf;`) rather than only decimal.
 - **cpp** (C preprocessor) - Used for Mandelbrot BF
 - **m4** - Macro processor (could be adapted)
 - **BFASM** - Assembly-like BF syntax

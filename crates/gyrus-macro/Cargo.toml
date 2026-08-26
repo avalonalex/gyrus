@@ -26,3 +26,7 @@ termcolor.workspace = true
 # The same workspace-root helper both corpus suites use, so these tests find
 # programs/ the way every other test in the repository does.
 gyrus-corpus.workspace = true
+# A seedable RNG for the oracle generator, which builds macro programs whose
+# answer is known by construction. Test-only: the generator is not API, so it
+# lives in the test rather than behind a feature the way `gyrus::random` does.
+rand.workspace = true
