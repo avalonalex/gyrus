@@ -184,8 +184,19 @@ instruction at a time. `s` is the middle: it runs, at a speed you can follow.
 the run or before it starts — pressing `-` on a stopped program means "go, but
 slowly". `c` returns to full speed and `p` stops.
 
-It is `continue` with a speed limit and nothing more, so breakpoints, output
-watches and everything else still stop it exactly as they would at full speed.
+It is a speed limit on running, not a way of running, so it composes with
+everything else rather than replacing it. `s` pressed while the program is
+already heading for the cursor keeps heading there, only slower, and the header
+says which:
+
+```
+running · 10/s              running to cursor · 10/s              stepping over · 10/s
+```
+
+Breakpoints, output watches and an empty input queue all stop a paced run
+exactly as they would at full speed. Any of them, and `p`, also end the pacing:
+after a stop you choose again, and the speed you chose is remembered for the
+next `s`.
 
 The wait between instructions is spent listening for a keystroke rather than
 sleeping. At one instruction a second a sleep would leave the debugger ignoring

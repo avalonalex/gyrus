@@ -24,7 +24,8 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(60);
 ///
 /// Reading the clock on every instruction would show up in the profile of a
 /// program that runs for millions of steps, and nothing on screen changes fast
-/// enough to justify it.
+/// enough to justify it. A paced run is the exception and sets its own interval
+/// of 1: there, every instruction is something to look at.
 const POLL_INTERVAL: u32 = 2048;
 
 /// The shared session, held by the hook and both I/O adapters.
@@ -71,6 +72,12 @@ pub struct DebuggerHook {
     watch_revision: u64,
     /// The gap between instructions in a paced run, if one is in progress.
     pace: Option<Duration>,
+    /// Instructions between visits to the interface: 1 while pacing, and
+    /// `POLL_INTERVAL` otherwise.
+    ///
+    /// A field rather than a second condition, so a full-speed run tests one
+    /// counter against one number and pays nothing at all for slow motion.
+    poll_interval: u32,
 }
 
 impl DebuggerHook {
@@ -91,6 +98,7 @@ impl DebuggerHook {
             output_stops: [false; 256],
             watch_revision: u64::MAX,
             pace: None,
+            poll_interval: POLL_INTERVAL,
         };
         let guard = lock(&shared);
         hook.sync(&guard);
@@ -104,6 +112,11 @@ impl DebuggerHook {
         self.exiting = session.exit.is_some();
         self.watches_output = session.watches_output();
         self.pace = session.pace.delay();
+        self.poll_interval = if self.pace.is_some() {
+            1
+        } else {
+            POLL_INTERVAL
+        };
         if self.stops_revision != session.breakpoint_revision() {
             self.stops = session.breakpoint_bitmap();
             self.stops_revision = session.breakpoint_revision();
@@ -162,51 +175,49 @@ impl DebuggerHook {
             self.stop_reason(instruction, context, index)
         };
 
-        if reason.is_none() {
-            // Slow motion draws every instruction rather than every sixtieth of
-            // a second: the point is to see each one land.
-            if let Some(delay) = self.pace {
-                let shared = Arc::clone(&self.session);
-                let mut session = lock(&shared);
-                observe(&mut session, context, true);
-                let decision = ui::paced(&mut session, delay);
-                self.sync(&session);
-                return decision;
-            }
-
+        let Some(reason) = reason else {
             self.since_poll += 1;
-            if self.since_poll < POLL_INTERVAL {
+            if self.since_poll < self.poll_interval {
                 return HookDecision::Continue;
             }
             self.since_poll = 0;
-
-            // Snapshot on every poll, not only when redrawing. If the program
-            // is about to fail, this is the last look at the tape anyone gets:
-            // the VM state is gone by the time the error reaches `main`.
-            //
-            // The handle is cloned so the guard does not borrow `self`, which
-            // `sync` needs mutably below. One atomic per redraw, not per
-            // instruction.
-            let shared = Arc::clone(&self.session);
-            let mut session = lock(&shared);
-            observe(&mut session, context, true);
-            if session.should_redraw(REDRAW_INTERVAL) {
-                let decision = ui::tick(&mut session);
-                self.sync(&session);
-                return decision;
-            }
-            return HookDecision::Continue;
-        }
+            let pace = self.pace;
+            return self.visit(context, |session| match pace {
+                // Slow motion draws every instruction rather than every
+                // sixtieth of a second: the point is to see each one land.
+                Some(delay) => ui::paced(session, delay),
+                None if session.should_redraw(REDRAW_INTERVAL) => ui::tick(session),
+                None => HookDecision::Continue,
+            });
+        };
 
         self.since_poll = 0;
+        self.visit(context, |session| {
+            session.stop_reason = reason;
+            session.touch_draw();
+            ui::pause(session)
+        })
+    }
+
+    /// Record the interpreter's state, hand the session to the interface, and
+    /// pick up whatever the interface changed.
+    ///
+    /// Snapshotting happens here rather than only before a redraw: if the
+    /// program is about to fail, this is the last look at the tape anyone gets,
+    /// because the VM state is gone by the time the error reaches `main`.
+    ///
+    /// The handle is cloned so the guard does not borrow `self`, which `sync`
+    /// needs mutably afterwards. That is one atomic per visit, and a visit is
+    /// at most one per instruction and usually one per few thousand.
+    fn visit(
+        &mut self,
+        context: &HookContext,
+        act: impl FnOnce(&mut Session) -> HookDecision,
+    ) -> HookDecision {
         let shared = Arc::clone(&self.session);
         let mut session = lock(&shared);
         observe(&mut session, context, true);
-        if let Some(reason) = reason {
-            session.stop_reason = reason;
-        }
-        session.touch_draw();
-        let decision = ui::pause(&mut session);
+        let decision = act(&mut session);
         self.sync(&session);
         decision
     }

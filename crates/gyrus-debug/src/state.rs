@@ -202,10 +202,11 @@ impl Watches {
 /// magnitude, and nobody wants to type "17". The top is capped where a redraw
 /// per instruction stops being something an eye can follow — past that, `c` is
 /// the answer.
-pub const PACES: [u32; 6] = [1, 2, 5, 10, 25, 50];
+const PACES: [u32; 6] = [1, 2, 5, 10, 25, 50];
 
-/// The speed slow motion starts at.
-const DEFAULT_PACE: usize = 3;
+/// The speed slow motion starts at. A rate rather than an index, so inserting a
+/// rung at the bottom of the ladder does not silently change it.
+const DEFAULT_RATE: u32 = 10;
 
 /// How fast a paced run goes, or `None` for as fast as it can.
 ///
@@ -215,59 +216,62 @@ const DEFAULT_PACE: usize = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pace {
     index: usize,
-    running: bool,
+    /// Whether the run now in progress is paced.
+    ///
+    /// Cleared wherever execution stops, so it means exactly what it says
+    /// rather than "pace the next run, probably". The chosen speed outlives it:
+    /// that is the point of keeping the two apart.
+    armed: bool,
 }
 
 impl Default for Pace {
     fn default() -> Self {
         Self {
-            index: DEFAULT_PACE,
-            running: false,
+            index: PACES
+                .iter()
+                .position(|rate| *rate == DEFAULT_RATE)
+                .expect("DEFAULT_RATE is a rung of the ladder"),
+            armed: false,
         }
     }
 }
 
 impl Pace {
-    /// Instructions per second, when pacing is on.
-    pub fn per_second(self) -> Option<u32> {
-        self.running.then(|| PACES[self.index])
-    }
-
-    /// How long to wait between instructions, when pacing is on.
+    /// How long to wait between instructions, while a paced run is in progress.
     pub fn delay(self) -> Option<Duration> {
-        self.per_second()
-            .map(|rate| Duration::from_secs_f64(1.0 / f64::from(rate)))
+        self.armed
+            .then(|| Duration::from_secs_f64(1.0 / f64::from(self.rate())))
     }
 
-    /// Whether a paced run is in progress.
-    pub fn is_running(self) -> bool {
-        self.running
+    /// Whether the run in progress is paced.
+    pub fn is_armed(self) -> bool {
+        self.armed
     }
 
-    /// Start pacing, at the speed last chosen.
-    pub fn start(&mut self) {
-        self.running = true;
+    /// Pace the run now starting, or the one already under way.
+    pub fn arm(&mut self) {
+        self.armed = true;
     }
 
-    /// Run as fast as the interpreter can again.
-    pub fn stop(&mut self) {
-        self.running = false;
+    /// Run at full speed again. Also called wherever execution stops, so a
+    /// paced run does not silently pace whatever is asked for next.
+    pub fn disarm(&mut self) {
+        self.armed = false;
     }
 
-    /// One rung faster. Starts pacing if it was off, so the key does something
-    /// visible whichever state it is pressed in.
+    /// One rung faster. Does not arm: whether to start running is the caller's
+    /// decision, and it is not the same decision on a stopped program as on a
+    /// running one.
     pub fn faster(&mut self) {
-        self.running = true;
         self.index = (self.index + 1).min(PACES.len() - 1);
     }
 
     /// One rung slower.
     pub fn slower(&mut self) {
-        self.running = true;
         self.index = self.index.saturating_sub(1);
     }
 
-    /// The speed, whether or not it is in use.
+    /// The speed, whether or not a paced run is in progress.
     pub fn rate(self) -> u32 {
         PACES[self.index]
     }
@@ -605,6 +609,7 @@ impl Session {
             memory: vec![0; memory_size],
             ..Snapshot::default()
         };
+        self.pace.disarm();
         self.modified.clear();
         self.displayed = vec![0; memory_size];
         self.displayed_step = None;
@@ -939,11 +944,10 @@ mod pace_tests {
     #[test]
     fn pacing_is_off_until_asked_for() {
         let pace = Pace::default();
-        assert!(!pace.is_running());
-        assert_eq!(pace.per_second(), None);
+        assert!(!pace.is_armed());
         assert_eq!(pace.delay(), None);
         // The speed exists even while unused, so `s` resumes at what you chose.
-        assert_eq!(pace.rate(), 10);
+        assert_eq!(pace.rate(), DEFAULT_RATE);
     }
 
     #[test]
@@ -960,32 +964,37 @@ mod pace_tests {
     }
 
     #[test]
-    fn changing_speed_starts_pacing() {
-        // Otherwise `-` during a full-speed run does nothing visible.
+    fn changing_speed_does_not_by_itself_start_a_run() {
+        // Whether to start is the caller's decision: on a stopped program `-`
+        // means "go, but slowly", and on a running one it means only "slower".
         let mut pace = Pace::default();
         pace.slower();
-        assert!(pace.is_running());
-        pace.stop();
-        pace.faster();
-        assert!(pace.is_running());
+        assert!(!pace.is_armed());
     }
 
     #[test]
-    fn stopping_keeps_the_speed_for_next_time() {
+    fn disarming_keeps_the_speed_for_next_time() {
         let mut pace = Pace::default();
         pace.slower();
         let rate = pace.rate();
-        pace.stop();
+        pace.arm();
+        pace.disarm();
         assert_eq!(pace.rate(), rate);
-        pace.start();
-        assert_eq!(pace.per_second(), Some(rate));
+        pace.arm();
+        assert_eq!(pace.rate(), rate);
     }
 
     #[test]
     fn the_delay_is_the_reciprocal_of_the_rate() {
         let mut pace = Pace::default();
-        pace.start();
-        let delay = pace.delay().expect("running");
+        pace.arm();
+        let delay = pace.delay().expect("armed");
         assert!((delay.as_secs_f64() - 1.0 / f64::from(pace.rate())).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_default_rate_is_a_rung_of_the_ladder() {
+        // `Pace::default` panics otherwise, which this states out loud.
+        assert!(PACES.contains(&DEFAULT_RATE));
     }
 }
