@@ -97,7 +97,29 @@ gyrus-debug program.bf --cell-model checked
 ```
 
 Breakpoints are characters, not lines, because a BrainFuck program is often one
-line of a hundred instructions. [The debugger](debugger.md) has the key list.
+line of a hundred instructions. You can also put them in the source, where they
+survive being committed — a `@` is a breakpoint, and it means nothing to any
+other BrainFuck implementation:
+
+```
++++@[->+<]        stops at the [
+```
+
+**When you know the symptom but not the place**, say what has to happen instead
+of where to stop:
+
+```bash
+gyrus-debug program.bf --break-output any    # before anything is printed
+gyrus-debug program.bf --break-output X      # before an X is printed
+gyrus-debug program.bf --break-output '\n'   # before each line ends
+```
+
+That is the one a positional breakpoint cannot express, and it is usually the
+question you actually have: the output is wrong at some character, and you want
+the tape as it was just before that character was produced. Execution stops
+*before* the `.`, so the cell holding it is still there to look at.
+
+[The debugger](debugger.md) has the key list and the rest.
 
 ## When it is slow
 
@@ -149,6 +171,10 @@ gyrus --eof-behavior neg-one program.bf     # zero, neg-one, no-change, error
 
 Under the debugger the keyboard belongs to the interface, so input is queued
 instead — `--input TEXT`, `--input-file FILE`, or `i` while it is running.
+`--input` adds the trailing newline `echo` would have, which most programs
+reading a number need; `--input-file` is byte-exact for when they must not have
+one. When a `,` is reached with nothing queued the debugger stops and says
+`needs input` rather than quietly taking the EOF branch.
 
 ## Matching another interpreter
 
@@ -191,6 +217,10 @@ gyrus-tutorial --lesson 3
 Thirteen lessons from `+` to the halting problem. Every run of your program is
 recorded, so you can step *backwards* through a loop — which is the thing that
 makes `[->+<]` legible. [The tutorial](tutorial.md) has the key list.
+
+It is a reasonable place to start even if you know BrainFuck, because lessons 4,
+5 and 11 name the shapes gyrus's optimizer recognises, which is what
+[performance](performance.md) is about.
 
 ## Using gyrus from Rust
 
