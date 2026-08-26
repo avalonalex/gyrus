@@ -13,6 +13,7 @@ It is the rule that keeps this directory readable.
 | Document | Status | Priority |
 |---|---|---|
 | [macro-preprocessor-design.md](macro-preprocessor-design.md) | Design reviewed and scoped 2026-08-25, unimplemented | **Medium — the next thing to build** |
+| [source-breakpoint-markers.md](source-breakpoint-markers.md) | Designed 2026-08-26, unimplemented | Low — small and self-contained, but its first step (moving the `*` comment rule into `gyrus::syntax`) is worth doing regardless |
 
 ## Future
 

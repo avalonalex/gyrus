@@ -3,14 +3,22 @@
 Running programs with the `gyrus` CLI: options, execution modes, statistics,
 and the language itself.
 
+This is the reference. For a path through the tools organised by what you are
+trying to do, start with the [manual](manual.md).
+
 Back to the [README](../README.md).
 
 ## Usage
 
-gyrus provides two command-line tools:
+gyrus provides four command-line tools:
 
 1. **`gyrus`** - BrainFuck interpreter for executing programs
-2. **`gyrus-tool`** - Development tools for analyzing and processing BF code
+2. **`gyrus-debug`** - Terminal debugger; see [the debugger](debugger.md)
+3. **`gyrus-tool`** - Development tools for analyzing and processing BF code
+4. **`gyrus-tutorial`** - Interactive lessons; see [the tutorial](tutorial.md)
+
+`gyrus` and `gyrus-debug` take the same runtime settings, so the options below
+apply to both.
 
 ### Running a BrainFuck Program
 

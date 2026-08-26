@@ -41,9 +41,11 @@ the development compiler.
   You may offer. Prefer succinct comments in the relevant code file.
 - **`README.md`** — the landing page, kept short on purpose. It says what gyrus
   is, shows one error message, gives a quick start, and links onward.
-- **`docs/`** — user-facing reference: usage, errors, execution models, tooling,
-  debugger, tutorial, development, testing, architecture, performance. Anything
-  describing what *exists* goes here. `performance.md` is also where the optimization work's
+- **`docs/`** — user-facing documentation: `manual.md` is the task-oriented
+  front door, and the rest are reference — usage, errors, execution models,
+  tooling, debugger, tutorial, development, testing, architecture, performance.
+  Anything describing what *exists* goes here, and the manual links rather than
+  restates. `performance.md` is also where the optimization work's
   negative results live: it concluded in August 2026, and the experiments that
   did not pay are recorded there so they are not repeated.
 - **`PRD/`** — design documents for what does **not** exist yet. When a feature

@@ -118,7 +118,8 @@ Cranelift's floor, inherited through the JIT. The library on its own needs
 
 | | |
 |---|---|
-| [Usage](docs/usage.md) | CLI options, execution modes, statistics, the language itself |
+| [User manual](docs/manual.md) | **Start here.** What to reach for, by what you are trying to do |
+| [Usage](docs/usage.md) | Every CLI flag, in full |
 | [Errors and diagnostics](docs/errors.md) | What gyrus reports when a program is wrong |
 | [Memory, cells, and EOF](docs/execution-models.md) | The three orthogonal execution knobs |
 | [Development tools](docs/tooling.md) | `gyrus-tool`: validate, minify, view, inspect |
