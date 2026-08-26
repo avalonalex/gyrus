@@ -7,9 +7,10 @@ manifests carried at the time.
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## Unreleased
+## 0.4.0 — 2026-08-26
 
-The two terminal interfaces the hook system was built for.
+The two terminal interfaces the hook system was built for, and a debugger that
+learned to stop on what a program *does* rather than only on where it is.
 
 ### Added
 
@@ -53,6 +54,37 @@ The two terminal interfaces the hook system was built for.
   strip for teaching, output, watches, status, help and result overlays, and a
   terminal guard whose panic hook restores the screen. Widgets only — nothing
   in it knows about breakpoints or lesson progress.
+- **Breakpoints you can commit.** A `@` in the source is a breakpoint. Every
+  BrainFuck implementation ignores every character that is not one of the eight
+  commands, so a marked program still runs identically everywhere — a marked
+  program is not a special build, and there is a test holding that. Markers are
+  read by default, which the design argued against: it wanted an opt-in flag on
+  the strength of three bundled programs containing `@`, and never checked
+  whether those markers would *fire*. Two of the three cannot, so the real
+  misfire rate is one program in fifty-two.
+- **Stops on what the program prints**, not only on where it is.
+  `--break-output any`, `--break-output W`, `--break-output '\n'`, or `w out W`
+  from inside. This is the question a positional breakpoint cannot ask, and
+  usually the one you have: the output is wrong at some character, and you want
+  the tape as it was just before that character was produced. Execution stops
+  *before* the `.`, so the cell holding it is still there.
+- **A watch that never fires says so.** It otherwise looks exactly like one
+  that is broken — the program runs to the end either way — and those are
+  different findings. "Never printed" is the answer when a character is missing
+  from the output, and it is also how you discover the shell ate your backslash.
+- **Slow motion.** `s` runs at one to fifty instructions a second, `+` and `-`
+  moving the ladder during the run or before it starts. It is a speed limit on
+  running rather than a way of running, so a paced run-to-cursor is still
+  heading for the cursor and the header says so. The gap between instructions
+  is spent waiting for a keystroke, not sleeping: at one instruction a second a
+  sleep would ignore the keyboard for a second at a time.
+- **The debugger says when a program is waiting for input.** A `,` with nothing
+  queued reads `needs input` in the header, and the key hints lead with
+  `i type input` — a state rather than a status message the next keypress
+  clears.
+- **A user manual** (`docs/manual.md`), organised by what you are trying to do
+  rather than by what each flag is called, and linking onward rather than
+  restating.
 
 ### Changed
 
@@ -62,12 +94,43 @@ The two terminal interfaces the hook system was built for.
   to the tape from a hook.
 - **`scripts/check-readme-commands.py` covers the new binaries**, so their
   documented flags rot no more quietly than the others'.
+- **The `*` line-comment rule has one home.** Whether a `+` executes is a fact
+  about BrainFuck, and it had three encodings: the highlighter's, the TUI's,
+  and the one breakpoint markers needed. It is
+  `gyrus::syntax::{CharClass, LineScanner, classify_line}` now. The parser
+  keeps its own scan-ahead — restructuring the hot path was not worth the risk
+  — but a test holds the two together: every character the classifier calls
+  code must be one the parser numbered, and every character it calls comment
+  must not be.
+- **`--input` means what `echo` means.** It appends a newline when the text
+  does not end in one. Programs that read a number read until a newline, so
+  without it `--input 1234567` stopped one byte short of starting and looked
+  like the flag had been ignored — while the interactive prompt appended one,
+  so the two ways of supplying input disagreed. `--input-file` stays
+  byte-exact.
+- **`w` takes either kind of watch**, spelled the way the panel displays it
+  back: `3` for a cell, `out W` for output. A bare number is still a cell, so
+  `5` watches cell 5 and `out 5` stops on the digit.
+- **The debugger fits an 80×24 terminal.** Status fields drop whole rather than
+  clipping — `30000 cells` used to render as `3000`, which does not look
+  truncated, it looks like a smaller tape. `? help` and `q quit` are held back
+  from that trimming, the key list scrolls and says how many rows are below,
+  and its descriptions wrap instead of being cut mid-word.
+- **A sixth guarded claim.** The README's debugger screenshot is generated, not
+  taken: `scripts/capture-debugger-svg.py` drives the real binary in a pty and
+  renders the bytes it writes to an SVG — text in, text out, no binary blob —
+  and `--check` fails in CI when it drifts. Panel titles, the status row and
+  the key hints have each changed since, and a stale image would still have
+  looked plausible. It has caught three real drifts already.
 
 ### Removed
 
-- **`PRD/tui_debugger_and_tutorial.md`**, 1,343 lines, deleted rather than
-  archived now that the thing it designed exists. That is the rule the
-  directory runs on.
+- **`PRD/tui_debugger_and_tutorial.md`**, 1,343 lines, and
+  **`PRD/source-breakpoint-markers.md`**, 194 more — deleted rather than
+  archived now that the things they designed exist. That is the rule the
+  directory runs on, and it has a second effect worth naming: a shipped design
+  is often wrong by the time the code exists, and deleting it is how that stops
+  mattering.
 
 ## 0.3.0 — 2026-08-25
 
