@@ -131,16 +131,34 @@ condition is actually tested.
 ## Program input
 
 The debugger owns the keyboard, so the program cannot read from it directly.
-Bytes are queued instead, from `--input TEXT`, from `--input-file FILE`, or by
-pressing `i` and typing.
+Bytes are queued instead, three ways:
 
-When a `,` is reached with nothing queued, execution stops and says so, even in
-the middle of a `continue`. Resuming without supplying anything is how you
-choose EOF, and it stops asking after that — otherwise `continue` on a program
-that reads to the end of its input would stop at every `,`.
+```bash
+gyrus-debug factor.bf --input 1234567          # as if you had typed it
+gyrus-debug factor.bf --input-file numbers.txt # exact bytes, no newline added
+gyrus-debug factor.bf                          # then press i and type
+```
+
+`--input` appends a newline when the text does not end in one, which is what
+`echo 1234567 |` would have given the program. Most programs that read a number
+read digits until a newline, so without it they stop one byte short of starting
+and it looks as though the flag were ignored. `--input-file` is byte-exact, and
+is how to supply input that must *not* end in a newline.
+
+When a `,` is reached with nothing queued, execution stops, the header reads
+**needs input**, and the key hints lead with `i type input` — the state stays on
+screen rather than being a message the next keypress clears. This happens in the
+middle of a `continue` too.
+
+Resuming without supplying anything is how you choose EOF, and it stops asking
+after that — otherwise `continue` on a program that reads to the end of its
+input would stop at every `,`.
 
 Restarting replays what the program already consumed, so a program you fed by
 hand does not have to be fed again.
+
+Real input-reading programs are comfortable here: `factor.bf` factors 1234567 in
+a little over half a second under this interpreter.
 
 ## What it runs
 

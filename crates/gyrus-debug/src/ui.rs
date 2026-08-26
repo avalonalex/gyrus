@@ -327,6 +327,10 @@ fn run_state_label(session: &Session) -> (String, Color) {
         (Some(Outcome::Failed(_)), _) => ("error".to_string(), theme.error),
         (Some(Outcome::Completed(_)), _) => ("finished".to_string(), theme.success),
         (None, true) => ("stopped".to_string(), theme.dim),
+        // Waiting for input is a state, not an event: a message on the status
+        // line is cleared by the next keypress, and the user is then looking at
+        // a stopped program with no indication of why it stopped.
+        (None, false) if needs_input(session) => ("needs input".to_string(), theme.modified),
         (None, false) if session.at_breakpoint() => ("breakpoint".to_string(), theme.breakpoint),
         (None, false) => match session.run {
             RunState::Step => ("paused".to_string(), theme.accent),
@@ -380,7 +384,7 @@ fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
     if session.finished {
         return vec![("r", "restart"), ("tab", "panel")];
     }
-    match session.run {
+    let mut hints = match session.run {
         RunState::Step => vec![
             ("space", "step"),
             ("n", "over"),
@@ -391,7 +395,14 @@ fn status_hints(session: &Session) -> Vec<(&'static str, &'static str)> {
             ("r", "restart"),
         ],
         _ => vec![("p", "pause")],
+    };
+    // First, so that it is the last thing a narrow terminal drops. `i` is the
+    // one key the program is currently waiting on, and it is otherwise buried
+    // in the key list.
+    if needs_input(session) {
+        hints.insert(0, ("i", "type input"));
     }
+    hints
 }
 
 fn watch_entries(session: &Session) -> Vec<WatchEntry> {
