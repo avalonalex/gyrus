@@ -163,6 +163,13 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("Cell {cell} at {location} was already chosen for '{other}'")]
+    CellAlreadyChosen {
+        cell: i64,
+        other: String,
+        location: SourceLocation,
+    },
+
     #[error("Cell {cell} at {location} is past the {limit} the whole file may expand to")]
     CellTooFar {
         cell: u64,
@@ -219,6 +226,7 @@ impl MacroError {
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
             | MacroError::DeclarationInsideMacro { location, .. }
+            | MacroError::CellAlreadyChosen { location, .. }
             | MacroError::CellTooFar { location, .. }
             | MacroError::RepeatTooLarge { location, .. }
             | MacroError::ExpansionTooLarge { location, .. } => *location,
@@ -352,6 +360,11 @@ impl MacroError {
             MacroError::DeclarationInsideMacro { directive, .. } => Some(format!(
                 "A macro body expands once per invocation, so an `@{directive}` in one would \
                  declare the same name again on the second. Move it above the macro."
+            )),
+            MacroError::CellAlreadyChosen { other, .. } => Some(format!(
+                "'{other}' was declared without a cell, so the expander picked that one on the \
+                 understanding it was free. Two names for one cell is allowed when both say so; \
+                 give '{other}' a cell of its own, or this one a different number."
             )),
             MacroError::CellTooFar { limit, .. } => Some(format!(
                 "Reaching cell N costs N moves, so a cell past {limit} is one no program could \

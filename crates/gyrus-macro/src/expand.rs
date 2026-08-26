@@ -118,7 +118,7 @@
 //! here costs a stack and a comparison, and is the difference between a
 //! position they can act on and one they cannot.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use gyrus::SourceLocation;
@@ -268,9 +268,10 @@ struct Scanner {
     frames: Vec<Invocation>,
     /// Invocations so far, against [`INVOCATION_LIMIT`].
     invocations: u64,
-    /// Cells a `@var` has already named, so that one written without `at` can
-    /// be given one nobody is using.
-    cells_taken: std::collections::BTreeSet<i64>,
+    /// Cells the *expander* picked, as opposed to cells somebody wrote a
+    /// number for. Which cells are taken is derivable from `symbols` and is
+    /// derived; which of them nobody chose deliberately is not.
+    chosen: BTreeSet<i64>,
     /// Insertion order, for the "did you mean" list. A HashMap alone would
     /// suggest names in an order that changes between runs.
     defined: Vec<String>,
@@ -293,7 +294,7 @@ impl Scanner {
             symbols: HashMap::new(),
             frames: Vec::new(),
             invocations: 0,
-            cells_taken: std::collections::BTreeSet::new(),
+            chosen: BTreeSet::new(),
             defined: Vec::new(),
             position: Position::Known(0),
             net: 0,
@@ -345,6 +346,12 @@ impl Scanner {
 
     fn peek(&self) -> Option<char> {
         self.chars.get(self.at.offset).copied()
+    }
+
+    /// Whether the character before the cursor is a backslash, for deciding
+    /// whether a quote closes a literal.
+    fn previous_is_backslash(&self) -> bool {
+        self.at.offset > 0 && self.chars[self.at.offset - 1] == '\\'
     }
 
     /// Whether only blanks precede the cursor on its line.
@@ -420,8 +427,8 @@ impl Scanner {
     /// space, `@print(',')` on a comma and `+{'}'}` on a brace -- each of them
     /// the delimiter that reader would otherwise stop at, and each of them the
     /// obvious thing to write.
-    fn token(&mut self, ends: impl Fn(char) -> bool) -> String {
-        let mut token = String::new();
+    fn token(&mut self, ends: impl Fn(char) -> bool) -> Token {
+        let mut text = String::new();
         let mut quoted = false;
         let mut escaped = false;
         while let Some(c) = self.peek() {
@@ -436,10 +443,13 @@ impl Scanner {
                 '\'' if !escaped => quoted = !quoted,
                 _ => escaped = false,
             }
-            token.push(c);
+            text.push(c);
             self.bump();
         }
-        token
+        Token {
+            text,
+            quote_open: quoted,
+        }
     }
 
     /// An identifier at the cursor: a letter or `_`, then letters, digits, `_`.
@@ -576,15 +586,15 @@ impl Scanner {
         let open = self.at;
         self.bump(); // past '{'
 
-        let body = self.token(|c| c == '}' || c == '\n');
-        // A newline inside a repeat count means the '}' was forgotten;
-        // scanning on would swallow the rest of the program looking for one,
-        // and blame a line far below the mistake.
+        // `token` already ends on a newline whatever the quoting, which is
+        // what stops an unclosed quote swallowing the rest of the program and
+        // blaming a line far below the mistake.
+        let body = self.token(|c| c == '}');
         if self.peek() != Some('}') {
-            // Which of the two is missing, since an unclosed quote reaches
-            // the end of the line without the brace being the problem.
-            let detail = match body.starts_with('\'') && !body.ends_with('\'') {
-                true => format!("{body} has no closing quote"),
+            // Which of the two is missing, asked of the reader that knows
+            // rather than guessed at from the spelling.
+            let detail = match body.quote_open {
+                true => format!("{} has no closing quote", body.text),
                 false => "no closing '}'".to_string(),
             };
             return Err(MacroError::BadRepeatCount {
@@ -593,7 +603,7 @@ impl Scanner {
             });
         }
         self.bump();
-        let body = body.trim();
+        let body = body.text.trim();
         let bad = |detail: String| MacroError::BadRepeatCount {
             detail,
             location: open,
@@ -904,6 +914,10 @@ impl Scanner {
     /// body. Getting either wrong would end the body in the wrong place.
     fn skip_body(&mut self, name: &str, location: SourceLocation) -> Result<usize, MacroError> {
         let mut depth = 1usize;
+        // A character literal is opaque here, as it is to every other reader:
+        // `@n('}')` in a body had its quoted brace counted, which closed the
+        // body three lines early.
+        let mut quoted = false;
         // Set once per character at the foot of the loop, rather than at the
         // end of each arm: `*`, `{` and `}` are not repeatable, so all five
         // assignments were the same expression about the character that
@@ -917,7 +931,22 @@ impl Scanner {
                     location,
                 ));
             };
+            if quoted {
+                // Only the closing quote matters; `\'` inside one does not
+                // close it.
+                if c == '\'' && !self.previous_is_backslash() {
+                    quoted = false;
+                }
+                self.bump();
+                continue;
+            }
             match c {
+                '\'' => {
+                    quoted = true;
+                    self.bump();
+                    after_instruction = false;
+                    continue;
+                }
                 '*' => {
                     // To the end of the line, or to the brace that closes the
                     // body, whichever comes first. Otherwise a one-line
@@ -932,10 +961,13 @@ impl Scanner {
                     }
                 }
                 '{' if after_instruction => {
-                    // A repeat count, not a nested brace.
-                    while self.peek().is_some_and(|c| c != '}' && c != '\n') {
-                        self.bump();
-                    }
+                    // A repeat count, not a nested brace -- and read with the
+                    // scanner's own reader, so that `+{'}'}` inside a body
+                    // ends where it ends everywhere else. Skipping to the
+                    // first `}` stopped inside the literal and then took the
+                    // literal's own closing quote for the body's end.
+                    self.bump();
+                    self.token(|c| c == '}');
                     if self.peek() == Some('}') {
                         self.bump();
                     }
@@ -1032,7 +1064,7 @@ impl Scanner {
             || format!("the arguments of '@{name}'"),
             |s| {
                 let at_argument = s.at;
-                let token = s.token(|c| c == ',' || c == ')' || c.is_whitespace());
+                let token = s.token(|c| c == ',' || c == ')' || c.is_whitespace()).text;
                 // A number is a constant; a name is whatever it already means, so
                 // a cell or another macro passes as readily as a count.
                 let symbol = match classify(&token) {
@@ -1066,7 +1098,11 @@ impl Scanner {
 
         let cell = match self.peek() {
             // Nothing follows the name, so choose a cell for it.
-            None | Some('\n') | Some('*') => self.next_free_cell(),
+            None | Some('\n') | Some('*') => {
+                let cell = self.next_free_cell();
+                self.chosen.insert(cell);
+                cell
+            }
             _ => {
                 let at_keyword = self.at;
                 if !self.identifier_is("at") {
@@ -1093,14 +1129,34 @@ impl Scanner {
                         location: at_value,
                     });
                 }
-                cell as i64
+                let cell = cell as i64;
+                // A number may name a cell another number already named --
+                // two names for one cell in different phases is a real thing
+                // to want, and both of them said so. It may not take a cell
+                // the expander picked: that choice was made on the
+                // understanding the cell was free, and nobody saw it made.
+                if self.chosen.contains(&cell) {
+                    return Err(MacroError::CellAlreadyChosen {
+                        cell,
+                        other: self.variable_at(cell).unwrap_or_default(),
+                        location: at_value,
+                    });
+                }
+                cell
             }
         };
 
         self.end_of_directive(Directive::Var)?;
-        self.cells_taken.insert(cell);
         self.declare(name, Symbol::Variable(cell), location);
         Ok(())
+    }
+
+    /// The name of a variable already at `cell`.
+    fn variable_at(&self, cell: i64) -> Option<String> {
+        self.symbols
+            .iter()
+            .find(|(_, (symbol, _))| matches!(symbol, Symbol::Variable(at) if *at == cell))
+            .map(|(name, _)| name.clone())
     }
 
     /// The lowest cell no `@var` has named.
@@ -1109,9 +1165,22 @@ impl Scanner {
     /// does not leave a hole: `@var scratch at 9` followed by three plain
     /// `@var`s gives cells 0, 1 and 2, not 10, 11 and 12.
     fn next_free_cell(&self) -> i64 {
-        (0..)
-            .find(|cell| !self.cells_taken.contains(cell))
-            .expect("i64 is not exhausted")
+        let taken: BTreeSet<i64> = self
+            .symbols
+            .values()
+            .filter_map(|(symbol, _)| match symbol {
+                Symbol::Variable(cell) => Some(*cell),
+                _ => None,
+            })
+            .collect();
+        // The first gap in a sorted set is the first position whose value has
+        // moved past its index -- one pass, rather than a lookup per candidate
+        // in a container that is already in order.
+        taken
+            .iter()
+            .enumerate()
+            .find(|(index, cell)| **cell != *index as i64)
+            .map_or(taken.len() as i64, |(index, _)| index as i64)
     }
 
     /// The cell a `@to` or `@here` names, and its own name for the error.
@@ -1235,7 +1304,7 @@ impl Scanner {
         name: &str,
         at_value: SourceLocation,
     ) -> Result<u64, MacroError> {
-        let token = self.token(char::is_whitespace);
+        let token = self.token(char::is_whitespace).text;
         let spelling = declaring.directive().spelling();
         match classify(&token) {
             Operand::Number(value) => Ok(value),
@@ -1328,9 +1397,16 @@ fn classify(token: &str) -> Operand<'_> {
         .strip_prefix("0x")
         .or_else(|| token.strip_prefix("0X"))
     {
+        // Checked before parsing, because `from_str_radix` accepts a leading
+        // sign: without this `0x+41` is 65, while the decimal `+5` is refused.
+        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Operand::Bad(format!("'{token}' is not a hexadecimal number"));
+        }
         return match u64::from_str_radix(digits, 16) {
-            Ok(value) if !digits.is_empty() => Operand::Number(value),
-            _ => Operand::Bad(format!("'{token}' is not a hexadecimal number")),
+            Ok(value) => Operand::Number(value),
+            // The same distinction the decimal branch below makes, and for the
+            // same reason: this is a hexadecimal number, just too large.
+            Err(_) => Operand::Bad(format!("'{token}' does not fit in a 64-bit number")),
         };
     }
     if token.chars().all(|c| c.is_ascii_digit()) {
@@ -1347,16 +1423,35 @@ fn classify(token: &str) -> Operand<'_> {
     Operand::Bad(format!("'{token}' is neither a number nor a name"))
 }
 
+/// A token, and whether a character literal in it was left open.
+///
+/// The flag is the difference between guessing at a diagnostic and knowing
+/// it: testing the text for a leading quote called `+{ 'a }` and `+{A'}` a
+/// missing brace, because the quote was not the first character.
+struct Token {
+    text: String,
+    quote_open: bool,
+}
+
 /// The byte a `'x'` literal means.
 ///
-/// One byte, because a cell holds one: `'\u{e9}'` is 233 and fits, and a
-/// character that does not is a mistake rather than something to truncate --
-/// which is the same rule the test manifest applies to its expected output.
+/// ASCII only. A cell holds a byte, and the point of writing a letter instead
+/// of a number is that it says what it means -- but `'\u{e9}'` would mean the
+/// byte 233, which is not what printing it produces, because that is Latin-1
+/// and the file is UTF-8. Accepting it would make the rule "characters that
+/// fit work", when only the half that round-trips does. A byte above 127 can
+/// still be written as a number, where nobody expects it to be a letter.
 fn character(token: &str) -> Result<u8, String> {
     let body = token
         .strip_prefix('\'')
-        .and_then(|rest| rest.strip_suffix('\''))
-        .ok_or("it has no closing quote")?;
+        .ok_or("it does not start with a quote")?
+        .strip_suffix('\'')
+        .ok_or_else(|| match token.ends_with('\'') {
+            // A well-formed literal with something stuck to it: the quote is
+            // there, so saying it is missing sends the reader to the wrong end.
+            true => "it has no closing quote".to_string(),
+            false => "something follows its closing quote".to_string(),
+        })?;
     let mut chars = body.chars();
     let value = match chars.next().ok_or("it is empty")? {
         '\\' => match chars.next().ok_or("nothing follows the backslash")? {
@@ -1373,7 +1468,12 @@ fn character(token: &str) -> Result<u8, String> {
     if chars.next().is_some() {
         return Err("it holds more than one character".to_string());
     }
-    u8::try_from(u32::from(value)).map_err(|_| format!("{value:?} does not fit in a cell"))
+    match u8::try_from(u32::from(value)) {
+        Ok(byte) if byte.is_ascii() => Ok(byte),
+        _ => Err(format!(
+            "{value:?} is not ASCII, so the byte it would mean is not what printing it produces"
+        )),
+    }
 }
 
 /// A `MalformedDirective`, without the five-line struct literal it was written
@@ -1404,12 +1504,19 @@ fn declares(trimmed: &str, name: &str) -> bool {
 /// Brace depth after a line, for the same hint. Crude but sufficient for one:
 /// a repeat count's brace sits against an instruction, and a body's does not.
 fn brace_depth_after(line: &str, mut depth: usize) -> usize {
-    let mut previous = ' ';
+    let (mut previous, mut quoted) = (' ', false);
     for c in line.chars() {
-        match c {
-            '{' if !REPEATABLE.contains(&previous) => depth += 1,
-            '}' if depth > 0 => depth -= 1,
-            _ => {}
+        // A brace inside a character literal is data. Without this
+        // `@define OPEN '{'` -- legal source now -- opens a body that never
+        // closes, and every declaration below it stops being advertised.
+        if c == '\'' && previous != '\\' {
+            quoted = !quoted;
+        } else if !quoted {
+            match c {
+                '{' if !REPEATABLE.contains(&previous) => depth += 1,
+                '}' if depth > 0 => depth -= 1,
+                _ => {}
+            }
         }
         previous = c;
     }
@@ -2382,8 +2489,6 @@ mod readable_constants {
         assert_eq!(expanded("+{'A'}\n").len(), 65);
         assert_eq!(expanded("@define NEWLINE '\\n'\n+{NEWLINE}\n").len(), 10);
         assert_eq!(expanded("@define TAB '\\t'\n+{TAB}\n").len(), 9);
-        // 'é' is 233, which fits in a cell.
-        assert_eq!(expanded("+{'\u{e9}'}\n").len(), 233);
     }
 
     #[test]
@@ -2437,13 +2542,122 @@ mod readable_constants {
         }
     }
 
+    /// A character literal is ASCII, and the reason is not that a cell is
+    /// small.
+    ///
+    /// `'\u{e9}'` fits in a byte perfectly well -- it is 233. But 233 is
+    /// Latin-1 and this file is UTF-8, so printing that byte does not produce
+    /// the character somebody wrote, and the whole point of writing a letter
+    /// instead of a number is that it says what it means. Accepting it would
+    /// make the rule "characters that fit work" when only the half that
+    /// round-trips does, and the failure would be silent.
     #[test]
-    fn a_character_too_wide_for_a_cell_is_refused() {
-        let error = expand("+{'\u{20ac}'}\n").unwrap_err();
+    fn a_character_literal_is_ascii() {
+        for source in ["+{'\u{e9}'}\n", "+{'\u{20ac}'}\n"] {
+            let error = expand(source).unwrap_err();
+            let MacroError::BadRepeatCount { detail, .. } = &error else {
+                panic!("{source:?}: expected a bad repeat count, got {error:?}");
+            };
+            assert!(detail.contains("is not ASCII"), "{detail}");
+        }
+        // The byte is still available, where nobody expects it to be a letter.
+        assert_eq!(expanded("+{233}\n").len(), 233);
+        assert_eq!(expanded("+{0xE9}\n").len(), 233);
+    }
+
+    #[test]
+    fn a_quoted_brace_ends_a_macro_body_nowhere() {
+        // `+{'}'}` is documented as the obvious thing to write and tested at
+        // the top level, but the body skipper had its own repeat-count reader
+        // that stopped inside the literal and took its closing quote for the
+        // body's end.
+        assert_eq!(expanded("@macro brace {\n+{'}'}\n}\n@brace\n").len(), 125);
+        assert_eq!(
+            expanded("@macro n(c) {\n+{c}\n}\n@macro m {\n@n('}')\n}\n@m\n").len(),
+            125
+        );
+    }
+
+    #[test]
+    fn a_number_may_not_take_a_cell_the_expander_chose() {
+        // Newly reachable: before a cell could be chosen, every cell was
+        // somebody's own choice. `scan.bfm` is the live shape -- three chosen
+        // cells and a terminator at 3 -- where one more `@var` would have
+        // silently aliased the terminator and stopped the scan ever ending.
+        let error = expand("@var a\n@var b at 0\n").unwrap_err();
+        let MacroError::CellAlreadyChosen { cell, other, .. } = &error else {
+            panic!("expected a taken cell, got {error:?}");
+        };
+        assert_eq!((*cell, other.as_str()), (0, "a"));
+
+        // Two numbers naming one cell is allowed: both of them said so.
+        assert_eq!(expanded("@var a at 2\n@var b at 2\n@to b\n"), ">>");
+    }
+
+    #[test]
+    fn a_chosen_cell_fills_the_lowest_gap() {
+        assert_eq!(expanded("@var a at 0\n@var b at 2\n@var c\n@to c\n"), ">");
+        assert_eq!(expanded("@var a at 0\n@var b at 1\n@var c\n@to c\n"), ">>");
+    }
+
+    #[test]
+    fn a_sign_does_not_sneak_into_a_hexadecimal() {
+        // `from_str_radix` accepts one, so `0x+41` was 65 while the decimal
+        // `+5` was refused -- two spellings of one number disagreeing about
+        // whether a sign is legal.
+        for source in ["+{0x+41}\n", "+{0x-1}\n", "+{0x}\n", "+{0xzz}\n"] {
+            let error = expand(source).unwrap_err();
+            let MacroError::BadRepeatCount { detail, .. } = &error else {
+                panic!("{source:?}: expected a bad repeat count, got {error:?}");
+            };
+            assert!(detail.contains("not a hexadecimal"), "{source:?}: {detail}");
+        }
+    }
+
+    #[test]
+    fn a_hexadecimal_too_large_is_told_apart_from_a_malformed_one() {
+        // The distinction the decimal branch already made, for the same
+        // reason: this is a hexadecimal number, it is just too big.
+        let error = expand("+{0xFFFFFFFFFFFFFFFFF}\n").unwrap_err();
         let MacroError::BadRepeatCount { detail, .. } = &error else {
             panic!("expected a bad repeat count, got {error:?}");
         };
-        assert!(detail.contains("does not fit in a cell"), "{detail}");
+        assert!(
+            detail.contains("does not fit in a 64-bit number"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_quote_is_named_wherever_it_starts() {
+        // Asked of the reader that knows, rather than guessed at from the
+        // spelling: a leading space or a leading letter used to turn this
+        // into a complaint about the brace.
+        for source in ["+{'a}\n", "+{ 'a }\n", "+{A'}\n"] {
+            let error = expand(source).unwrap_err();
+            let MacroError::BadRepeatCount { detail, .. } = &error else {
+                panic!("{source:?}: expected a bad repeat count, got {error:?}");
+            };
+            assert!(detail.contains("no closing quote"), "{source:?}: {detail}");
+        }
+    }
+
+    #[test]
+    fn something_stuck_to_a_literal_is_not_a_missing_quote() {
+        let error = expand("+{'a'x}\n").unwrap_err();
+        let MacroError::BadRepeatCount { detail, .. } = &error else {
+            panic!("expected a bad repeat count, got {error:?}");
+        };
+        assert!(detail.contains("follows its closing quote"), "{detail}");
+    }
+
+    #[test]
+    fn a_quoted_brace_does_not_hide_the_declarations_below_it() {
+        // The "defined below this line" hint counts braces to know whether a
+        // declaration is inside a macro body. A brace in a literal is data.
+        let error = expand("+{B}\n@define OPEN '{'\n@define B 5\n").unwrap_err();
+        let hint = error.hint().expect("a hint");
+        assert!(hint.contains("defined below this line"), "{hint}");
     }
 
     #[test]

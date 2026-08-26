@@ -2,7 +2,7 @@
 * the expander lose track of the cursor, and @here the way back.
 *
 * The letters are written as letters. `+{'H'}` and `+{72}` expand to the same
-* sixty-eight characters of BrainFuck; only one of them says what it is for.
+* seventy-two plus signs; only one of them says what it is for.
 
 @var first
 @var second
