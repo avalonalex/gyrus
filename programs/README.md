@@ -45,7 +45,7 @@ file.
 - **`control.bfm`** - a loop opened by one macro and closed by another, which
   is how the design's standard library proposes to write control flow.
 - **`scan.bfm`** - `[.>]`, which loses the cursor, and `@here`, which is the
-  only way back.
+  only way back. Also cells the expander chose and letters written as letters.
 
 All six are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:

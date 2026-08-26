@@ -1151,9 +1151,10 @@ unmeasurable here or a different project.
 - **bfmacro** (Frans Faase, Tufts) - Original inspiration.
   <https://www.cs.tufts.edu/~couch/bfmacro/bfmacro/>. Worth reading before
   designing anything further here: it reached the same static-pointer-tracking
-  rules independently, and has two things this does not -- cells bound to
-  addresses automatically rather than by hand, and constants written as
-  characters and hex (`C='C';`, `B=0xf;`) rather than only decimal.
+  rules independently, which is reassurance rather than coincidence. Two
+  things it had that this did not are now built -- cells bound automatically,
+  and constants written as characters and hex. What it does not have, and this
+  does, is any mapping from a runtime error back to the macro source.
 - **cpp** (C preprocessor) - Used for Mandelbrot BF
 - **m4** - Macro processor (could be adapted)
 - **BFASM** - Assembly-like BF syntax

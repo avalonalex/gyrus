@@ -32,8 +32,9 @@
 //!
 //! ```text
 //! @define STEP 9           * a named constant
-//! @var counter at 0        * a named cell
-//! @var letter  at 1
+//! @define BANG '!'         * or a character, or 0x21
+//! @var counter             * a named cell, and the expander picks which
+//! @var letter  at 1        * or say which, when it matters
 //!
 //! @to counter              * the expander emits the movement
 //! +{STEP}                  * repeat an instruction

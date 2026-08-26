@@ -155,7 +155,10 @@ built to replace.
 
 It understands `@define` (named constants), `OP{N}` (repeat counts), `@var`
 and `@to` (named cells, with the cursor tracked and the movement emitted),
-`@here` (assert a position without moving), and `@macro` with parameters. A directive must start its line and
+`@here` (assert a position without moving), and `@macro` with parameters. A
+`@var` without a cell has one chosen, and anywhere a number may be written so
+may an ASCII character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all
+65. A directive must start its line and
 owns the rest of it; `{` and `}` are reserved everywhere, `@` only at the start
 of a line, so BrainFuck's free-form prose comments survive.
 
