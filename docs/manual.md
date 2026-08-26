@@ -1,0 +1,222 @@
+# gyrus User Manual
+
+A path through the tools, organised by what you are trying to do rather than by
+what each flag is called. Every section is short and points at the reference
+page that has the detail.
+
+Back to the [README](../README.md).
+
+## What you have
+
+Four binaries, from `cargo build --release`:
+
+| | For |
+|---|---|
+| `gyrus` | Running a program |
+| `gyrus-debug` | Running a program one instruction at a time, with the tape in view |
+| `gyrus-tool` | Working on the source: validate, minify, view, inspect, generate |
+| `gyrus-tutorial` | Learning BrainFuck |
+
+`gyrus` and `gyrus-debug` take the same runtime settings, so anything you learn
+about one applies to the other.
+
+## Run a program
+
+```bash
+gyrus programs/basic/hello_world.bf
+```
+
+That is the whole interface for the common case: the program's output goes to
+stdout, its input comes from stdin, and nothing else is printed. Add `--verbose`
+for statistics and runtime warnings afterwards, or `--quiet` to suppress the
+warnings you would otherwise get from a program that wraps cells (most of them).
+
+## Pick an execution mode
+
+There are four, and the default is right until it is not:
+
+| Mode | Use it when |
+|---|---|
+| *(default)* | Always, unless one of the rows below applies |
+| `--jit` | The program runs for more than a few hundred milliseconds. Compiling costs tens of milliseconds, so it loses on short programs and wins big on long ones — 3.5× on mandelbrot |
+| `--debug` | You want a line and a column on a runtime error. Much slower: it keeps the AST and a source location for every instruction |
+| `--trace` | You want to know which loop the time is going into. Implies `--debug`, and prints a heatmap at the end |
+
+All four produce the same output and the same errors. That is held by a
+differential test suite rather than by intention — see
+[Testing](testing.md#differential-testing-is-the-backbone).
+
+[Execution models](execution-models.md#the-jit) has the JIT's details.
+
+## When it will not parse
+
+Brackets. It is essentially always brackets, and gyrus reports **all** of them
+in one pass with a line, a column, and the source:
+
+```bash
+gyrus programs/errors/unmatched_bracket.bf
+```
+
+You do not need `--debug` for this — parse errors always carry their location.
+[Errors and diagnostics](errors.md) covers the rest.
+
+## When it fails at run time
+
+Run it again with `--debug` and you get the line and column of the instruction
+that failed, plus the loop it was inside:
+
+```bash
+gyrus --debug program.bf
+```
+
+`--jit` also reports source locations, at no run-time cost, so on a long program
+`--jit` is often the better way to find a runtime failure than `--debug`.
+
+## When it runs, but the answer is wrong
+
+This is the hard case, because nothing has failed. Two tools, in order:
+
+**First, make the failure loud.** Most silent wrongness in BrainFuck is
+arithmetic leaving the range you assumed. `--cell-model checked` turns that from
+a wrap into an error with a location:
+
+```bash
+gyrus --debug --cell-model checked program.bf
+```
+
+If your program is *supposed* to wrap, this will fire on the wrap and you have
+learned nothing; if it is not, you have just found the bug.
+
+**Then, watch it happen.** `gyrus-debug` puts the source, the tape, the output,
+and any cells you are watching on screen together:
+
+```bash
+gyrus-debug program.bf
+gyrus-debug program.bf --break 12:5      # stop at line 12, column 5
+gyrus-debug program.bf --cell-model checked
+```
+
+Breakpoints are characters, not lines, because a BrainFuck program is often one
+line of a hundred instructions. [The debugger](debugger.md) has the key list.
+
+## When it is slow
+
+```bash
+gyrus --trace program.bf
+```
+
+`--trace` attributes execution to loops and prints the hot ones. Almost always,
+one loop is most of the runtime. Once you know which, `--jit` is the cheap fix
+and rewriting that loop is the real one.
+
+[Performance](performance.md) records what has already been tried and measured
+here, including the optimizations that did not pay — worth reading before
+attempting one.
+
+## When it does not stop
+
+You cannot tell in general whether it ever will, so put a bound on it:
+
+```bash
+gyrus --max-steps 10000000 program.bf
+gyrus --timeout 5000 program.bf
+```
+
+Both report where the program was when the limit hit. Before running it at all,
+`gyrus-tool validate` catches the loops whose non-termination is visible
+statically:
+
+```bash
+gyrus-tool validate program.bf
+gyrus-tool validate program.bf --strict     # non-zero exit for CI
+```
+
+## Giving it input
+
+`gyrus` reads stdin, so pipes and here-strings work as usual:
+
+```bash
+echo "hello" | gyrus programs/third-party/utilities/cat.bf
+```
+
+What happens when the input runs out is a choice, not a standard, and programs
+disagree about it. If a program loops forever after consuming its input, this is
+the first thing to try:
+
+```bash
+gyrus --eof-behavior neg-one program.bf     # zero, neg-one, no-change, error
+```
+
+Under the debugger the keyboard belongs to the interface, so input is queued
+instead — `--input TEXT`, `--input-file FILE`, or `i` while it is running.
+
+## Matching another interpreter
+
+Three settings, independent of each other, cover most dialect differences:
+
+```bash
+gyrus --memory-model unbounded --cell-model wrapping --eof-behavior zero program.bf
+```
+
+- **Memory model**: `fixed` (bounds-checked, 30,000 cells) or `unbounded` (grows
+  to a limit).
+- **Cell model**: `wrapping` (standard) or `checked` (errors instead).
+- **EOF behavior**: what `,` does with no input left.
+
+Getting a borrowed program to work is usually one of these. [Memory, cells, and
+EOF](execution-models.md) explains what each one changes.
+
+## Working on the source
+
+```bash
+gyrus-tool view program.bf --line-numbers    # syntax-highlighted, with nesting
+gyrus-tool validate program.bf               # static warnings
+gyrus-tool minify program.bf                 # strip comments and whitespace
+gyrus-tool optimize program.bf               # what the optimizer did, visually
+gyrus-tool debug-info program.bf             # instruction-to-source mapping
+gyrus-tool compile "Hello"                   # a program that prints that string
+gyrus-tool generate --length 200             # a random program, for fuzzing
+```
+
+[Development tools](tooling.md) covers each in full.
+
+## Learning the language
+
+```bash
+gyrus-tutorial
+gyrus-tutorial --list
+gyrus-tutorial --lesson 3
+```
+
+Thirteen lessons from `+` to the halting problem. Every run of your program is
+recorded, so you can step *backwards* through a loop — which is the thing that
+makes `[->+<]` legible. [The tutorial](tutorial.md) has the key list.
+
+## Using gyrus from Rust
+
+The library is not on crates.io by decision; take it as a path or git
+dependency. The examples are the fastest way in:
+
+```bash
+cargo run --example basic_usage
+cargo run --example memory_models
+cargo run --example custom_io
+```
+
+`crates/gyrus/examples/` has the rest. [Architecture](architecture.md) explains
+how the pieces fit together, including the hook system that both terminal tools
+are built on.
+
+## Everything else
+
+| | |
+|---|---|
+| [Usage](usage.md) | Every flag, in full |
+| [Errors and diagnostics](errors.md) | What gyrus reports when a program is wrong |
+| [Memory, cells, and EOF](execution-models.md) | The three execution knobs, and the JIT |
+| [Development tools](tooling.md) | `gyrus-tool`, subcommand by subcommand |
+| [The debugger](debugger.md) | `gyrus-debug` in detail |
+| [The tutorial](tutorial.md) | `gyrus-tutorial` in detail |
+| [Performance](performance.md) | How it got fast, and what did not work |
+| [Architecture](architecture.md) | How the pieces fit together |
+| [Development](development.md) | Building, testing, and the gates |
