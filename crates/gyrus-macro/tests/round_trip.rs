@@ -346,14 +346,18 @@ fn loops_and_branches_read_as_loops_and_branches() {
 ///
 /// The point of the corpus, and the thing the libraries were built towards: a
 /// program with a picture for an answer, written in named cells and signed
-/// fixed point rather than in `>` and `<`. 150 lines expand to 32,537
-/// instructions and 92 million steps.
+/// fixed point rather than in `>` and `<`. 167 lines expand to 30,637
+/// instructions and 91.5 million steps.
 ///
-/// Checked against `benchmarks/expected/mandelbrot-bfm.txt`, which is what a
-/// model of the same arithmetic -- sign and size, four fractional bits,
-/// truncating -- produces. Not Bosman's picture and not meant to be: his is
-/// 128 by 48 at sixteen-bit precision from a different representation. This
-/// is the same set at a sixteenth.
+/// Checked against a model of the same arithmetic -- sign and size, four
+/// fractional bits, truncating -- written below rather than recorded as a
+/// picture. A recorded picture would say what the program printed the day it
+/// was recorded, and nothing about which answer was right; this says what the
+/// arithmetic gives, so a change that moves a pixel has to argue with it.
+///
+/// Not Bosman's picture and not meant to be: his is 128 by 48 at sixteen-bit
+/// precision, from numbers held one bit per record. This is the same set at a
+/// sixteenth.
 #[test]
 fn the_mandelbrot_set_comes_out() {
     let path = gyrus_corpus::workspace_root().join("programs/macros/mandelbrot.bfm");
@@ -361,11 +365,51 @@ fn the_mandelbrot_set_comes_out() {
     let expansion = gyrus_macro::expand_at(&source, &path)
         .unwrap_or_else(|failure| panic!("{}", failure.report()));
 
-    assert_eq!(
-        run_optimized(&expansion, 200_000_000),
-        read("benchmarks/expected/mandelbrot-bfm.txt")
-    );
+    assert_eq!(run_optimized(&expansion, 200_000_000), mandelbrot_model());
     assert_origins_name_the_program(&expansion, &source);
+}
+
+/// The picture the program's arithmetic gives, worked out here.
+///
+/// Everything counts in sixteenths, every product is truncated towards zero
+/// the way `@signed_multiply` truncates it, and a value past two and a half
+/// has escaped -- which is the guard the program needs to keep a square inside
+/// a cell, and the one thing about it a reader would not guess.
+fn mandelbrot_model() -> String {
+    const FRACTION: i32 = 4;
+    const ONE: i32 = 1 << FRACTION;
+    let scale = |a: i32, b: i32| {
+        let size = (a.abs() * b.abs()) >> FRACTION;
+        if (a < 0) != (b < 0) { -size } else { size }
+    };
+
+    let mut picture = String::new();
+    for row in 0..16 {
+        let cy = -15 + 2 * row;
+        for col in 0..44 {
+            let cx = -33 + col;
+            let (mut zx, mut zy) = (0, 0);
+            let mut escaped = false;
+            for _ in 0..12 {
+                let (ax, ay) = (scale(zx, zx), scale(zy, zy));
+                if ax + ay > 4 * ONE {
+                    escaped = true;
+                    break;
+                }
+                let bx = scale(zx, zy);
+                let (nx, ny) = (ax - ay + cx, 2 * bx + cy);
+                zx = nx;
+                zy = ny;
+                if zx.abs() > 40 || zy.abs() > 40 {
+                    escaped = true;
+                    break;
+                }
+            }
+            picture.push(if escaped { ' ' } else { '*' });
+        }
+        picture.push('\n');
+    }
+    picture
 }
 
 /// Every sign and size against Python's answer, rather than nine of them.
@@ -382,15 +426,15 @@ fn the_mandelbrot_set_comes_out() {
 /// `@include` against.
 #[test]
 fn signed_arithmetic_agrees_with_arithmetic() {
-    // Five sizes and both signs on each side, twice over: 200 operations.
-    // Wider than that and the sweep itself passes the expansion limit, which
-    // is the honest bound on how much a single program can check.
-    let sizes = [0u8, 1, 3, 7, 12];
+    // Four sizes and both signs on each side, three operations over: 192 of
+    // them. Wider than that and the sweep itself passes the expansion limit,
+    // which is the honest bound on how much one program can check.
+    let sizes = [0u8, 1, 5, 12];
     let mut cases = Vec::new();
     let mut source = String::from(
         "@include \"lib/signed.bfm\"\n@var a_sign\n@var a_size\n@var b_sign\n@var b_size\n         @macro show {\n@to a_sign\n.\n@to a_size\n.\n}\n",
     );
-    for &op in &["add", "sub"] {
+    for &op in &["add", "sub", "multiply"] {
         for a_neg in [0u8, 1] {
             for &a in &sizes {
                 for b_neg in [0u8, 1] {
@@ -399,7 +443,17 @@ fn signed_arithmetic_agrees_with_arithmetic() {
                             "@signed_put(a_sign, a_size, {a_neg}, {a})\n                             @signed_put(b_sign, b_size, {b_neg}, {b})\n                             @signed_{op}(a_sign, a_size, b_sign, b_size)\n@show\n"
                         ));
                         let (x, y) = (signed(a_neg, a), signed(b_neg, b));
-                        cases.push(if op == "add" { x + y } else { x - y });
+                        cases.push(match op {
+                            "add" => x + y,
+                            "sub" => x - y,
+                            // The same truncation `@signed_multiply` does: the
+                            // sizes multiply and shift, and the sign is
+                            // whether the two disagree.
+                            _ => {
+                                let size = (x.abs() * y.abs()) >> 4;
+                                if (x < 0) != (y < 0) { -size } else { size }
+                            }
+                        });
                     }
                 }
             }
@@ -438,6 +492,25 @@ fn a_signed_value_can_be_added_to_itself() {
         .unwrap_or_else(|failure| panic!("{}", failure.report()));
 
     assert_eq!(run_optimized(&expansion, 1_000_000).as_bytes(), [1, 42]);
+}
+
+/// Squaring: the operands are the same two cells.
+///
+/// `@signed_add` has this test because self-operands once spun for ever.
+/// `@signed_multiply` reads its multiplicand while writing its answer, so it
+/// is the same question and it needed asking: -20 squared is +25 at a
+/// sixteenth, and the sign has to come out positive.
+#[test]
+fn a_signed_value_can_be_multiplied_by_itself() {
+    let source = "@include \"lib/signed.bfm\"\n@var a_sign\n@var a_size\n\
+                  @signed_put(a_sign, a_size, 1, 20)\n\
+                  @signed_multiply(a_sign, a_size, a_sign, a_size)\n\
+                  @to a_sign\n.\n@to a_size\n.\n";
+    let path = gyrus_corpus::workspace_root().join("programs/macros/signed.bfm");
+    let expansion = gyrus_macro::expand_at(source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    assert_eq!(run_optimized(&expansion, 1_000_000).as_bytes(), [0, 25]);
 }
 
 fn signed(negative: u8, size: u8) -> i32 {

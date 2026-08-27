@@ -16,11 +16,14 @@
 *                 if zx2 + zy2 > 4:
 *                     break
 *                 zx, zy = zx2 - zy2 + cx, 2*zx*zy + cy
+*                 if abs(zx) > 2.5 or abs(zy) > 2.5:
+*                     break                 # gone, and about to overflow
 *             print('*' if it did not escape else ' ')
 *         print()
 *
-* The multiply is the slow one -- `b` added to nothing `a` times -- so 704
-* points cost 92 million steps: a fifth of a second optimized, a tenth jitted,
+* The multiply is the slow one -- `b` added to nothing `a` times, and the four
+* halvings that scale it cost the square of what they halve -- so 704 points
+* cost 91.5 million steps: a fifth of a second optimized, a tenth jitted,
 * and minutes on the tree-walker a `.bfm` defaults to. Run it with `--jit`.
 *
 * This is not Bosman's picture and is not trying to be. His is 128 by 48 at
@@ -54,6 +57,7 @@
 @var gone
 @var sum
 @var limit
+@var big
 @var flag
 @var other
 @var scratch
@@ -63,18 +67,29 @@
 @var passed
 @var out
 
-* One signed value onto another.
-@macro copy_pair(from_sign, from_size, to_sign, to_size) {
-    @clear(to_sign)
-    @copy(from_sign, to_sign, spare)
-    @clear(to_size)
-    @copy(from_size, to_size, spare)
-}
-
 * Move a signed value along by a written-down amount.
 @macro step_by(sign, size, by_sign, by_size) {
     @signed_put(t_sign, t_size, by_sign, by_size)
     @signed_add(sign, size, t_sign, t_size)
+}
+
+* Anything past two and a half has gone for good, and squaring it would not
+* fit a cell: 98 squared is 600, and a size counts to 255. The test on the
+* squares catches the same points one turn later, which is one turn too late
+* to do the arithmetic in.
+*
+*     if 40 < size:
+*         escaped = True
+*
+* `@less` leaves both its operands alone, so `big` is written once at the top
+* and holds for every use. It is a cell of its own rather than the one the
+* escape test uses, which is 64 and would otherwise overwrite it -- the first
+* version shared them and drew a different picture.
+@macro escape_if_big(size) {
+    @less(big, size, gone, count, step, passed, flag, other, scratch, spare)
+    @when(gone, flag, scratch, spare) {
+        @put(escaped, 1)
+    }
 }
 
 * One point: iterate until it runs away or the count is used up, then print.
@@ -85,9 +100,9 @@
     @put(iter, 12)
 
     @while(iter) {
-        @copy_pair(zx_sign, zx_size, ax_sign, ax_size)
+        @signed_copy(zx_sign, zx_size, ax_sign, ax_size)
         @signed_multiply(ax_sign, ax_size, zx_sign, zx_size)
-        @copy_pair(zy_sign, zy_size, ay_sign, ay_size)
+        @signed_copy(zy_sign, zy_size, ay_sign, ay_size)
         @signed_multiply(ay_sign, ay_size, zy_sign, zy_size)
 
         * Away for good once the two squares pass four, which is 64 here.
@@ -104,32 +119,20 @@
 
         @unless(gone, flag, scratch, spare) {
             * zy = 2*zx*zy + cy, worked out before zx is overwritten.
-            @copy_pair(zx_sign, zx_size, bx_sign, bx_size)
+            @signed_copy(zx_sign, zx_size, bx_sign, bx_size)
             @signed_multiply(bx_sign, bx_size, zy_sign, zy_size)
 
             * zx = zx*zx - zy*zy + cx
-            @copy_pair(ax_sign, ax_size, zx_sign, zx_size)
+            @signed_copy(ax_sign, ax_size, zx_sign, zx_size)
             @signed_sub(zx_sign, zx_size, ay_sign, ay_size)
             @signed_add(zx_sign, zx_size, cx_sign, cx_size)
 
-            @copy_pair(bx_sign, bx_size, zy_sign, zy_size)
+            @signed_copy(bx_sign, bx_size, zy_sign, zy_size)
             @signed_add(zy_sign, zy_size, bx_sign, bx_size)
             @signed_add(zy_sign, zy_size, cy_sign, cy_size)
 
-            * Anything past two and a half has gone for good, and squaring it
-            * would not fit a cell: 98 squared is 600, and a size counts to
-            * 255. The test above catches the same points one turn later,
-            * which is one turn too late to do the arithmetic in.
-            @put(limit, 40)
-            @less(limit, zx_size, gone, count, step, passed, flag, other, scratch, spare)
-            @when(gone, flag, scratch, spare) {
-                @put(escaped, 1)
-            }
-            @put(limit, 40)
-            @less(limit, zy_size, gone, count, step, passed, flag, other, scratch, spare)
-            @when(gone, flag, scratch, spare) {
-                @put(escaped, 1)
-            }
+            @escape_if_big(zx_size)
+            @escape_if_big(zy_size)
             @when(escaped, flag, scratch, spare) {
                 @clear(iter)
             }
@@ -149,6 +152,7 @@
     }
 }
 
+@put(big, 40)
 @signed_put(cy_sign, cy_size, 1, 15)
 @put(row, 16)
 @while(row) {
