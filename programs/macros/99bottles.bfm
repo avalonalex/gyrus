@@ -25,6 +25,14 @@
 *         print(f"{n} Bottle{'' if n == 1 else 's'} of beer on the wall")
 *         print()
 *
+* The words are `@text`, which asks `gyrus`'s codegen for the shortest way
+* from each byte to the next -- about ten instructions a character where
+* setting a cell from empty costs a hundred. That took the program from 11,556
+* instructions to 3,958 without changing a byte of what it prints. It needs
+* somewhere to make a mess, which is what `page` is: `@text` walks right from
+* wherever the cursor is, and every cell it walks over is emptied and then
+* left holding whatever the printing left.
+*
 * Checked against `benchmarks/expected/99beer.txt`, which is the output of
 * `programs/third-party/advanced/99beer.bf` -- a program written by somebody
 * else, byte for byte.
@@ -37,7 +45,9 @@
 @var tens
 @var ones
 
-@var out          * the cell every character is printed through
+@var out          * the digits and the plural are printed through this;
+                  * the words go through `page`, which `@text` needs
+@var page at 40   * where `@text` is allowed to make a mess
 @var plural       * whether this verse says "bottles"
 @var left         * verses still to sing
 @var borrow       * set while a decrement is still owed to the tens
@@ -114,13 +124,8 @@
         @clear(scratch)
     ]
 
-    @say(out, SPACE)
-    @say(out, 'B')
-    @say(out, 'o')
-    @say(out, 't')
-    @say(out, 't')
-    @say(out, 'l')
-    @say(out, 'e')
+    @to page
+    @text " Bottle"
     @to plural
     [
         @say(out, 's')
@@ -129,64 +134,18 @@
 }
 
 @macro of_beer {
-    @say(out, SPACE)
-    @say(out, 'o')
-    @say(out, 'f')
-    @say(out, SPACE)
-    @say(out, 'b')
-    @say(out, 'e')
-    @say(out, 'e')
-    @say(out, 'r')
+    @to page
+    @text " of beer"
 }
 
 @macro on_the_wall {
-    @say(out, SPACE)
-    @say(out, 'o')
-    @say(out, 'n')
-    @say(out, SPACE)
-    @say(out, 't')
-    @say(out, 'h')
-    @say(out, 'e')
-    @say(out, SPACE)
-    @say(out, 'w')
-    @say(out, 'a')
-    @say(out, 'l')
-    @say(out, 'l')
+    @to page
+    @text " on the wall"
 }
 
 @macro take_one_down {
-    @say(out, 'T')
-    @say(out, 'a')
-    @say(out, 'k')
-    @say(out, 'e')
-    @say(out, SPACE)
-    @say(out, 'o')
-    @say(out, 'n')
-    @say(out, 'e')
-    @say(out, SPACE)
-    @say(out, 'd')
-    @say(out, 'o')
-    @say(out, 'w')
-    @say(out, 'n')
-    @say(out, SPACE)
-    @say(out, 'a')
-    @say(out, 'n')
-    @say(out, 'd')
-    @say(out, SPACE)
-    @say(out, 'p')
-    @say(out, 'a')
-    @say(out, 's')
-    @say(out, 's')
-    @say(out, SPACE)
-    @say(out, 'i')
-    @say(out, 't')
-    @say(out, SPACE)
-    @say(out, 'a')
-    @say(out, 'r')
-    @say(out, 'o')
-    @say(out, 'u')
-    @say(out, 'n')
-    @say(out, 'd')
+    @to page
+    @text "Take one down and pass it around"
 }
 
 

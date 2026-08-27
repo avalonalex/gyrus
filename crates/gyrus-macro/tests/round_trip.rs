@@ -342,6 +342,28 @@ fn loops_and_branches_read_as_loops_and_branches() {
     assert_eq!(printed, "[*** - [***** \n====\n");
 }
 
+/// `@text` prints what it was given, escapes and all, over cells that were
+/// not empty when it started.
+///
+/// The two things the directive's doc promises and nothing executed: that the
+/// escapes are the ones a `'x'` literal takes, and that the prologue rescues a
+/// print whose cells are dirty. Both were checked by reading the generated
+/// code and neither by running it.
+#[test]
+fn text_prints_what_it_was_given() {
+    let source = "@var page\n\
+                  @to page\n+{9}\n\
+                  >\n+{9}\n<\n\
+                  @text \"Hi\\tthere\\n\"\n";
+    let path = gyrus_corpus::workspace_root().join("programs/macros/99bottles.bfm");
+    let expansion = gyrus_macro::expand_at(source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    // The cells held 9 apiece and the text still comes out right, which is the
+    // prologue doing its one job.
+    assert_eq!(run_optimized(&expansion, 1_000_000), "Hi\tthere\n");
+}
+
 /// The Mandelbrot set, from a `.bfm`.
 ///
 /// The point of the corpus, and the thing the libraries were built towards: a

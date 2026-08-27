@@ -239,11 +239,26 @@ pub enum MacroError {
     },
 
     /// An `@include`d file emitting BrainFuck rather than declaring.
+    ///
+    /// `what` is spelled by the caller rather than being a character, because
+    /// the thing that emits is not always something the reader wrote: a
+    /// `@text` generates its instructions, and naming the first `[` of them
+    /// points at a character nobody typed.
     #[error(
-        "'{instruction}' at {location} emits BrainFuck, and an included file declares rather than emits"
+        "{what} at {location} emits BrainFuck, and an included file declares rather than emits"
     )]
     IncludedFileEmits {
-        instruction: char,
+        what: String,
+        location: SourceLocation,
+    },
+
+    /// `@text` whose generated code would run over a cell somebody named.
+    #[error(
+        "'@text' at {location} runs over the cells after the cursor, and '{name}' is one of them"
+    )]
+    TextOverAName {
+        name: String,
+        reach: usize,
         location: SourceLocation,
     },
 
@@ -381,6 +396,7 @@ impl MacroError {
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
             | MacroError::IncludedFileEmits { location, .. }
+            | MacroError::TextOverAName { location, .. }
             | MacroError::HereContradictsCursor { location, .. }
             | MacroError::IncludedFileMovesTheCursor { location }
             | MacroError::IncludeWithoutAFile { location }
@@ -534,6 +550,13 @@ impl MacroError {
                  somebody wrote, rather than a line of a file they may never open."
                     .to_string(),
             ),
+            MacroError::TextOverAName { reach, .. } => Some(format!(
+                "The shortest way to print a string walks rightwards onto cells it expects to \
+                 find empty, and empties them to be sure -- this text reaches {reach} past the \
+                 cursor. Point the cursor somewhere with that many unnamed cells after it: a \
+                 `@var page` declared last, with nothing after it, and `@to page` before the \
+                 text."
+            )),
             MacroError::HereContradictsCursor { believed, .. } => Some(format!(
                 "`@here` is for saying where a scan landed, which is the one thing the expander \
                  cannot work out. Here it can: the cursor is at cell {believed}, and every `>` \
