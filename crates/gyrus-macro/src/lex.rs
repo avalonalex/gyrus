@@ -9,11 +9,16 @@
 //! What they must agree about is small and was written out three times, with
 //! four differences between the copies:
 //!
-//! - where a `*` comment ends -- one stopped at the end of the line, one also
-//!   at a body's closing brace, and the third did not know comments existed,
-//!   so a `{` in prose silently switched the hint off;
+//! - where a `*` comment ends: one stopped at the end of the line, and one
+//!   also at a body's closing brace;
+//! - that the third reader did not know comments existed at all, so a `{` in
+//!   prose silently switched the hint off for the rest of the file;
 //! - how far a character literal reaches, and whether a newline ends one;
 //! - whether a `{` opens something or is a repeat count.
+//!
+//! A comment is prose and holds no literals: a `'` inside one is an
+//! apostrophe. That is why [`comment`] does not consult [`literal`] while
+//! every other rule here does.
 //!
 //! Each of those has cost a bug. They are free functions over `(chars,
 //! offset)` rather than methods because the three callers do not share a
@@ -35,6 +40,29 @@ pub(crate) fn at_line_start(chars: &[char], from: usize, boundary: usize) -> boo
         .rev()
         .take_while(|&&c| c != '\n')
         .all(|&c| c == ' ' || c == '\t')
+}
+
+/// Whether `at` sits on a line whose first non-blank character is `@`.
+///
+/// A character literal only appears where a *value* belongs, and on a line of
+/// BrainFuck there are two such places: inside a repeat count, which
+/// [`repeat_count`] reads, and among a directive's operands. Everywhere else a
+/// `'` is an apostrophe.
+///
+/// Both halves have cost a bug. Treating every `'` as a literal made `it's }
+/// fine` in a macro body hide the brace after it; treating none of them as one
+/// made `@n('}')` count its quoted brace as the body's end. Skipping a
+/// directive's whole line instead is no good either -- `@macro inner { + }`
+/// carries braces that must still be counted.
+pub(crate) fn on_directive_line(chars: &[char], at: usize, boundary: usize) -> bool {
+    let start = chars[boundary.min(at)..at]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(boundary.min(at), |newline| boundary.min(at) + newline + 1);
+    chars[start..]
+        .iter()
+        .find(|&&c| c != ' ' && c != '\t')
+        .is_some_and(|&c| c == '@')
 }
 
 /// Past a `*` comment beginning at `from`.
@@ -101,22 +129,41 @@ pub(crate) fn is_repeat_count(chars: &[char], at: usize) -> bool {
         && chars.get(at - 1).is_some_and(|c| REPEATABLE.contains(c))
 }
 
-/// Past a `{...}` repeat count beginning at `from`, and whether it was closed.
+/// How a `{...}` repeat count ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CountEnd {
+    /// At its `}`, which is the only way it should end.
+    Brace,
+    /// At a newline or the end of the file: the `}` was forgotten.
+    Unclosed,
+    /// Inside a character literal that was never closed. Told apart from
+    /// `Unclosed` because "no closing quote" and "no closing '}'" send the
+    /// reader to different ends of the same line.
+    OpenLiteral,
+}
+
+/// Past a `{...}` repeat count beginning at `from`, and how it ended.
 ///
 /// The body may hold a character literal, and that literal may hold the brace
 /// that would otherwise end the count: `+{'}'}` is the obvious thing to write.
-pub(crate) fn repeat_count(chars: &[char], from: usize) -> (usize, bool) {
+pub(crate) fn repeat_count(chars: &[char], from: usize) -> (usize, CountEnd) {
     debug_assert_eq!(chars.get(from), Some(&'{'));
     let mut at = from + 1;
     while let Some(&c) = chars.get(at) {
         match c {
-            '\n' => return (at, false),
-            '}' => return (at + 1, true),
-            '\'' => at = literal(chars, at).0,
+            '\n' => return (at, CountEnd::Unclosed),
+            '}' => return (at + 1, CountEnd::Brace),
+            '\'' => {
+                let (end, closed) = literal(chars, at);
+                if !closed {
+                    return (end, CountEnd::OpenLiteral);
+                }
+                at = end;
+            }
             _ => at += 1,
         }
     }
-    (at, false)
+    (at, CountEnd::Unclosed)
 }
 
 #[cfg(test)]
@@ -178,9 +225,32 @@ mod tests {
 
     #[test]
     fn a_count_holds_a_literal_that_holds_its_own_brace() {
-        assert_eq!(repeat_count(&chars("{'}'}"), 0), (5, true));
-        assert_eq!(repeat_count(&chars("{65}"), 0), (4, true));
-        assert_eq!(repeat_count(&chars("{65\nmore"), 0), (3, false));
+        assert_eq!(repeat_count(&chars("{'}'}"), 0), (5, CountEnd::Brace));
+        assert_eq!(repeat_count(&chars("{65}"), 0), (4, CountEnd::Brace));
+        assert_eq!(
+            repeat_count(&chars("{65\nmore"), 0),
+            (3, CountEnd::Unclosed)
+        );
+        // Told apart, because the two send the reader to different ends of
+        // the same line.
+        assert_eq!(
+            repeat_count(&chars("{'a}\nmore"), 0),
+            (4, CountEnd::OpenLiteral)
+        );
+    }
+
+    #[test]
+    fn a_directive_line_is_where_a_literal_may_appear() {
+        let directive = chars("@n(',')\n+ it's prose");
+        assert!(on_directive_line(&directive, 3, 0), "inside the operands");
+        assert!(
+            !on_directive_line(&directive, 12, 0),
+            "an apostrophe in prose"
+        );
+        // A body's first character counts as the start of a line, as it does
+        // for a directive.
+        let inline = chars("@clear ");
+        assert!(on_directive_line(&inline, 2, 0));
     }
 
     #[test]

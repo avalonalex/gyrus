@@ -143,7 +143,7 @@ use gyrus::SourceLocation;
 
 use crate::directive::{Declaration, Directive};
 use crate::error::{Kind, MacroError, Wanted};
-use crate::lex::{self, REPEATABLE};
+use crate::lex::{self, CountEnd, REPEATABLE};
 use crate::source_map::Expansion;
 
 /// The most instructions one repeat count may emit.
@@ -404,7 +404,12 @@ impl Scanner {
         while self.at.offset < end {
             let Some(c) = self.peek() else { break };
             match c {
-                '*' => self.skip_line(),
+                // Through the same rule the body reader uses, so the two
+                // cannot disagree about where a comment ends.
+                '*' => {
+                    let end = lex::comment(&self.chars, self.at.offset, self.inside_a_macro());
+                    self.advance_to(end);
+                }
                 '@' if self.at_line_start() => self.directive()?,
                 '{' | '}' => {
                     return Err(MacroError::StrayBrace {
@@ -426,12 +431,25 @@ impl Scanner {
         self.chars.get(self.at.offset).copied()
     }
 
-    /// Advance to `offset`, one character at a time so the line and column
-    /// keep up. The lexical rules measure spans; this walks them.
+    /// Advance to `offset`, keeping the line and column right.
+    ///
+    /// The lexical rules measure a span; this crosses it. Bumping through it
+    /// character by character walked every comment and literal twice, once to
+    /// measure and once to move.
     fn advance_to(&mut self, offset: usize) {
-        while self.at.offset < offset && self.peek().is_some() {
-            self.bump();
+        let offset = offset.min(self.chars.len());
+        if offset <= self.at.offset {
+            return;
         }
+        let span = &self.chars[self.at.offset..offset];
+        let newlines = span.iter().filter(|c| **c == '\n').count();
+        if newlines == 0 {
+            self.at.column += span.len();
+        } else {
+            self.at.line += newlines;
+            self.at.column = span.iter().rev().take_while(|c| **c != '\n').count() + 1;
+        }
+        self.at.offset = offset;
     }
 
     /// Whether only blanks precede the cursor on its line.
@@ -465,15 +483,6 @@ impl Scanner {
         }
     }
 
-    fn skip_line(&mut self) {
-        while let Some(c) = self.peek() {
-            if c == '\n' {
-                return;
-            }
-            self.bump();
-        }
-    }
-
     fn skip_blanks(&mut self) {
         while matches!(self.peek(), Some(' ') | Some('\t')) {
             self.bump();
@@ -504,7 +513,6 @@ impl Scanner {
     /// obvious thing to write.
     fn token(&mut self, ends: impl Fn(char) -> bool) -> Token {
         let start = self.at.offset;
-        let mut quote_open = false;
         while let Some(c) = self.peek() {
             // A newline ends a token whatever the quoting, which is the rule
             // `lex::literal` enforces from the other side.
@@ -512,16 +520,13 @@ impl Scanner {
                 break;
             }
             if c == '\'' {
-                let (end, closed) = lex::literal(&self.chars, self.at.offset);
-                self.advance_to(end);
-                quote_open = !closed;
+                self.advance_to(lex::literal(&self.chars, self.at.offset).0);
                 continue;
             }
             self.bump();
         }
         Token {
             text: self.chars[start..self.at.offset].iter().collect(),
-            quote_open,
         }
     }
 
@@ -549,7 +554,7 @@ impl Scanner {
     fn instruction(&mut self, c: char) -> Result<(), MacroError> {
         let origin = self.at;
         self.bump();
-        let count = if self.peek() == Some('{') {
+        let count = if lex::is_repeat_count(&self.chars, self.at.offset) {
             self.repeat_count()?
         } else {
             1
@@ -718,30 +723,28 @@ impl Scanner {
     /// A `{...}` repeat count at the cursor, resolved to a number.
     fn repeat_count(&mut self) -> Result<u64, MacroError> {
         let open = self.at;
-        self.bump(); // past '{'
+        let (end, ending) = lex::repeat_count(&self.chars, open.offset);
+        // The text between the braces, whether or not the closing one is
+        // there. `end` is past the `}` when there is one.
+        let text_end = match ending {
+            CountEnd::Brace => end - 1,
+            _ => end,
+        };
+        let body: String = self.chars[open.offset + 1..text_end].iter().collect();
+        self.advance_to(end);
+        let body = body.trim();
 
-        // `token` already ends on a newline whatever the quoting, which is
-        // what stops an unclosed quote swallowing the rest of the program and
-        // blaming a line far below the mistake.
-        let body = self.token(|c| c == '}');
-        if self.peek() != Some('}') {
-            // Which of the two is missing, asked of the reader that knows
-            // rather than guessed at from the spelling.
-            let detail = match body.quote_open {
-                true => format!("{} has no closing quote", body.text),
-                false => "no closing '}'".to_string(),
-            };
-            return Err(MacroError::BadRepeatCount {
-                detail,
-                location: open,
-            });
-        }
-        self.bump();
-        let body = body.text.trim();
         let bad = |detail: String| MacroError::BadRepeatCount {
             detail,
             location: open,
         };
+        match ending {
+            CountEnd::Brace => {}
+            // Which of the two is missing, asked of the reader that knows.
+            CountEnd::OpenLiteral => return Err(bad(format!("{body} has no closing quote"))),
+            CountEnd::Unclosed => return Err(bad("no closing '}'".to_string())),
+        }
+
         let count = match classify(body) {
             Operand::Number(value) => value,
             Operand::Name(named) => self.resolve(named, open)?,
@@ -834,8 +837,17 @@ impl Scanner {
                 return true;
             }
             at = match c {
-                '*' => lex::comment(&self.chars, at, false),
-                '\'' => lex::literal(&self.chars, at).0,
+                // `depth == 1` is directly inside a body, which is what the
+                // body reader means by it. Passing `false` here was the same
+                // rule written twice and diverging again, in the commit that
+                // set out to stop that: a one-line `@macro clear { [-] * it }`
+                // had its closing brace swallowed by the comment, so the depth
+                // never came back to zero and every declaration below it was
+                // hidden from this hint.
+                '*' => lex::comment(&self.chars, at, depth > 0),
+                '\'' if lex::on_directive_line(&self.chars, at, 0) => {
+                    lex::literal(&self.chars, at).0
+                }
                 '{' if lex::is_repeat_count(&self.chars, at) => {
                     lex::repeat_count(&self.chars, at).0
                 }
@@ -1066,6 +1078,7 @@ impl Scanner {
     /// contain a brace, and `+{3}` is a repeat count rather than a nested
     /// body. Getting either wrong would end the body in the wrong place.
     fn skip_body(&mut self, name: &str, location: SourceLocation) -> Result<usize, MacroError> {
+        let body_start = self.at.offset;
         let mut depth = 1usize;
         loop {
             let Some(c) = self.peek() else {
@@ -1076,12 +1089,18 @@ impl Scanner {
                 ));
             };
             let at = self.at.offset;
-            // Every one of these was written out here once, and every one of
-            // them drifted from the expander's version. The body is read the
-            // way the body will be read.
+            // The same rules the expander applies, asked of the same
+            // functions.
             let next = match c {
-                '*' => lex::comment(&self.chars, at, depth == 1),
-                '\'' => lex::literal(&self.chars, at).0,
+                // Any `}` that ends its line closes *a* body -- this one or a
+                // nested one -- and `depth` is never zero here.
+                '*' => lex::comment(&self.chars, at, true),
+                // Only where a value belongs. A directive's line is not
+                // skipped whole, because `@macro inner { + }` carries braces
+                // that still have to be counted.
+                '\'' if lex::on_directive_line(&self.chars, at, body_start) => {
+                    lex::literal(&self.chars, at).0
+                }
                 '{' if lex::is_repeat_count(&self.chars, at) => {
                     lex::repeat_count(&self.chars, at).0
                 }
@@ -1545,7 +1564,8 @@ impl Scanner {
             // than of `boundary`, which only happens to today.
             Some('}') if self.inside_a_macro() => Ok(()),
             Some('*') => {
-                self.skip_line();
+                let end = lex::comment(&self.chars, self.at.offset, self.inside_a_macro());
+                self.advance_to(end);
                 Ok(())
             }
             Some(c) => Err(MacroError::MalformedDirective {
@@ -1650,7 +1670,6 @@ fn classify(token: &str) -> Operand<'_> {
 /// missing brace, because the quote was not the first character.
 struct Token {
     text: String,
-    quote_open: bool,
 }
 
 /// The byte a `'x'` literal means.
@@ -1710,9 +1729,12 @@ fn malformed(directive: &str, detail: String, location: SourceLocation) -> Macro
 
 /// Whether the directive at `at` declares `name`, for the "defined below" hint.
 fn declares(chars: &[char], at: usize, name: &str) -> bool {
+    // The crate's own idea of a name, not "leading letters": a directive
+    // spelled `@end_if` would otherwise be handed a truncated spelling, and
+    // `from_spelling` would quietly say no.
     let spelling: String = chars[at + 1..]
         .iter()
-        .take_while(|c| c.is_ascii_alphabetic())
+        .take_while(|c| is_identifier_char(**c))
         .collect();
     if Directive::from_spelling(&spelling)
         .and_then(Directive::declaration)
@@ -2479,14 +2501,15 @@ mod macro_tests {
             expanded("@macro clear { [-] * clears it }\n@clear\n"),
             "[-]"
         );
-        // A brace that ends the line is the one closing the body, so the
-        // comment ends there and `brace` is left on the @macro line -- which
-        // a directive owns.
+        // And a brace in the middle of a sentence is not the one closing the
+        // body, so this one-line body is genuinely never closed. The message
+        // says so rather than blaming what follows the brace, which is what it
+        // used to do when any `}` ended a comment.
         let error = expand("@macro two { ++ * a } brace\n@two\n").unwrap_err();
-        assert!(
-            matches!(error, MacroError::MalformedDirective { .. }),
-            "{error:?}"
-        );
+        let MacroError::MalformedDirective { detail, .. } = &error else {
+            panic!("expected a malformed directive, got {error:?}");
+        };
+        assert!(detail.contains("never closed"), "{detail}");
     }
 
     #[test]
@@ -3096,12 +3119,16 @@ mod one_lexer {
 
     /// Constructs whose lexical extent is not obvious, and which each of the
     /// three readers of this language got wrong at least once.
-    const AWKWARD: [(&str, &str); 6] = [
+    const AWKWARD: &[(&str, &str)] = &[
         ("a quoted brace", "+{'}'}"),
         ("a quoted quote", "+{'\\''}"),
         ("a brace in prose", "+ * a { brace\n"),
         ("a close brace in prose", "+ * a } brace\n"),
         ("a quote in prose", "+ * it's prose\n"),
+        // An apostrophe with no comment in front of it. The body reader used
+        // to take it for a literal and skip to the end of the line, hiding the
+        // brace after it from the scan that has to find the body's end.
+        ("a bare apostrophe", "+ it's prose\n"),
         ("an unrepeated brace count", "+{3}"),
     ];
 
@@ -3113,7 +3140,7 @@ mod one_lexer {
     /// through all three is the test that would have caught every one.
     #[test]
     fn the_three_readers_agree_about_every_awkward_construct() {
-        for (what, construct) in AWKWARD {
+        for &(what, construct) in AWKWARD {
             // 1. At the top level, where the expander reads it.
             let plain = format!("{construct}\n");
             let direct = expand(&plain)
@@ -3142,6 +3169,55 @@ mod one_lexer {
                 "{what} hid the declaration after it from the hint: {hint}"
             );
         }
+    }
+
+    /// A `}` in prose is reserved wherever it is written, and both readers
+    /// say so -- differently, because they are in different positions to.
+    #[test]
+    fn a_close_brace_in_prose_is_refused_at_the_top_level_and_ends_a_body() {
+        // Outside a body there is nothing for it to close.
+        assert!(matches!(
+            expand("+ it's } prose\n").unwrap_err(),
+            MacroError::StrayBrace { brace: '}', .. }
+        ));
+        // Inside one it is the end of the body, so what follows is left on the
+        // `@macro` line -- which a directive owns.
+        let error = expand("@macro m {\nit's } fine\n}\n@m\n").unwrap_err();
+        let MacroError::MalformedDirective { detail, .. } = &error else {
+            panic!("expected a malformed directive, got {error:?}");
+        };
+        assert!(detail.contains("rest of its line"), "{detail}");
+    }
+
+    /// The lookahead reader, given a macro body -- which it never was.
+    ///
+    /// This is where its idea of where a comment ends had drifted again, in
+    /// the commit that set out to stop exactly that: the body's closing brace
+    /// was swallowed by the trailing comment, so its depth never came back to
+    /// zero and every declaration below was hidden.
+    #[test]
+    fn the_hint_sees_past_a_one_line_body_with_a_comment() {
+        for body in [
+            "@macro clear { [-] * clears it }",
+            "@macro pair(a) { +{a} * doubles }",
+            "@macro many {\n++ * why }",
+        ] {
+            let source = format!("+{{LATER}}\n{body}\n@define LATER 3\n");
+            let hint = expand(&source).unwrap_err().hint().unwrap_or_default();
+            assert!(hint.contains("defined below this line"), "{body}: {hint}");
+        }
+    }
+
+    /// A nested `@macro` is refused for being nested, not for looking
+    /// unclosed. The body reader has to get its extent right first.
+    #[test]
+    fn a_nested_body_is_refused_by_the_rule_that_forbids_it() {
+        let source = "@macro outer {\n@macro inner { ++ * why }\n}\n@outer\n";
+        let error = expand(source).unwrap_err();
+        assert!(
+            matches!(error, MacroError::DeclarationInsideMacro { .. }),
+            "{error:?}"
+        );
     }
 
     #[test]

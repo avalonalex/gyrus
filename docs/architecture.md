@@ -356,12 +356,13 @@ gyrus/
 │   │       ├── hook.rs      # The ExecutionHook and the I/O adapters
 │   │       └── ui.rs        # Drawing and key handling
 │   ├── gyrus-macro/ # `.bfm` preprocessor — expansion and its source map
-   │   ├── src/
-   │   │   ├── lex.rs       # The lexical rules, in one place: comments, literals, counts
-   │   │   ├── expand.rs    # One pass: @define, repeat counts, comments, brackets
-   │   │   ├── source_map.rs # Origin per emitted byte, and the DebugInfo remap
-   │   │   └── error.rs     # Located errors, rendered like a parse error
-   │   └── tests/           # Round trip against a manifest program, and locations
+│   │   ├── src/
+│   │   │   ├── lex.rs       # The lexical rules, in one place: comments, literals, counts
+│   │   │   ├── directive.rs # The directive vocabulary, built and planned
+│   │   │   ├── expand.rs    # One pass: @define, repeat counts, brackets, macros
+│   │   │   ├── source_map.rs # Origin per emitted byte, and the DebugInfo remap
+│   │   │   └── error.rs     # Located errors, rendered like a parse error
+│   │   └── tests/           # Round trip, source locations, and the oracle
    ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
 │   │   └── src/
 │   │       ├── lesson.rs    # The thirteen lessons and their criteria
