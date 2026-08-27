@@ -17,6 +17,8 @@ pub(crate) enum Directive {
     Var,
     To,
     Here,
+    Stride,
+    Field,
     Macro,
     Include,
     Ifdef,
@@ -25,11 +27,13 @@ pub(crate) enum Directive {
 }
 
 impl Directive {
-    pub(crate) const ALL: [Directive; 9] = [
+    pub(crate) const ALL: [Directive; 11] = [
         Directive::Define,
         Directive::Var,
         Directive::To,
         Directive::Here,
+        Directive::Stride,
+        Directive::Field,
         Directive::Macro,
         Directive::Include,
         Directive::Ifdef,
@@ -43,6 +47,8 @@ impl Directive {
             Directive::Var => "var",
             Directive::To => "to",
             Directive::Here => "here",
+            Directive::Stride => "stride",
+            Directive::Field => "field",
             Directive::Macro => "macro",
             Directive::Include => "include",
             Directive::Ifdef => "ifdef",
@@ -59,7 +65,10 @@ impl Directive {
     /// rather than called unknown, which would be a lie about why they failed.
     pub(crate) fn implemented(self) -> bool {
         self.declaration().is_some()
-            || matches!(self, Directive::To | Directive::Here | Directive::Macro)
+            || matches!(
+                self,
+                Directive::To | Directive::Here | Directive::Stride | Directive::Macro
+            )
     }
 
     /// Whether it can emit instructions nobody wrote literally. Only `@to`
@@ -79,6 +88,7 @@ impl Directive {
         match self {
             Directive::Define => Some(Declaration::Define),
             Directive::Var => Some(Declaration::Var),
+            Directive::Field => Some(Declaration::Field),
             _ => None,
         }
     }
@@ -94,6 +104,7 @@ impl Directive {
 pub(crate) enum Declaration {
     Define,
     Var,
+    Field,
 }
 
 impl Declaration {
@@ -101,6 +112,7 @@ impl Declaration {
         match self {
             Declaration::Define => Directive::Define,
             Declaration::Var => Directive::Var,
+            Declaration::Field => Directive::Field,
         }
     }
 
@@ -109,6 +121,7 @@ impl Declaration {
         match self {
             Declaration::Define => "`@define CHAR_A 65`",
             Declaration::Var => "`@var counter at 0`",
+            Declaration::Field => "`@field marker at 0`",
         }
     }
 
@@ -120,6 +133,9 @@ impl Declaration {
                 format!("expected a value for '{name}', as in `@define {name} 65`")
             }
             Declaration::Var => format!("expected a cell for '{name}', as in `@var {name} at 0`"),
+            Declaration::Field => {
+                format!("expected an offset for '{name}', as in `@field {name} at 0`")
+            }
         }
     }
 }

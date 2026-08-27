@@ -1,0 +1,69 @@
+* The esolangs catalogue's equality test, transcribed directly:
+*   temp0[-] temp1[-] x[temp1+x-]+ y[temp1-temp0+y-] temp0[y+temp0-]
+*   temp1[x-temp1[-]]
+* Its 'x', 'y', 'temp0' are cell names and its juxtaposition is movement --
+* which is what @var and @to are. Every loop body here returns to the cell it
+* tested, so the expander tracks the cursor through all of it.
+@var x
+@var y
+@var t0
+@var t1
+
+@macro clear(c) {
+    @to c
+    [-]
+}
+
+@macro equals {
+    @clear(t0)
+    @clear(t1)
+    @to x
+    [
+        @to t1
+        +
+        @to x
+        -
+    ]
+    @to x
+    +
+    @to y
+    [
+        @to t1
+        -
+        @to t0
+        +
+        @to y
+        -
+    ]
+    @to t0
+    [
+        @to y
+        +
+        @to t0
+        -
+    ]
+    @to t1
+    [
+        @to x
+        -
+        @to t1
+        [-]
+    ]
+}
+
+@macro show(a, b) {
+    @clear(x)
+    +{a}
+    @clear(y)
+    +{b}
+    @equals
+    @to x
+    +{'0'}
+    .
+}
+
+@show(5, 5)
+@show(5, 7)
+@show(0, 0)
+@show(200, 200)
+@show(1, 0)

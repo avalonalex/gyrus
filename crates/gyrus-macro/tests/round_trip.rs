@@ -144,3 +144,35 @@ fn the_scan_example_finds_its_way_back() {
     let (_, printed) = run("programs/macros/scan.bfm", 100_000);
     assert_eq!(printed, "Hi!\n");
 }
+
+/// An array of records walked by a scan, with its fields named.
+///
+/// The shape large BrainFuck programs are built from -- mandelbrot's tape and
+/// the standard BF library's array idiom are both this, at different strides;
+/// `scripts/check-mandelbrot-claims.py` measures the first. A scan stops
+/// wherever the data says, so the cursor's cell is unknowable -- but it moved
+/// a whole record each time, so which field it is on is not.
+#[test]
+fn the_records_example_walks_an_array_by_field_name() {
+    let (brainfuck, printed) = run("programs/macros/records.bfm", 100_000);
+    assert_eq!(printed, "A1B2C3");
+    // The loop is written entirely in field names and still comes out as a
+    // scan over the array, which is the whole claim.
+    assert!(brainfuck.ends_with("[>.>.<<>>>]"), "{brainfuck}");
+}
+
+/// The standard idiom catalogue, transcribed rather than adapted.
+///
+/// <https://esolangs.org/wiki/Brainfuck_algorithms> writes its idioms in a
+/// notation where `x`, `y` and `temp0` are cell names and juxtaposition is
+/// movement -- `y[x+temp0+y-]` means "at y, loop, add at x, add at temp0, back
+/// to y". That is what `@var` and `@to` are, so the equality test transcribes
+/// line for line. Every loop body in it returns to the cell it tested, which
+/// is why the expander can follow the cursor through the whole thing.
+///
+/// Five comparisons, chosen to cover both answers and both ends of a cell.
+#[test]
+fn the_compare_example_transcribes_a_catalogued_idiom() {
+    let (_, printed) = run("programs/macros/compare.bfm", 1_000_000);
+    assert_eq!(printed, "10110");
+}

@@ -145,6 +145,14 @@ phase-1 language is complete, and so is the oracle generator that was the
 stated reason for building it -- see `docs/testing.md`. What remains is
 plumbing: nothing can run a `.bfm` from a terminal yet.
 
+**Still missing for work at mandelbrot's scale**, in order: **address
+arithmetic** (`@to base + i * STRIDE` -- there are no expressions, and bfmacro
+has none either) and **multi-cell variables**, which 16-bit arithmetic needs
+and which this design anticipated with a `size` field it never used. What
+`@stride` and `@field` are and why they exist is in `docs/architecture.md` and
+in the commit that added them; the measurements behind them are checked by
+`scripts/check-mandelbrot-claims.py`.
+
 **A decision `@include` would force.** The origin map holds one position per
 emitted byte against one source, which `@macro` fits by policy -- a byte names
 the invocation, not the definition -- but a second *file* it cannot express at
@@ -1148,6 +1156,15 @@ unmeasurable here or a different project.
 ## Related Work
 
 ### Similar Systems
+- **The esolangs idiom catalogue**
+  (<https://esolangs.org/wiki/Brainfuck_algorithms>) and the standard BF
+  library (<https://esoteric.sange.fi/brainfuck/bf-source/lib/>). Worth reading
+  as a fitness test rather than a reference: the catalogue writes its idioms in
+  a notation where names are cells and juxtaposition is movement, which is what
+  `@var` and `@to` are, so they transcribe line for line --
+  `programs/macros/compare.bfm` is one of them, unaltered. The library's array
+  idiom is a stride of two walked by `[>>]`, which is what `@stride` and
+  `@field` are for.
 - **bfmacro** (Frans Faase, Tufts) - Original inspiration.
   <https://www.cs.tufts.edu/~couch/bfmacro/bfmacro/>. Worth reading before
   designing anything further here: it reached the same static-pointer-tracking

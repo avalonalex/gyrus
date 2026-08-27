@@ -1,0 +1,37 @@
+* An array of records, walked by a scan loop, with its fields named.
+*
+* This is how large BrainFuck programs are actually built: mandelbrot lays its
+* tape out as records and navigates them with scan loops, and the array idiom
+* in the standard BF library does the same at a smaller stride. A scan stops
+* wherever the data says, so the cursor's *cell* cannot be known -- but it
+* moved by a whole record each time, so which *field* it is on is exactly what
+* it was.
+*
+* That is what `@field` and `@here` say, and it is the difference between
+* naming the parts of a record and counting angle brackets.
+
+@define STRIDE 3
+
+@stride STRIDE
+@field marker at 0
+@field letter at 1
+@field digit  at 2
+
+@var head at 0
+
+* Three records, then the zero that stops the scan.
+@to head
++{'x'} > +{'A'} > +{'1'} >
++{'x'} > +{'B'} > +{'2'} >
++{'x'} > +{'C'} > +{'3'} >
+
+@to head
+@here marker
+[
+    @to letter
+    .
+    @to digit
+    .
+    @to marker
+    >{STRIDE}
+]

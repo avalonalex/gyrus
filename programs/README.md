@@ -47,7 +47,16 @@ file.
 - **`scan.bfm`** - `[.>]`, which loses the cursor, and `@here`, which is the
   only way back. Also cells the expander chose and letters written as letters.
 
-All six are load-bearing rather than illustrative:
+- **`records.bfm`** - an array of records walked by a scan, with `@stride` and
+  `@field` naming the parts. Only the array's head is a cell; everything inside
+  the loop is a field, so the record size is one edit.
+
+- **`compare.bfm`** - the equality test from the
+  [esolangs idiom catalogue](https://esolangs.org/wiki/Brainfuck_algorithms),
+  transcribed line for line: its notation names cells and means movement by
+  juxtaposition, which is what `@var` and `@to` are.
+
+All eight are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

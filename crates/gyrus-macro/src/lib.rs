@@ -42,6 +42,14 @@
 //! [>]                      * a scan: the expander loses track of the cursor
 //! @here letter             * tell it where the scan landed, emitting nothing
 //!
+//! @stride 9                * or say the tape is records of nine cells,
+//! @field marker at 0       * name their parts, and walk an array of them
+//! @here marker             * without ever naming a cell at all
+//! [
+//!     @to marker            * a directive starts its line, here as anywhere
+//!     >{9}
+//! ]
+//!
 //! @macro bump(by) {        * a body, expanded in place wherever it is used
 //!     @to letter
 //!     +{by}
@@ -95,6 +103,6 @@ mod error;
 mod expand;
 mod source_map;
 
-pub use error::{Kind, MacroError};
+pub use error::{Kind, MacroError, Wanted};
 pub use expand::{REPEAT_LIMIT, expand};
 pub use source_map::Expansion;
