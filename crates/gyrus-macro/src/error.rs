@@ -184,6 +184,15 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("'@endif' at {location} closes a conditional that was never opened")]
+    UnmatchedEndif { location: SourceLocation },
+
+    #[error("'@{directive}' at {location} is never closed with '@endif'")]
+    UnclosedConditional {
+        directive: &'static str,
+        location: SourceLocation,
+    },
+
     #[error("'@{directive}' cannot appear inside a macro body, at {location}")]
     DeclarationInsideMacro {
         directive: &'static str,
@@ -267,6 +276,8 @@ impl MacroError {
             | MacroError::TooManyInvocations { location, .. }
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
+            | MacroError::UnmatchedEndif { location }
+            | MacroError::UnclosedConditional { location, .. }
             | MacroError::DeclarationInsideMacro { location, .. }
             | MacroError::CellAlreadyChosen { location, .. }
             | MacroError::CellTooFar { location, .. }
@@ -279,8 +290,8 @@ impl MacroError {
     ///
     /// Matched exhaustively on purpose. A `_ => None` arm compiles for every
     /// variant added later, so each one would ship hintless by default rather
-    /// than by decision -- and with `@macro` and the conditionals still to
-    /// come that is a standing invitation. The variants that genuinely have nothing
+    /// than by decision -- and with `@include` still to come that is a
+    /// standing invitation. The variants that genuinely have nothing
     /// to add carry their advice in `detail` and say so here.
     pub fn hint(&self) -> Option<String> {
         match self {
@@ -409,6 +420,17 @@ impl MacroError {
                     .collect::<Vec<_>>()
                     .join(" -> ")
             )),
+            MacroError::UnmatchedEndif { .. } => Some(
+                "Every `@endif` closes an `@ifdef` or an `@ifndef`. This one has none above it \
+                 in the same file or macro body."
+                    .to_string(),
+            ),
+            MacroError::UnclosedConditional { .. } => Some(
+                "A conditional opens and closes in the same file or the same macro body, so \
+                 that skipping the branch that is not taken can stop somewhere. Its `@endif` \
+                 cannot be in a macro it invokes."
+                    .to_string(),
+            ),
             MacroError::DeclarationInsideMacro { directive, .. } => Some(format!(
                 "A macro body expands once per invocation, so an `@{directive}` in one would \
                  run again on the second and collide with itself. Move it above the macro."

@@ -1,9 +1,8 @@
 # PRD: BrainFuck Macro Preprocessor
 
-**Status**: First slice in progress. `gyrus-macro` exists with `@define`,
-repeat counts and the source map; see "What is left" below
+**Status**: Built, apart from `@include`; see "What is left" below
 **Last Updated**: 2026-08-26
-**Priority**: Medium — the next thing to build, and started
+**Priority**: Low — what remains is one directive blocked on one decision
 
 ## Decisions taken on review, 2026-08-25
 
@@ -140,11 +139,6 @@ document keeps only what is still to be decided or built. A running inventory
 of shipped behaviour is exactly the thing this directory deleted twelve
 thousand lines of.
 
-**Not built**: `@include` and the conditionals, which the 2026-08-25 review put
-out of scope until the first slice had been used to write something real. It
-has been: `programs/macros/` holds eight programs, and the oracle generator
-that was the stated reason for building any of this is in `docs/testing.md`.
-
 **Still missing for work at mandelbrot's scale**, in order: **address
 arithmetic** (`@to base + i * STRIDE` -- there are no expressions, and bfmacro
 has none either) and **multi-cell variables**, which 16-bit arithmetic needs
@@ -153,10 +147,12 @@ and which this design anticipated with a `size` field it never used. What
 in the commit that added them; the measurements behind them are checked by
 `scripts/check-mandelbrot-claims.py`.
 
-**A decision `@include` would force.** The origin map holds one position per
-emitted byte against one source, which `@macro` fits by policy -- a byte names
-the invocation, not the definition -- but a second *file* it cannot express at
-all. `Expansion::origin`'s return type should be treated as not yet final.
+**Not built: `@include`, and only that.** Its blocker is not the directive but
+a decision it would force. The origin map holds one position per emitted byte
+against one source, which `@macro` fits by policy -- a byte names the
+invocation, not the definition -- but a second *file* it cannot express at all.
+`Expansion::origin`'s return type should be treated as not yet final, and is
+the decision to take first.
 
 **A gap to close in `gyrus` before the debugger can take a `.bfm`.** A remapped
 `DebugInfo` carries locations but not loop metadata, because `LoopMetadata`

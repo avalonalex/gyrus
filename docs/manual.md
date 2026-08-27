@@ -55,7 +55,7 @@ than reading it as one — which would not fail, it would quietly be a different
 program.
 
 [The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
-describes what the language is; `programs/macros/` has eight programs written
+describes what the language is; `programs/macros/` has nine programs written
 in it.
 
 ## Pick an execution mode

@@ -56,7 +56,11 @@ file.
   transcribed line for line: its notation names cells and means movement by
   juxtaposition, which is what `@var` and `@to` are.
 
-All eight are load-bearing rather than illustrative:
+- **`conditional.bfm`** - tracing compiled in or out with `@ifdef`. Removing
+  one line takes the marks out of the BrainFuck rather than skipping them at
+  run time: 323 instructions become 223.
+
+All nine are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

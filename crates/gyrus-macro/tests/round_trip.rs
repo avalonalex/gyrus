@@ -176,3 +176,41 @@ fn the_compare_example_transcribes_a_catalogued_idiom() {
     let (_, printed) = run("programs/macros/compare.bfm", 1_000_000);
     assert_eq!(printed, "10110");
 }
+
+/// Conditional compilation, and what it means for it to be *compilation*.
+///
+/// The marks are not skipped at run time when `TRACE` is off -- they are
+/// absent from the BrainFuck. Expanding the same file with the `@define`
+/// removed is the whole demonstration, so the test does it both ways.
+#[test]
+fn the_conditional_example_compiles_its_tracing_in_and_out() {
+    let (with_trace, printed) = run("programs/macros/conditional.bfm", 100_000);
+    assert_eq!(printed, "H.i.!");
+
+    let source = read("programs/macros/conditional.bfm");
+    let without = source.replace("@define TRACE 1", "* TRACE is off");
+    let expansion = gyrus_macro::expand(&without)
+        .unwrap_or_else(|e| panic!("{}", e.format_with_source(&without)));
+
+    // Shorter, not merely quieter: the marks left no instructions behind.
+    assert!(
+        expansion.brainfuck().len() < with_trace.len(),
+        "turning tracing off did not shrink the program"
+    );
+
+    let (instructions, expanded) = parse_with_debug(expansion.brainfuck()).expect("parses");
+    let debug_info = expansion.remap(&expanded);
+    let (mut input, mut output) = (StringIo::empty(), StringIo::empty());
+    interpret_with_io(
+        &instructions,
+        ExecutionConfigBuilder::new()
+            .with_memory_size(30_000)
+            .with_max_steps(100_000)
+            .build(),
+        &mut input,
+        &mut output,
+        Some(&debug_info),
+    )
+    .expect("runs");
+    assert_eq!(output.output_string(), "Hi!");
+}

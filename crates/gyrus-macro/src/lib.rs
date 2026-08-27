@@ -55,6 +55,11 @@
 //!     +{by}
 //! }
 //! @bump(STEP)
+//!
+//! @ifdef TRACE             * and code that is absent rather than skipped
+//!     @to letter
+//!     .
+//! @endif
 //! ```
 //!
 //! Naming cells is the part that earns the feature. Manual pointer arithmetic
@@ -68,9 +73,9 @@
 //! checked. `@here` is the only construct here that can silently produce a
 //! wrong program.
 //!
-//! `@include` and the conditionals are designed but not built; they are
-//! rejected by name rather than treated as comments, so a `.bfm` written today
-//! cannot change meaning when they arrive.
+//! `@include` is designed but not built; it is rejected by name rather than
+//! treated as a comment, so a `.bfm` written today cannot change meaning when
+//! it arrives.
 //!
 //! ## Example
 //!

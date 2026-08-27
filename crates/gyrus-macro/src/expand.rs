@@ -19,6 +19,11 @@
 //!   parts of it. A field is an offset rather than a cell, so `@to` can reach
 //!   it wherever the record happens to be, which is what makes an array walked
 //!   by scan loops writable in names instead of angle brackets.
+//! - `@ifdef NAME` / `@ifndef NAME` ... `@endif` -- expand what is between
+//!   them, or skip it. A branch not taken is never expanded, so it may hold
+//!   names and brackets that would be errors in one that is; and "defined"
+//!   includes a parameter of the body being expanded, which is why it is
+//!   decided per invocation.
 //! - `@macro NAME(a, b) { ... }`, invoked as `@NAME(1, 2)` -- a body expanded
 //!   in place. An argument is evaluated in the caller's scope and bound to the
 //!   parameter, so a number, a constant and a cell all pass the same way.
@@ -48,8 +53,8 @@
 //! no bundled program has either in its prose -- and it buys the error for the
 //! likeliest typo of all, a space between an instruction and its count.
 //!
-//! Between them, a `.bfm` written today cannot change meaning when the
-//! conditionals arrive.
+//! Between them, a `.bfm` written today cannot change meaning when `@include`
+//! arrives.
 //!
 //! # Macros are expanded in place
 //!
@@ -141,7 +146,7 @@ use gyrus::SourceLocation;
 
 use crate::directive::{Declaration, Directive};
 use crate::error::{Kind, MacroError, Wanted};
-use crate::lex::{self, REPEATABLE, Step, ValueEnd};
+use crate::lex::{self, REPEATABLE, Step, ValueEnd, is_identifier_char};
 use crate::source_map::Expansion;
 
 /// The most instructions one repeat count may emit.
@@ -338,6 +343,19 @@ struct Scanner {
     frames: Vec<Invocation>,
     /// Invocations so far, against [`INVOCATION_LIMIT`].
     invocations: u64,
+    /// Conditionals whose branch was taken and whose `@endif` has not been
+    /// reached. A branch that is *not* taken never gets here: it is skipped
+    /// whole, `@endif` and all.
+    conditionals: Vec<(Directive, SourceLocation)>,
+    /// Where the current scan stops: the end of the file, or of the macro body
+    /// being expanded. Skipping a false branch needs a bound, and a
+    /// conditional that ran past this one would be looking for its `@endif` in
+    /// somebody else's text.
+    scan_end: usize,
+    /// How many conditionals were already open when the current macro body
+    /// began. An `@endif` in a body closes one the body opened, never one its
+    /// caller did.
+    conditional_floor: usize,
     /// The size of a record, if the file declared one. What it buys is the
     /// rule that a loop moving by a whole number of records leaves the offset
     /// within a record untouched -- without it every scan would lose the
@@ -369,6 +387,9 @@ impl Scanner {
             symbols: HashMap::new(),
             frames: Vec::new(),
             invocations: 0,
+            conditionals: Vec::new(),
+            scan_end: 0,
+            conditional_floor: 0,
             stride: None,
             chosen: BTreeSet::new(),
             defined: Vec::new(),
@@ -390,6 +411,12 @@ impl Scanner {
                 location: open.location,
             });
         }
+        if let Some((directive, location)) = self.conditionals.first() {
+            return Err(MacroError::UnclosedConditional {
+                directive: directive.spelling(),
+                location: *location,
+            });
+        }
 
         Ok(Expansion::new(self.source, self.out, self.origins))
     }
@@ -399,6 +426,13 @@ impl Scanner {
     /// Bounded rather than "to the end of the input" because a macro body is
     /// a span of this same source; see this module's documentation.
     fn scan_until(&mut self, end: usize) -> Result<(), MacroError> {
+        let outer_end = std::mem::replace(&mut self.scan_end, end);
+        let result = self.scan_bounded(end);
+        self.scan_end = outer_end;
+        result
+    }
+
+    fn scan_bounded(&mut self, end: usize) -> Result<(), MacroError> {
         while self.at.offset < end {
             let Some(c) = self.peek() else { break };
             match c {
@@ -873,6 +907,10 @@ impl Scanner {
             Some(Directive::Stride) => self.stride(location),
             Some(Directive::Field) => self.field(location),
             Some(Directive::Macro) => self.macro_definition(location),
+            Some(directive @ (Directive::Ifdef | Directive::Ifndef)) => {
+                self.conditional(directive, location)
+            }
+            Some(Directive::Endif) => self.endif(location),
             Some(_) => Err(MacroError::PlannedDirective { name, location }),
             // Not a directive, so it may be a macro -- checked after the
             // directives, so no macro can shadow one, and a name that is
@@ -925,6 +963,81 @@ impl Scanner {
             return Ok(());
         }
         Err(MacroError::DeclarationInsideMacro {
+            directive: directive.spelling(),
+            location,
+        })
+    }
+
+    /// `@ifdef NAME` and `@ifndef NAME` -- expand what follows, or skip it.
+    ///
+    /// "Defined" is any name in scope: a constant, a cell, a field, a macro,
+    /// or a parameter of the body being expanded. That last one is the useful
+    /// case, and it is why this is evaluated per invocation rather than once.
+    fn conditional(
+        &mut self,
+        directive: Directive,
+        location: SourceLocation,
+    ) -> Result<(), MacroError> {
+        let (name, _) = self.named_operand(directive, "expected a name to test")?;
+        self.end_of_directive(directive)?;
+        let wanted = directive
+            .conditional()
+            .expect("only a conditional directive reaches this");
+
+        if self.binding(&name).is_some() == wanted {
+            self.conditionals.push((directive, location));
+            return Ok(());
+        }
+        self.skip_branch(directive, location)
+    }
+
+    /// `@endif` -- close the conditional whose branch was taken.
+    fn endif(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        self.end_of_directive(Directive::Endif)?;
+        if self.conditionals.len() == self.conditional_floor {
+            return Err(MacroError::UnmatchedEndif { location });
+        }
+        self.conditionals.pop();
+        Ok(())
+    }
+
+    /// Walk to the `@endif` that closes a branch not taken, and past it.
+    ///
+    /// A fourth reader of this language, and the first that did not have to be
+    /// written as one: it steps with [`lex::step`], so it cannot disagree with
+    /// the expander about where a comment ends, how far a literal reaches, or
+    /// whether a `{` is a repeat count. Nothing here is expanded, so a skipped
+    /// branch may hold an unbalanced bracket, a cell nobody declared, or a
+    /// name that does not exist -- which is most of what a conditional is for.
+    fn skip_branch(
+        &mut self,
+        directive: Directive,
+        location: SourceLocation,
+    ) -> Result<(), MacroError> {
+        let boundary = self.boundary();
+        let mut depth = 1usize;
+        while self.at.offset < self.scan_end {
+            let at = self.at.offset;
+            if self.chars[at] == '@' && lex::at_line_start(&self.chars, at, boundary) {
+                let (spelling, after) = lex::spelling(&self.chars, at);
+                match Directive::from_spelling(&spelling) {
+                    Some(nested) if nested.conditional().is_some() => depth += 1,
+                    Some(Directive::Endif) => {
+                        depth -= 1;
+                        if depth == 0 {
+                            self.advance_on_line(after);
+                            return self.end_of_directive(Directive::Endif);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match lex::step(&self.chars, at, boundary, self.inside_a_macro()) {
+                Step::Past(next) => self.advance_to(next),
+                Step::Open | Step::Close => self.bump(),
+            }
+        }
+        Err(MacroError::UnclosedConditional {
             directive: directive.spelling(),
             location,
         })
@@ -1150,10 +1263,26 @@ impl Scanner {
         });
         self.at = body_start;
 
+        let floor = std::mem::replace(&mut self.conditional_floor, self.conditionals.len());
         let result = self.scan_until(body_end);
-
+        let opened = self.conditionals.len() - self.conditional_floor;
+        let unclosed = self.conditionals.last().copied();
+        self.conditionals.truncate(self.conditional_floor);
+        self.conditional_floor = floor;
         self.at = self.frames.pop().expect("pushed above").resume;
-        result
+
+        result?;
+        // A body that opens a conditional closes it, for the same reason the
+        // skip is bounded: an `@endif` in whatever this body invokes, or in
+        // whatever invoked it, is not this one's to find.
+        match (opened, unclosed) {
+            (0, _) => Ok(()),
+            (_, Some((directive, location))) => Err(MacroError::UnclosedConditional {
+                directive: directive.spelling(),
+                location,
+            }),
+            _ => Ok(()),
+        }
     }
 
     /// `(65, counter)` after an invocation, resolved in the caller's scope.
@@ -1368,17 +1497,30 @@ impl Scanner {
     }
 
     /// The cell a `@to` or `@here` names, and its own name for the error.
-    fn cell_operand(&mut self, directive: Directive) -> Result<(String, Target), MacroError> {
+    /// The name a directive takes as its operand, and where it was written.
+    fn named_operand(
+        &mut self,
+        directive: Directive,
+        expected: &str,
+    ) -> Result<(String, SourceLocation), MacroError> {
         self.skip_blanks();
         let at_name = self.at;
         let name = self.identifier();
         if name.is_empty() {
             return Err(malformed(
                 directive.spelling(),
-                "expected the name of a cell or a field, from `@var` or `@field`".to_string(),
+                expected.to_string(),
                 at_name,
             ));
         }
+        Ok((name, at_name))
+    }
+
+    fn cell_operand(&mut self, directive: Directive) -> Result<(String, Target), MacroError> {
+        let (name, at_name) = self.named_operand(
+            directive,
+            "expected the name of a cell or a field, from `@var` or `@field`",
+        )?;
         let target = self.resolve_target(&name, at_name)?;
         self.end_of_directive(directive)?;
         Ok((name, target))
@@ -1690,13 +1832,7 @@ fn malformed(directive: &str, detail: String, location: SourceLocation) -> Macro
 
 /// Whether the directive at `at` declares `name`, for the "defined below" hint.
 fn declares(chars: &[char], at: usize, name: &str) -> bool {
-    // The crate's own idea of a name, not "leading letters": a directive
-    // spelled `@end_if` would otherwise be handed a truncated spelling, and
-    // `from_spelling` would quietly say no.
-    let spelling: String = chars[at + 1..]
-        .iter()
-        .take_while(|c| is_identifier_char(**c))
-        .collect();
+    let (spelling, mut i) = lex::spelling(chars, at);
     if Directive::from_spelling(&spelling)
         .and_then(Directive::declaration)
         .is_none()
@@ -1704,7 +1840,6 @@ fn declares(chars: &[char], at: usize, name: &str) -> bool {
         return false;
     }
 
-    let mut i = at + 1 + spelling.chars().count();
     while chars.get(i).is_some_and(|c| *c == ' ' || *c == '\t') {
         i += 1;
     }
@@ -1714,10 +1849,6 @@ fn declares(chars: &[char], at: usize, name: &str) -> bool {
         && !chars
             .get(i + name.chars().count())
             .is_some_and(|c| is_identifier_char(*c))
-}
-
-fn is_identifier_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
 }
 
 fn is_identifier(text: &str) -> bool {
@@ -1989,13 +2120,20 @@ mod tests {
 
     #[test]
     fn a_planned_directive_is_refused_rather_than_ignored() {
-        for directive in ["@include \"lib.bfm\"", "@ifdef DEBUG", "@endif"] {
-            let error = expand(directive).unwrap_err();
-            assert!(
-                matches!(error, MacroError::PlannedDirective { .. }),
-                "{directive}: got {error:?}"
-            );
-        }
+        // `@include` is the last one left; every other directive the
+        // vocabulary knows is built.
+        let error = expand("@include \"lib.bfm\"").unwrap_err();
+        assert!(
+            matches!(error, MacroError::PlannedDirective { .. }),
+            "{error:?}"
+        );
+        assert!(
+            Directive::ALL
+                .into_iter()
+                .filter(|d| !d.implemented())
+                .eq([Directive::Include]),
+            "the planned list has changed; this test names what is in it"
+        );
     }
 
     #[test]
@@ -3173,5 +3311,152 @@ mod one_lexer {
             let hint = expand(&source).unwrap_err().hint().unwrap_or_default();
             assert!(hint.contains("defined below this line"), "{body}: {hint}");
         }
+    }
+}
+
+#[cfg(test)]
+mod conditionals {
+    use super::tests::{assert_origins_are_exact, expanded};
+    use super::*;
+
+    #[test]
+    fn a_branch_is_taken_or_skipped_by_whether_the_name_is_defined() {
+        let defined = "@define D 1\n@ifdef D\n+\n@endif\n@ifndef D\n-\n@endif\n";
+        assert_eq!(expanded(defined), "+");
+        let undefined = "@ifdef D\n+\n@endif\n@ifndef D\n-\n@endif\n";
+        assert_eq!(expanded(undefined), "-");
+    }
+
+    #[test]
+    fn any_kind_of_name_counts_as_defined() {
+        for declaration in [
+            "@define D 1",
+            "@var D",
+            "@stride 2\n@field D at 0",
+            "@macro D {\n+\n}",
+        ] {
+            let source = format!("{declaration}\n@ifdef D\n.\n@endif\n");
+            assert_eq!(expanded(&source), ".", "{declaration}");
+        }
+    }
+
+    /// The point of the feature: a branch not taken is never expanded, so it
+    /// may hold what a taken one could not.
+    #[test]
+    fn a_skipped_branch_may_hold_what_would_otherwise_be_an_error() {
+        for held in [
+            "[",                        // an unbalanced bracket
+            "]",                        // and the other way
+            "@to nowhere",              // a name that does not exist
+            "@define D 1\n@define D 2", // a redefinition
+            "}",                        // a reserved character
+            "+{OOPS}",                  // an undefined repeat count
+            "@wibble",                  // not a directive at all
+        ] {
+            let source = format!("@ifdef MISSING\n{held}\n@endif\n+\n");
+            assert_eq!(expanded(&source), "+", "{held:?} was not skipped");
+        }
+    }
+
+    #[test]
+    fn conditionals_nest() {
+        let both = "@define A 1\n@define B 1\n@ifdef A\n+\n@ifdef B\n-\n@endif\n>\n@endif\n";
+        assert_eq!(expanded(both), "+->");
+        // The inner `@endif` does not close the outer conditional, so the
+        // instructions after it are still skipped.
+        let neither = "@ifdef MISSING\n+\n@ifdef ALSO_MISSING\n-\n@endif\n>\n@endif\n<\n";
+        assert_eq!(expanded(neither), "<");
+    }
+
+    /// The case that makes this worth evaluating per invocation rather than
+    /// once: a body asking whether it was given something.
+    #[test]
+    fn a_body_may_test_its_own_parameter() {
+        let source = "@macro emit(what) {\n@ifdef what\n+{what}\n@endif\n}\n@emit(3)\n";
+        assert_eq!(expanded(source), "+++");
+    }
+
+    #[test]
+    fn skipping_reads_the_language_the_way_everything_else_does() {
+        // The skip walks with `lex::step`, so a comment, a literal and a
+        // repeat count inside a branch not taken end where they end
+        // everywhere else -- including an `@endif` that is only a word in a
+        // sentence.
+        for held in [
+            "* an @endif in prose\n+",
+            "+{'}'}",
+            "@macro inner { ++ * why }",
+            "+ it's prose",
+        ] {
+            let source = format!("@ifdef MISSING\n{held}\n@endif\n.\n");
+            assert_eq!(expanded(&source), ".", "{held:?}");
+        }
+    }
+
+    #[test]
+    fn an_endif_closes_something_or_says_so() {
+        assert!(matches!(
+            expand("@endif\n").unwrap_err(),
+            MacroError::UnmatchedEndif { .. }
+        ));
+        assert!(matches!(
+            expand("@define D 1\n@ifdef D\n@endif\n@endif\n").unwrap_err(),
+            MacroError::UnmatchedEndif { .. }
+        ));
+    }
+
+    #[test]
+    fn a_conditional_is_closed_or_says_so() {
+        for source in ["@define D 1\n@ifdef D\n+\n", "@ifdef MISSING\n+\n"] {
+            let error = expand(source).unwrap_err();
+            let MacroError::UnclosedConditional { directive, .. } = &error else {
+                panic!("{source:?}: expected an unclosed conditional, got {error:?}");
+            };
+            assert_eq!(*directive, "ifdef");
+        }
+    }
+
+    /// A conditional opens and closes in one file or one body, because the
+    /// skip has to stop somewhere.
+    #[test]
+    fn a_conditional_does_not_cross_a_macro_body() {
+        // Opened inside, never closed there.
+        let opens = "@define D 1\n@macro m {\n@ifdef D\n+\n}\n@m\n@endif\n";
+        assert!(
+            matches!(
+                expand(opens).unwrap_err(),
+                MacroError::UnclosedConditional { .. }
+            ),
+            "{:?}",
+            expand(opens).err()
+        );
+        // And a body's `@endif` does not close what its caller opened.
+        let closes = "@define D 1\n@macro m {\n@endif\n}\n@ifdef D\n@m\n@endif\n";
+        assert!(
+            matches!(
+                expand(closes).unwrap_err(),
+                MacroError::UnmatchedEndif { .. }
+            ),
+            "{:?}",
+            expand(closes).err()
+        );
+    }
+
+    #[test]
+    fn a_conditional_says_what_it_wanted() {
+        assert!(matches!(
+            expand("@ifdef\n").unwrap_err(),
+            MacroError::MalformedDirective { .. }
+        ));
+        assert!(matches!(
+            expand("@define D 1\n@ifdef D extra\n@endif\n").unwrap_err(),
+            MacroError::MalformedDirective { .. }
+        ));
+    }
+
+    #[test]
+    fn origins_survive_a_conditional() {
+        assert_origins_are_exact("@define D 1\n@ifdef D\n+{3}\n@endif\n-\n");
+        assert_origins_are_exact("@ifdef MISSING\n+{3}\n@endif\n-\n");
     }
 }

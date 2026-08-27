@@ -1,0 +1,41 @@
+* Tracing you can compile out.
+*
+* Remove the `@define TRACE` below and the marks are not skipped at run time --
+* they are absent from the BrainFuck entirely. That is the difference between
+* a conditional here and an `if` in the program: this one costs nothing when
+* it is off, because there is nothing left of it.
+*
+* A branch not taken is never expanded, so it may hold names and brackets that
+* would be errors in a branch that is. The one at the bottom does.
+
+@define TRACE 1
+
+@var out
+
+@macro say(letter) {
+    @to out
+    [-]
+    +{letter}
+    .
+}
+
+@macro mark {
+    @ifdef TRACE
+    @say('.')
+    @endif
+}
+
+@say('H')
+@mark
+@say('i')
+@mark
+@say('!')
+
+@ifdef NEVER
+* Guarded on a name nothing defines, so this is skipped whichever way TRACE is
+* set -- and it shows: `@to nowhere` names a cell that does not exist, and the
+* bracket is unbalanced. Neither is an error, because neither is ever read as
+* anything but text to step over.
+@to nowhere
+[
+@endif

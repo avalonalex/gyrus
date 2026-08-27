@@ -67,7 +67,13 @@ impl Directive {
         self.declaration().is_some()
             || matches!(
                 self,
-                Directive::To | Directive::Here | Directive::Stride | Directive::Macro
+                Directive::To
+                    | Directive::Here
+                    | Directive::Stride
+                    | Directive::Macro
+                    | Directive::Ifdef
+                    | Directive::Ifndef
+                    | Directive::Endif
             )
     }
 
@@ -81,6 +87,16 @@ impl Directive {
     #[cfg(test)]
     pub(crate) fn emits(self) -> bool {
         matches!(self, Directive::To)
+    }
+
+    /// Whether it opens a conditional, and whether the branch is taken when
+    /// the name it tests is defined.
+    pub(crate) fn conditional(self) -> Option<bool> {
+        match self {
+            Directive::Ifdef => Some(true),
+            Directive::Ifndef => Some(false),
+            _ => None,
+        }
     }
 
     /// How it declares a name, if it declares one.

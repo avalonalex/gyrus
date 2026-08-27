@@ -82,6 +82,25 @@ pub(crate) fn on_directive_line(chars: &[char], at: usize, boundary: usize) -> b
         .is_some_and(|&c| c == '@')
 }
 
+/// The directive name at `at`, and where it ends.
+///
+/// `chars[at]` is the `@`. Shared because three readers want it: the expander
+/// dispatching a directive, the lookahead asking whether a line declares a
+/// name, and the skip over a false conditional counting the ones that nest.
+pub(crate) fn spelling(chars: &[char], at: usize) -> (String, usize) {
+    let name: String = chars[at + 1..]
+        .iter()
+        .take_while(|c| is_identifier_char(**c))
+        .collect();
+    let end = at + 1 + name.chars().count();
+    (name, end)
+}
+
+/// A character an identifier may contain after its first.
+pub(crate) fn is_identifier_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
 /// Past a `*` comment beginning at `from`.
 ///
 /// To the end of the line -- or, inside a macro body, to a `}` that closes it
@@ -320,6 +339,13 @@ mod tests {
             value(&spaced, 0, char::is_whitespace),
             (3, ValueEnd::Delimiter)
         );
+    }
+
+    #[test]
+    fn a_spelling_stops_where_the_name_does() {
+        assert_eq!(spelling(&chars("@ifdef X"), 0), ("ifdef".to_string(), 6));
+        assert_eq!(spelling(&chars("@end_if"), 0), ("end_if".to_string(), 7));
+        assert_eq!(spelling(&chars("@"), 0), (String::new(), 1));
     }
 
     #[test]
