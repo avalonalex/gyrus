@@ -53,6 +53,7 @@ scripts/check-doc-links.py         # every relative Markdown link resolves
 scripts/check-examples.sh          # every example runs, not just compiles
 scripts/check-tape-access.py       # the tape is indexed only where the contract is enforced
 scripts/check-bfm-pseudocode.py    # every .bfm with a loop says what the loop is for
+scripts/check-macro-language.py    # every example in the .bfm reference expands to what it says
 scripts/capture-debugger-svg.py --check   # the README's screenshot is what the debugger draws
 ```
 

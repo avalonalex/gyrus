@@ -55,8 +55,9 @@ Everything else in `gyrus-tool` takes BrainFuck, and refuses a `.bfm` rather
 than reading it as one — which would not fail, it would quietly be a different
 program.
 
-[The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
-describes what the language is; `programs/macros/` has nineteen programs
+[The macro language](macro-language.md) is the reference for what can be
+written in one, and [the macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
+describes how it is built. `programs/macros/` has nineteen programs
 written in it, and five libraries in `lib/`. Two are worth reading: `99bottles.bfm` is
 199 lines that print 11,354 bytes, byte for byte what the hand-written
 `programs/third-party/advanced/99beer.bf` prints; and `factor.bfm` finds the
@@ -315,6 +316,7 @@ are built on.
 | [Usage](usage.md) | Every flag, in full |
 | [Errors and diagnostics](errors.md) | What gyrus reports when a program is wrong |
 | [Memory, cells, and EOF](execution-models.md) | The three execution knobs, and the JIT |
+| [The macro language](macro-language.md) | Every `.bfm` directive, in full |
 | [Development tools](tooling.md) | `gyrus-tool`, subcommand by subcommand |
 | [The debugger](debugger.md) | `gyrus-debug` in detail |
 | [The tutorial](tutorial.md) | `gyrus-tutorial` in detail |

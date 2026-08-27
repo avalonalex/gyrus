@@ -37,7 +37,8 @@ the development compiler.
   record-relative addressing, `@macro` with parameters,
   `@ifdef`/`@ifndef`/`@endif`, and `@include` (a library declares; it does not
   emit). `gyrus` runs a `.bfm` and `gyrus-tool expand` produces the BrainFuck.
-  See `docs/architecture.md`
+  See `docs/macro-language.md` for the language and `docs/architecture.md` for
+  the crate
 - **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
   `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
   read the same cases. Not a product crate; nothing depends on it outside
@@ -52,7 +53,8 @@ the development compiler.
   is, shows one error message, gives a quick start, and links onward.
 - **`docs/`** — user-facing documentation: `manual.md` is the task-oriented
   front door, and the rest are reference — usage, errors, execution models,
-  tooling, debugger, tutorial, development, testing, architecture, performance.
+  tooling, debugger, tutorial, macro language, development, testing,
+  architecture, performance.
   Anything describing what *exists* goes here, and the manual links rather than
   restates. `performance.md` is also where the optimization work's
   negative results live: it concluded in August 2026, and the experiments that
@@ -480,6 +482,7 @@ scripts/check-doc-links.py            # every relative Markdown link resolves
 scripts/check-examples.sh             # every example still runs, not just compiles
 scripts/check-tape-access.py          # the tape is only indexed where the contract is enforced
 scripts/check-bfm-pseudocode.py       # every .bfm with a loop says what the loop is for
+scripts/check-macro-language.py       # every example in the .bfm reference expands to what it says
 ```
 
 ### Benchmarking and profiling
@@ -688,8 +691,8 @@ map, so a runtime error in a `.bfm` reports the line and column somebody wrote.
 Its oracle generator (`tests/oracle.rs`) is the second thing in the repository
 that proves correctness rather than agreement between engines. `gyrus` runs a
 `.bfm` and `gyrus-tool expand` produces the BrainFuck. Its PRD was deleted when
-it shipped, per the rule above; `docs/architecture.md` describes what the crate
-does.
+it shipped, per the rule above; `docs/macro-language.md` is the language
+reference and `docs/architecture.md` describes what the crate does.
 
 `programs/macros/` is where to look for what the language is *for*:
 `99bottles.bfm` prints 11,354 bytes that match a hand-written program byte for

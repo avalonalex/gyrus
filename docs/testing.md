@@ -232,6 +232,7 @@ scripts/check-examples.sh          # every example runs, not just compiles
 scripts/check-tape-access.py       # the tape is indexed only where the contract is enforced
 scripts/check-bfm-pseudocode.py    # every .bfm with a loop says what the loop is for
 scripts/check-mandelbrot-claims.py # the measurements the macro design rests on
+scripts/check-macro-language.py    # every example in the .bfm reference expands to what it says
 ```
 
 `check-examples.sh` runs each example rather than only building it, because
