@@ -1,0 +1,199 @@
+* Ninety-nine bottles of beer, in BrainFuck, written to be read.
+*
+* The output is 11,354 bytes and the program is one loop of eleven lines. That
+* gap is the argument for the whole crate: the verse below says what a verse
+* is, and the expander turns it into the twelve thousand instructions that
+* print one -- with every cell named, and no `>` or `<` written by hand.
+*
+* Three things here are the parts of BrainFuck that hurt, and each is a macro:
+*
+*   - counting down through two digits, which needs a borrow;
+*   - printing a number without a leading zero, which needs a branch;
+*   - "bottle" against "bottles", which needs another.
+*
+* BrainFuck has no branch, so each is the same idiom: empty a cell into a loop
+* that runs once and clears it. Named, they read as what they are.
+*
+* Checked against `benchmarks/expected/99beer.txt`, which is the output of
+* `programs/third-party/advanced/99beer.bf` -- a program written by somebody
+* else, byte for byte.
+
+@include "lib/idioms.bfm"
+
+* The number being sung about, as two digits. Held apart rather than as one
+* value because printing it needs the digits, and 99 down to 0 never needs a
+* carry beyond them.
+@var tens
+@var ones
+
+@var out          * the cell every character is printed through
+@var plural       * whether this verse says "bottles"
+@var left         * verses still to sing
+@var borrow       * set while a decrement is still owed to the tens
+@var held         * a value parked here to end the loop it was read in
+@var scratch      * copies, made to be destroyed
+@var spare        * the cell `copy` is allowed to use
+
+
+* The number, without a leading zero: the tens digit only if there is one.
+@macro show_number {
+    @copy(tens, scratch, spare)
+    @to scratch
+    [
+        @show_digit(tens)
+        @clear(scratch)
+    ]
+    @show_digit(ones)
+}
+
+* One less. If the ones digit is not zero it goes down by one; if it is, it
+* becomes nine and the tens digit goes down instead.
+*
+* The `@move(ones, held)` inside the loop is how a loop is made to run once:
+* emptying the cell it is testing ends it, and `held` gives the value back
+* afterwards. There is no other way to say "if" here.
+@macro step_down {
+    @put(borrow, 1)
+    @to ones
+    [
+        -
+        @clear(borrow)
+        @move(ones, held)
+    ]
+    @move(held, ones)
+    @to borrow
+    [
+        @put(ones, 9)
+        @to tens
+        -
+        @clear(borrow)
+    ]
+}
+
+* " Bottle", and an "s" unless there is exactly one. Two tests, either of which
+* is enough: a non-zero tens digit, or a ones digit that is not one.
+@macro bottles {
+    @clear(plural)
+    @copy(tens, scratch, spare)
+    @to scratch
+    [
+        @put(plural, 1)
+        @clear(scratch)
+    ]
+    @copy(ones, scratch, spare)
+    @to scratch
+    -
+    [
+        @put(plural, 1)
+        @clear(scratch)
+    ]
+
+    @say(out, SPACE)
+    @say(out, 'B')
+    @say(out, 'o')
+    @say(out, 't')
+    @say(out, 't')
+    @say(out, 'l')
+    @say(out, 'e')
+    @to plural
+    [
+        @say(out, 's')
+        @clear(plural)
+    ]
+}
+
+@macro of_beer {
+    @say(out, SPACE)
+    @say(out, 'o')
+    @say(out, 'f')
+    @say(out, SPACE)
+    @say(out, 'b')
+    @say(out, 'e')
+    @say(out, 'e')
+    @say(out, 'r')
+}
+
+@macro on_the_wall {
+    @say(out, SPACE)
+    @say(out, 'o')
+    @say(out, 'n')
+    @say(out, SPACE)
+    @say(out, 't')
+    @say(out, 'h')
+    @say(out, 'e')
+    @say(out, SPACE)
+    @say(out, 'w')
+    @say(out, 'a')
+    @say(out, 'l')
+    @say(out, 'l')
+}
+
+@macro take_one_down {
+    @say(out, 'T')
+    @say(out, 'a')
+    @say(out, 'k')
+    @say(out, 'e')
+    @say(out, SPACE)
+    @say(out, 'o')
+    @say(out, 'n')
+    @say(out, 'e')
+    @say(out, SPACE)
+    @say(out, 'd')
+    @say(out, 'o')
+    @say(out, 'w')
+    @say(out, 'n')
+    @say(out, SPACE)
+    @say(out, 'a')
+    @say(out, 'n')
+    @say(out, 'd')
+    @say(out, SPACE)
+    @say(out, 'p')
+    @say(out, 'a')
+    @say(out, 's')
+    @say(out, 's')
+    @say(out, SPACE)
+    @say(out, 'i')
+    @say(out, 't')
+    @say(out, SPACE)
+    @say(out, 'a')
+    @say(out, 'r')
+    @say(out, 'o')
+    @say(out, 'u')
+    @say(out, 'n')
+    @say(out, 'd')
+}
+
+
+* Ninety-nine verses, starting at ninety-nine.
+@put(tens, 9)
+@put(ones, 9)
+@put(left, 99)
+
+@to left
+[
+    @show_number
+    @bottles
+    @of_beer
+    @on_the_wall
+    @newline(out)
+
+    @show_number
+    @bottles
+    @of_beer
+    @newline(out)
+
+    @take_one_down
+    @newline(out)
+
+    @step_down
+
+    @show_number
+    @bottles
+    @of_beer
+    @on_the_wall
+    @newline(out)
+    @newline(out)
+
+    @to left
+    -
+]

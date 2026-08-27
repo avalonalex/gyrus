@@ -187,6 +187,38 @@ fn the_compare_example_transcribes_a_catalogued_idiom() {
     assert_eq!(printed, "10110");
 }
 
+/// The one that is a program rather than a demonstration.
+///
+/// 199 lines of `.bfm` against 11,354 bytes of output, checked byte for byte
+/// against `benchmarks/expected/99beer.txt` -- which is what
+/// `programs/third-party/advanced/99beer.bf` prints, a program written by
+/// somebody else years ago. Nothing here and nothing in this crate had a hand
+/// in deciding what that file says, which is the whole point of testing
+/// against it: agreement with it is not agreement with ourselves.
+#[test]
+fn ninety_nine_bottles_prints_what_the_program_it_was_written_from_prints() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/99bottles.bfm");
+    let source = read("programs/macros/99bottles.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (brainfuck, printed) = run_expansion(&expansion, 20_000_000);
+    assert_eq!(printed, read("benchmarks/expected/99beer.txt"));
+
+    // Every byte of eleven thousand still names a line of the file somebody
+    // wrote. A macro's bytes name the invocation, so the lines they name are
+    // the eleven in the verse rather than the ones inside `@say`.
+    let lines = source.lines().count();
+    for offset in 0..brainfuck.len() {
+        let origin = expansion.origin(offset).expect("every byte has an origin");
+        assert!(
+            origin.line <= lines,
+            "byte {offset} names line {}",
+            origin.line
+        );
+    }
+}
+
 /// A program whose vocabulary comes from another file.
 ///
 /// Through `expand_file` rather than `run_source`, because the path in the

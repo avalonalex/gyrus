@@ -1,0 +1,73 @@
+* The standard BrainFuck idioms, named.
+*
+* Every one of these is in the catalogue at
+* https://esolangs.org/wiki/Brainfuck_algorithms, written there against cells
+* called x, y and temp0 -- because prose has no other way to talk about a cell.
+* Here they take the cells as parameters, so `@copy(count, scratch, spare)`
+* says which three, and the expander emits the movement between them.
+*
+* This file declares and does not emit. It includes another that does the same.
+
+@include "ascii.bfm"
+
+* Empty a cell. `[+]` also gets there, in about 256 iterations.
+@macro clear(cell) {
+    @to cell
+    [-]
+}
+
+* A cell holding a value, whatever it held before.
+@macro put(cell, value) {
+    @clear(cell)
+    @to cell
+    +{value}
+}
+
+* `to` gains what `from` had; `from` is left empty. The loop every other idiom
+* here is built out of.
+@macro move(from, to) {
+    @to from
+    [
+        @to to
+        +
+        @to from
+        -
+    ]
+}
+
+* `to` gains what `from` has, and `from` keeps it. A cell can only be read by
+* emptying it, so the value goes to both `to` and `scratch` and comes back from
+* `scratch` -- which is why copying needs a cell it is allowed to destroy.
+@macro copy(from, to, scratch) {
+    @clear(scratch)
+    @to from
+    [
+        @to to
+        +
+        @to scratch
+        +
+        @to from
+        -
+    ]
+    @move(scratch, from)
+}
+
+* Print one character, through a cell set aside for it.
+@macro say(cell, letter) {
+    @put(cell, letter)
+    .
+}
+
+@macro newline(cell) {
+    @say(cell, NL)
+}
+
+* Print a value 0-9 as the digit it names, and leave it where it was. Adding
+* the 48 and taking it back is cheaper than copying it somewhere to destroy.
+@macro show_digit(cell) {
+    @to cell
+    +{48}
+    .
+    @to cell
+    -{48}
+}

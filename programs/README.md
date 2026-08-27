@@ -62,11 +62,20 @@ file.
   `the_conditional_example_compiles_its_tracing_in_and_out`.
 
 - **`include.bfm`** - a program that is only the program: its vocabulary comes
-  from **`lib/ascii.bfm`**, which declares three macros and two named
-  characters and emits nothing. An included file cannot emit, which is what
-  keeps every byte's origin inside the file being expanded.
+  from **`lib/idioms.bfm`**, which includes **`lib/ascii.bfm`** in turn. An
+  included file cannot emit, which is what keeps every byte's origin inside the
+  file being expanded.
+- **`99bottles.bfm`** - the one that is a program rather than a demonstration.
+  199 lines produce 11,354 bytes of output, byte for byte the same as
+  `benchmarks/expected/99beer.txt` -- which is what
+  `third-party/advanced/99beer.bf` prints. Two-digit counting with a borrow,
+  a number printed without a leading zero, and "bottle" against "bottles":
+  three branches in a language that has none, each written once as a named
+  macro. It costs 11,556 instructions against that program's 1,762, and the
+  gap is honest -- `@say` sets a cell from empty for every character, where a
+  hand-written program walks from each character to the next.
 
-All ten are load-bearing rather than illustrative:
+All eleven are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash
