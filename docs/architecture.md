@@ -153,6 +153,9 @@ crate exists: a program that expands to a wall of BrainFuck and then reports a
 cell overflow at column 3,847 of the *expansion* is the experience gyrus was
 built to replace.
 
+[The macro language](macro-language.md) is the reference for writing one; what
+follows is how the expander is built.
+
 It understands `@define` (named constants), `OP{N}` (repeat counts), `@var`
 and `@to` (named cells, with the cursor tracked and the movement emitted),
 `@here` (assert a position without moving), `@macro` with parameters, and
