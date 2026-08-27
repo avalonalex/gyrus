@@ -56,10 +56,12 @@ than reading it as one — which would not fail, it would quietly be a different
 program.
 
 [The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
-describes what the language is; `programs/macros/` has eleven programs written
-in it, and two libraries in `lib/`. The largest, `99bottles.bfm`, is 199 lines
-that print 11,354 bytes -- byte for byte what the hand-written
-`programs/third-party/advanced/99beer.bf` prints.
+describes what the language is; `programs/macros/` has twelve programs written
+in it, and three libraries in `lib/`. Two are worth reading: `99bottles.bfm` is
+199 lines that print 11,354 bytes, byte for byte what the hand-written
+`programs/third-party/advanced/99beer.bf` prints; and `factor.bfm` finds the
+prime factors of a number too big for a cell, using arithmetic that is a
+library rather than a language feature.
 
 ## Pick an execution mode
 

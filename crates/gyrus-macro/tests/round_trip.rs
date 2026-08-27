@@ -12,7 +12,8 @@
 //! corpus-directory test counts `.bf` files, and this directory holds none.
 
 use gyrus::{
-    ExecutionConfigBuilder, interpret_with_io, io::StringIo, minify, parse, parse_with_debug,
+    CellModel, ExecutionConfigBuilder, interpret_optimized_with_io, interpret_with_io,
+    io::StringIo, minify, optimize_with_cell_model, parse, parse_with_debug,
 };
 
 fn read(relative: &str) -> String {
@@ -185,6 +186,59 @@ fn the_records_example_walks_an_array_by_field_name() {
 fn the_compare_example_transcribes_a_catalogued_idiom() {
     let (_, printed) = run("programs/macros/compare.bfm", 1_000_000);
     assert_eq!(printed, "10110");
+}
+
+/// The same, on the optimized interpreter.
+///
+/// For the one program here that does enough work to care which engine runs
+/// it: 8.6 million steps, which the tree-walker takes forty seconds over and
+/// this finishes in fifty milliseconds. The expansion is ordinary BrainFuck,
+/// so every engine is entitled to run it -- and that they agree is what the
+/// differential suite in `gyrus` is for, not this one.
+fn run_optimized(expansion: &gyrus_macro::Expansion, max_steps: u64) -> String {
+    let instructions = parse(expansion.brainfuck()).expect("parses");
+    let optimized = optimize_with_cell_model(&instructions, CellModel::default());
+    let (mut input, mut output) = (StringIo::empty(), StringIo::empty());
+    interpret_optimized_with_io(
+        &optimized,
+        ExecutionConfigBuilder::new()
+            .with_memory_size(30_000)
+            .with_max_steps(max_steps)
+            .build(),
+        &mut input,
+        &mut output,
+    )
+    .expect("runs");
+    output.output_string()
+}
+
+/// Arithmetic on numbers too big for a cell, which is what a factoring program
+/// is mostly made of.
+///
+/// 13911 is 3 times 4637, and 4637 is prime. `factor.bf` -- a program written
+/// by somebody else -- says `13911: 3 4637` when given that number, and so
+/// does this. The answer is also a fact about 13911 rather than about either
+/// program, which is the better half of the reason to check it.
+#[test]
+fn the_factors_of_13911_come_out_as_three_and_4637() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/factor.bfm");
+    let source = read("programs/macros/factor.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    assert_eq!(run_optimized(&expansion, 50_000_000), "13911: 3 4637\n");
+
+    // Thirty thousand instructions, every one of them still pointing at a line
+    // of the two hundred somebody wrote.
+    let lines = source.lines().count();
+    for offset in 0..expansion.brainfuck().len() {
+        let origin = expansion.origin(offset).expect("every byte has an origin");
+        assert!(
+            origin.line <= lines,
+            "byte {offset} names line {}",
+            origin.line
+        );
+    }
 }
 
 /// The one that is a program rather than a demonstration.

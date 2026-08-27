@@ -1,0 +1,355 @@
+* The prime factors of 13911, worked out one subtraction at a time.
+*
+* 13911 does not fit in a cell. A cell holds 0 to 255, so the number, the
+* quotient and every intermediate value here are pairs of cells -- `hi` and
+* `lo`, worth hi*256 + lo -- and `lib/wide.bfm` is the arithmetic on them.
+* That library is the point of this program as much as the answer is: working
+* in numbers wider than a cell was written down as something the *language*
+* would have to grow, and it turns out to be a library, because a parameter
+* can name a cell.
+*
+* The algorithm is trial division, the way it is done by hand. Take the number
+* down to zero one at a time, cycling a counter that resets every `v` steps;
+* when it lands exactly on zero, `v` divides the number, and the number of
+* resets is the quotient. It is the slowest possible way to divide and the
+* only one that needs no comparison, which in a language without a conditional
+* is the trade worth making. Roughly 340,000 decrements answer the whole
+* question.
+*
+* Stopping is the part that needs care. A factor above the square root of a
+* number cannot exist without a matching one below it, so once the quotient is
+* smaller than the divisor, whatever is left is prime. That is one comparison,
+* and it saves trying every divisor up to 255.
+*
+* It prints `13911: 3 4637`, which is what
+* `programs/third-party/advanced/factor.bf` prints when given 13911 -- a
+* program somebody else wrote, and the reason the answer here is checked
+* against something other than itself.
+
+@include "lib/wide.bfm"
+
+* Declaration order is a performance decision, and this is the one place in
+* the corpus where it shows. The expander gives cells out in the order they are
+* declared, and `@to` emits the movement between them -- so the cells the
+* division touches on every step are declared together, at the front, and the
+* ones it touches once a factor are behind them. Nothing about the program's
+* meaning depends on this; how far the cursor walks does.
+
+* The working register: every division happens here, and the quotient is left
+* in it. Where a quotient is built up while the register is emptied.
+@var x_hi
+@var x_lo
+@var t_hi
+@var t_lo
+
+@var count        * how much of a subtraction is left to do
+@var v            * the divisor being tried
+@var flag
+@var other
+@var held
+@var scratch
+@var spare
+@var going
+@var zero
+@var was_low      * whether the high half was empty before a subtraction
+@var wrapped      * whether it holds 255 after one
+@var r            * what was left over
+
+* The number being factored, and what is left of it as factors come out.
+@var n_hi
+@var n_lo
+
+@var ten          * the constant, for turning a number into digits
+
+@var d0           * the digits of a number being printed, least significant
+@var d1
+@var d2
+@var d3
+@var d4
+@var started      * whether a non-zero digit has been printed yet
+
+@var running      * whether there is any factoring left to do
+@var smaller      * whether the quotient came out below the divisor
+@var passed       * whether one cell ran out before the other
+@var step         * a cell counted down against another
+
+@var out
+
+
+* Whether a cell holds 255. Adding one and asking whether the answer came out
+* zero is cheaper than comparing against 255, and it is the only comparison
+* BrainFuck gives away free.
+*
+* A high half of 255 after a subtraction is what going below zero looks like --
+* but only if the high half was empty before it, since a number in the top
+* 256th of the range starts there. Both halves of that are checked below;
+* checking only the second one factors every number correctly except the
+* largest 256, which is the kind of wrong that ships.
+@macro holds_255(cell, flag) {
+    @clear(scratch)
+    @copy(cell, scratch, spare)
+    @to scratch
+    +
+    @put(flag, 1)
+    @to scratch
+    [
+        @clear(flag)
+        @clear(scratch)
+    ]
+}
+
+* The working register divided by whatever `divisor` names: the quotient is
+* left in the working register and the remainder in `r`.
+*
+* Long division without the division: take the divisor off, and off again, and
+* count how many times it went. When one subtraction too many takes the number
+* below zero, put it back -- what is left is the remainder.
+*
+* Taking `v` off at once rather than counting down to it one step at a time is
+* the difference between this finishing in a second and finishing in two
+* minutes. BrainFuck cannot ask whether a cell is zero without spending its
+* value to find out, so a test inside the innermost loop is never cheap; this
+* way there is one test per multiple of the divisor rather than one per step.
+*
+* One routine, used for both halves of the program -- trial division tries it
+* with the divisor, and printing a number tries it with ten.
+@macro divide(divisor) {
+    @wide_clear(t_hi, t_lo)
+    @put(going, 1)
+    @to going
+    [
+        * Whether there is anything above the low half to borrow from, asked
+        * before the subtraction because afterwards is too late to tell.
+        @is_zero(x_hi, was_low, scratch, spare)
+
+        @clear(count)
+        @copy(divisor, count, spare)
+        @to count
+        [
+            @wide_dec(x_hi, x_lo, flag, held)
+            @to count
+            -
+        ]
+
+        @holds_255(x_hi, wrapped)
+        @to was_low
+        [
+            @to wrapped
+            [
+                * One too many. Put it back, and the loop is done.
+                @clear(count)
+                @copy(divisor, count, spare)
+                @to count
+                [
+                    @wide_inc(x_hi, x_lo, flag, held)
+                    @to count
+                    -
+                ]
+                @clear(going)
+                @clear(wrapped)
+            ]
+            @clear(was_low)
+        ]
+        @clear(wrapped)
+
+        * It went: that is one more multiple.
+        @copy(going, other, spare)
+        @to other
+        [
+            @wide_inc(t_hi, t_lo, flag, held)
+            @clear(other)
+        ]
+        @to going
+    ]
+
+    * What is left is smaller than the divisor, so it is in the low half.
+    @clear(r)
+    @move(x_lo, r)
+    @clear(x_hi)
+    @wide_copy(t_hi, t_lo, x_hi, x_lo, scratch)
+}
+
+* A digit, unless it is a leading zero.
+@macro show_maybe(digit) {
+    @is_not_zero(digit, flag, scratch, spare)
+    @to flag
+    [
+        @put(started, 1)
+        @clear(flag)
+    ]
+    @copy(started, flag, spare)
+    @to flag
+    [
+        @show_digit(digit)
+        @clear(flag)
+    ]
+}
+
+* The working register, in decimal, most significant digit first. Dividing by
+* ten five times peels the digits off backwards, so they are kept and then
+* read in the other order. Five is enough: two cells cannot hold 100,000.
+@macro show_working {
+    @clear(d0)
+    @clear(d1)
+    @clear(d2)
+    @clear(d3)
+    @clear(d4)
+    @divide(ten)
+    @move(r, d0)
+    @divide(ten)
+    @move(r, d1)
+    @divide(ten)
+    @move(r, d2)
+    @divide(ten)
+    @move(r, d3)
+    @divide(ten)
+    @move(r, d4)
+
+    @clear(started)
+    @show_maybe(d4)
+    @show_maybe(d3)
+    @show_maybe(d2)
+    @show_maybe(d1)
+    @put(started, 1)
+    @show_maybe(d0)
+}
+
+* A single cell, in decimal. The divisor never reaches 256, so it goes in the
+* low half of the working register and out through the same digits.
+@macro show_byte(cell) {
+    @wide_clear(x_hi, x_lo)
+    @copy(cell, x_lo, spare)
+    @show_working
+}
+
+* The number, in decimal, without disturbing it.
+@macro show_number {
+    @wide_copy(n_hi, n_lo, x_hi, x_lo, scratch)
+    @show_working
+}
+
+* Whether the quotient in the working register came out below the divisor.
+*
+* Anything with a high half is at least 256, and no divisor here reaches that,
+* so only the low halves are ever compared -- by counting one down against the
+* other and watching which runs out first.
+@macro quotient_is_smaller {
+    @clear(smaller)
+    @is_zero(x_hi, zero, scratch, spare)
+    @to zero
+    [
+        @clear(step)
+        @copy(v, step, spare)
+        @clear(passed)
+        @clear(count)
+        @copy(x_lo, count, spare)
+
+        @to count
+        [
+            @is_zero(step, flag, scratch, spare)
+            @to flag
+            [
+                @put(passed, 1)
+                @clear(flag)
+            ]
+            @is_not_zero(step, flag, scratch, spare)
+            @to flag
+            [
+                @to step
+                -
+                @clear(flag)
+            ]
+            @to count
+            -
+        ]
+
+        * The quotient ran out first, and the divisor still had somewhere to
+        * go: that is what smaller means.
+        @is_zero(passed, flag, scratch, spare)
+        @to flag
+        [
+            @is_not_zero(step, other, scratch, spare)
+            @to other
+            [
+                @put(smaller, 1)
+                @clear(other)
+            ]
+            @clear(flag)
+        ]
+        @clear(zero)
+    ]
+}
+
+
+* 13911 is 54 * 256 + 87.
+@wide_put(n_hi, n_lo, 54, 87)
+@put(ten, 10)
+
+@show_number
+@say(out, ':')
+
+@put(v, 2)
+@put(running, 1)
+@to running
+[
+    @wide_copy(n_hi, n_lo, x_hi, x_lo, scratch)
+    @divide(v)
+
+    * Nothing left over: the divisor is a factor, and the quotient is what is
+    * left to factor. The same divisor is tried again, since it may go in more
+    * than once.
+    @is_zero(r, flag, scratch, spare)
+    @to flag
+    [
+        @wide_copy(x_hi, x_lo, n_hi, n_lo, scratch)
+        @say(out, SPACE)
+        @show_byte(v)
+        @clear(flag)
+    ]
+
+    * Something left over: either the divisor has gone past the square root,
+    * in which case what is left is prime and the work is done, or it is time
+    * to try the next one.
+    @is_not_zero(r, flag, scratch, spare)
+    @to flag
+    [
+        @quotient_is_smaller
+        @is_zero(smaller, other, scratch, spare)
+        @to other
+        [
+            @to v
+            +
+            @clear(other)
+        ]
+        @to smaller
+        [
+            @clear(running)
+            @clear(smaller)
+        ]
+        @clear(flag)
+    ]
+
+    * A number that has come all the way down to one has nothing left in it.
+    @wide_copy(n_hi, n_lo, x_hi, x_lo, scratch)
+    @wide_dec(x_hi, x_lo, flag, held)
+    @wide_is_zero(x_hi, x_lo, flag, scratch, spare)
+    @to flag
+    [
+        @clear(running)
+        @clear(flag)
+    ]
+
+    @to running
+]
+
+* Whatever is left, if it is not one, is the last prime factor.
+@wide_copy(n_hi, n_lo, x_hi, x_lo, scratch)
+@wide_dec(x_hi, x_lo, flag, held)
+@wide_is_not_zero(x_hi, x_lo, flag, scratch, spare)
+@to flag
+[
+    @say(out, SPACE)
+    @show_number
+    @clear(flag)
+]
+@newline(out)

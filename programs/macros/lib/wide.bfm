@@ -1,0 +1,113 @@
+* Numbers too big for a cell.
+*
+* A cell holds 0 to 255, and plenty of programs need more. A wide number here
+* is two cells -- `hi` and `lo`, worth hi*256 + lo -- and every macro below
+* takes both, so a program says `@wide_dec(n_hi, n_lo, ...)` and never has to
+* remember which is which.
+*
+* This is the interesting thing about the file: multi-cell arithmetic was
+* written down as a missing *language* feature, something the expander would
+* have to grow. It is not. It is a library, and a short one, because a
+* parameter can name a cell and macros compose.
+*
+* Every carry and borrow below is the same idiom, the one BrainFuck uses for
+* every branch: empty a cell into a loop, so the loop runs once and stops.
+
+@include "idioms.bfm"
+
+* Both halves zero.
+@macro wide_clear(hi, lo) {
+    @clear(hi)
+    @clear(lo)
+}
+
+* A wide number holding hi*256 + lo.
+@macro wide_put(hi, lo, high, low) {
+    @put(hi, high)
+    @put(lo, low)
+}
+
+* One less. If the low half is not zero it goes down by one; if it is, it
+* wraps to 255 and the high half goes down instead.
+*
+* `held` is where the low half is parked so that the loop reading it ends;
+* `flag` says whether the borrow is still owed. Both are left empty.
+@macro wide_dec(hi, lo, flag, held) {
+    @put(flag, 1)
+    @to lo
+    [
+        -
+        @clear(flag)
+        @move(lo, held)
+    ]
+    @move(held, lo)
+    @to flag
+    [
+        @put(lo, 255)
+        @to hi
+        -
+        @clear(flag)
+    ]
+}
+
+* One more. The carry is read off the wrap rather than predicted: add one, and
+* if the low half is now zero it must have gone past 255.
+@macro wide_inc(hi, lo, flag, held) {
+    @to lo
+    +
+    @put(flag, 1)
+    @to lo
+    [
+        @clear(flag)
+        @move(lo, held)
+    ]
+    @move(held, lo)
+    @to flag
+    [
+        @to hi
+        +
+        @clear(flag)
+    ]
+}
+
+* `flag` becomes 1 if the number is zero, 0 if it is not.
+@macro wide_is_zero(hi, lo, flag, scratch, spare) {
+    @put(flag, 1)
+    @copy(hi, scratch, spare)
+    @to scratch
+    [
+        @clear(flag)
+        @clear(scratch)
+    ]
+    @copy(lo, scratch, spare)
+    @to scratch
+    [
+        @clear(flag)
+        @clear(scratch)
+    ]
+}
+
+* And the other way round, which is what a loop wants to test.
+@macro wide_is_not_zero(hi, lo, flag, scratch, spare) {
+    @clear(flag)
+    @copy(hi, scratch, spare)
+    @to scratch
+    [
+        @put(flag, 1)
+        @clear(scratch)
+    ]
+    @copy(lo, scratch, spare)
+    @to scratch
+    [
+        @put(flag, 1)
+        @clear(scratch)
+    ]
+}
+
+* `to` gains what `from` has, and `from` keeps it.
+@macro wide_copy(from_hi, from_lo, to_hi, to_lo, scratch) {
+    @clear(to_hi)
+    @clear(to_lo)
+    @copy(from_hi, to_hi, scratch)
+    @copy(from_lo, to_lo, scratch)
+}

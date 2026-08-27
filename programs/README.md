@@ -75,7 +75,16 @@ file.
   gap is honest -- `@say` sets a cell from empty for every character, where a
   hand-written program walks from each character to the next.
 
-All eleven are load-bearing rather than illustrative:
+- **`factor.bfm`** - the prime factors of 13911, which is 3 times 4637. The
+  number does not fit in a cell, so every value here is a pair of cells and
+  the arithmetic is **`lib/wide.bfm`** -- a library, not a language feature,
+  which is the interesting part: working in numbers wider than a cell was
+  written down as something the expander would have to grow. 200 lines expand
+  to 30,320 instructions. Run it with `--jit`: it is the first program here
+  that does enough work to care which engine runs it, at 0.05 seconds
+  optimized against 40 on the tree-walker.
+
+All twelve are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

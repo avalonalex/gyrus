@@ -52,6 +52,31 @@
     @move(scratch, from)
 }
 
+* `flag` becomes 1 if the cell holds anything, 0 if it is empty. The question
+* BrainFuck can ask directly -- `[` asks it -- written as a value, so that a
+* program can ask it about a cell it is not standing on and act on the answer
+* later.
+@macro is_not_zero(cell, flag, scratch, spare) {
+    @clear(flag)
+    @copy(cell, scratch, spare)
+    @to scratch
+    [
+        @put(flag, 1)
+        @clear(scratch)
+    ]
+}
+
+* And the other way round.
+@macro is_zero(cell, flag, scratch, spare) {
+    @put(flag, 1)
+    @copy(cell, scratch, spare)
+    @to scratch
+    [
+        @clear(flag)
+        @clear(scratch)
+    ]
+}
+
 * Print one character, through a cell set aside for it.
 @macro say(cell, letter) {
     @put(cell, letter)

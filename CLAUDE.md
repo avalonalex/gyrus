@@ -690,6 +690,12 @@ that proves correctness rather than agreement between engines. `gyrus` runs a
 it shipped, per the rule above; `docs/architecture.md` describes what the crate
 does.
 
+`programs/macros/` is where to look for what the language is *for*:
+`99bottles.bfm` prints 11,354 bytes that match a hand-written program byte for
+byte, and `factor.bfm` factors 13911 using wide arithmetic that turned out to
+be a library (`lib/wide.bfm`) rather than the language feature the design
+assumed it needed.
+
 **One rule of that crate is worth knowing before reading it**: an `@include`d
 file *declares* — it does not emit, and does not move the cursor. The source map holds one position per
 emitted byte against one text, and a second file cannot be written in it — so
