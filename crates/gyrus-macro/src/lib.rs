@@ -61,6 +61,23 @@
 //!     @to letter
 //!     .
 //! @endif
+//!
+//! @repeat 3 {              * a count around a body, not around one `+`
+//!     @to letter
+//!     .
+//! }
+//!
+//! @macro loop(cell, body) {   * a body is an argument too, so a loop
+//!     @to cell                * can be a macro like anything else
+//!     [
+//!         @body
+//!         @to cell
+//!     ]
+//! }
+//! @loop(counter) {
+//!     @to counter
+//!     -
+//! }
 //! ```
 //!
 //! That block expands; `the_documented_example_expands` reads it out of this
@@ -93,6 +110,13 @@
 //! the position rather than be refused, and why `@here` is trusted rather than
 //! checked. `@here` is the only construct here that can silently produce a
 //! wrong program.
+//!
+//! A `{` after an invocation's arguments hands the macro a body, as its last
+//! argument, and the macro expands it with `@name`. A block carries the scope
+//! it was written in, so one written inside a macro can name that macro's
+//! parameters. `@repeat` is the same shape with a count instead of a name, and
+//! is a directive rather than a macro because expansion has no loop of its own
+//! to count with.
 //!
 //! The vocabulary is closed: every directive named above is built, so there is
 //! nothing left that a `.bfm` written today could come to mean differently.

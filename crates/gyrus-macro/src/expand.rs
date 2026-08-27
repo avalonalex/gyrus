@@ -32,6 +32,17 @@
 //! - `@macro NAME(a, b) { ... }`, invoked as `@NAME(1, 2)` -- a body expanded
 //!   in place. An argument is evaluated in the caller's scope and bound to the
 //!   parameter, so a number, a constant and a cell all pass the same way.
+//! - **A body is an argument too.** A `{` after an invocation's arguments
+//!   hands the macro a block, as its last argument, and the macro expands it
+//!   with `@name`. That is what lets a loop be a macro: `@while(n) { ... }`.
+//!   A block carries the scope it was written in, so a block written inside
+//!   `@emit(ch)` can say `ch` even though it is expanded inside `@while`.
+//!   The `{` goes on the invocation's own line, because a directive owns the
+//!   rest of its line and nothing more -- an invocation with the brace on the
+//!   next line is an invocation with one argument missing, and is told so.
+//! - `@repeat N { ... }` -- the body, N times, counted when the program is
+//!   built. `OP{N}` repeats one instruction; nothing could repeat a line, and
+//!   no macro can, because expansion has no loop of its own.
 //! - `OP{N}` -- repeat `OP` N times, where `OP` is one of `+ - < > . ,` and `N`
 //!   is a number or a defined name. `+{0}` is nothing, which is legal.
 //! - `*` to end of line, and any character that is not a BrainFuck instruction:
@@ -82,7 +93,7 @@
 //!
 //! Three limits bound expansion, and each exists because the others do not
 //! see the case it covers. [`EXPANSION_LIMIT`] counts emitted instructions,
-//! [`MACRO_DEPTH_LIMIT`] the nesting -- a cycle is caught by name, but a long
+//! [`MACRO_DEPTH_LIMIT`] the nesting -- a cycle is caught as a cycle, but a long
 //! enough chain of *different* macros is not, and expansion recurses -- and
 //! [`INVOCATION_LIMIT`] the invocations, because macros that emit nothing
 //! still cost time and a few doubling wrappers reach billions of them in half
@@ -174,7 +185,7 @@ pub const EXPANSION_LIMIT: usize = 1_000_000;
 
 /// How deep macro invocations may nest.
 ///
-/// A macro that uses itself is caught by name, but a chain of a thousand
+/// A macro reached from inside itself is caught as a cycle, but a chain of a thousand
 /// different macros is not -- and expansion recurses, so a deep enough chain
 /// aborts the process with a stack overflow instead of reporting anything.
 /// Nothing legible needs more than a handful of levels.
@@ -240,6 +251,29 @@ enum Symbol {
     Field(i64),
     /// A body to expand, usable as `@name(...)`.
     Macro(Rc<MacroDef>),
+    /// A body written at a call site and handed to a macro, usable as
+    /// `@name`. It carries the bindings that were in scope where it was
+    /// written, which is what makes `@while(counter) { @to n - }` inside a
+    /// macro able to say `n`.
+    Block(Rc<BlockArgument>),
+}
+
+/// A block argument: a body, and the scope it was written in.
+///
+/// An argument is evaluated where it is written, which for a value means
+/// looked up there and for a body means *expanded* there. So a block carries a
+/// copy of the frame it was written in -- the enclosing macro's parameters and
+/// what they were bound to -- and invoking it puts that frame back rather than
+/// the frame of whatever macro is holding it.
+///
+/// Without that, a block passed to `@while` from inside `@invert(n)` could not
+/// say `n`: it would be expanded with `@while`'s frame on top, which has no
+/// such parameter. That shape -- a loop whose body uses the enclosing macro's
+/// argument -- is most of what block parameters are for.
+#[derive(Debug)]
+struct BlockArgument {
+    def: Rc<MacroDef>,
+    arguments: Vec<(Symbol, SourceLocation)>,
 }
 
 impl Symbol {
@@ -249,6 +283,7 @@ impl Symbol {
             Symbol::Variable(_) => Kind::Variable,
             Symbol::Field(_) => Kind::Field,
             Symbol::Macro(_) => Kind::Macro,
+            Symbol::Block(_) => Kind::Macro,
         }
     }
 }
@@ -1106,12 +1141,14 @@ impl Scanner {
             }
             Some(Directive::Endif) => self.endif(location),
             Some(Directive::Include) => self.include(location),
+            Some(Directive::Repeat) => self.repeat(location),
             // Not a directive, so it may be a macro -- checked after the
             // directives, so no macro can shadow one, and a name that is
             // neither is reported as what it looks like.
-            None => match self.macro_named(&name) {
-                Some(def) => self.invoke(name, def, location),
-                None => Err(MacroError::UnknownDirective { name, location }),
+            None => match self.binding(&name).map(|(symbol, _)| symbol.clone()) {
+                Some(Symbol::Macro(def)) => self.invoke(name, def, location),
+                Some(Symbol::Block(block)) => self.invoke_block(name, block, location),
+                _ => Err(MacroError::UnknownDirective { name, location }),
             },
         }
     }
@@ -1145,14 +1182,6 @@ impl Scanner {
     /// was to copy the rule again rather than share it.
     fn binding(&self, name: &str) -> Option<&(Symbol, SourceLocation)> {
         self.parameter(name).or_else(|| self.symbols.get(name))
-    }
-
-    /// The macro a name means here, parameters included.
-    fn macro_named(&self, name: &str) -> Option<Rc<MacroDef>> {
-        match self.binding(name)? {
-            (Symbol::Macro(def), _) => Some(Rc::clone(def)),
-            _ => None,
-        }
     }
 
     /// A declaration inside a macro body would run again on the next
@@ -1591,7 +1620,21 @@ impl Scanner {
         def: Rc<MacroDef>,
         location: SourceLocation,
     ) -> Result<(), MacroError> {
-        let arguments = self.argument_list(&name)?;
+        let mut arguments = self.argument_list(&name)?;
+
+        // A `{` after the arguments hands the macro a body, as its last
+        // argument. The same shape `@macro` itself uses to take one, so a
+        // macro that loops reads the way the loop it stands for reads:
+        //
+        //     @while(counter) {
+        //         @to out
+        //         +
+        //     }
+        self.skip_blanks();
+        if self.peek() == Some('{') {
+            arguments.push((self.block_argument(&name, location)?, location));
+        }
+
         if arguments.len() != def.params.len() {
             return Err(MacroError::ArgumentCount {
                 name,
@@ -1602,7 +1645,13 @@ impl Scanner {
         }
         self.end_of_directive(Directive::Macro)?;
 
-        if self.frames.iter().any(|frame| frame.name == name) {
+        // A cycle is the same *invocation* reached from inside itself, not
+        // the same name seen twice. Once a macro can take a body, a name
+        // legitimately appears inside its own expansion -- `@while(n) { ...
+        // @while(m) { ... } ... }` is two loops and not a recursion, and the
+        // two are at different places in the source. A macro that really does
+        // expand itself re-enters the same place, because its body is fixed.
+        if self.frames.iter().any(|frame| frame.call_site == location) {
             let mut chain: Vec<String> =
                 self.frames.iter().map(|frame| frame.name.clone()).collect();
             chain.push(name.clone());
@@ -1612,7 +1661,136 @@ impl Scanner {
                 location,
             });
         }
-        // Cycles are caught by name; depth and volume are not.
+        self.guard_depth(location)?;
+
+        self.enter(name, def, arguments, location)
+    }
+
+    /// `@repeat N { ... }` -- the body, N times over.
+    ///
+    /// `OP{N}` repeats one instruction, which is most of what a program wants
+    /// and not all of it: a record is nine cells, and walking one is nine
+    /// `>`, but *filling* one is nine of something longer. A block cannot be
+    /// repeated by a macro, because a macro has no way to count -- expansion
+    /// has no loop of its own, which is the whole reason this is a directive
+    /// and not a library.
+    ///
+    /// The count is settled when the program is built, so it takes a number or
+    /// a `@define`, and never a cell.
+    fn repeat(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        self.skip_blanks();
+        let at_count = self.at;
+        let count = self.number_or_name(
+            Directive::Repeat,
+            || "expected a count, as in `@repeat 9 { > }`".to_string(),
+            at_count,
+        )?;
+        if count > REPEAT_LIMIT {
+            return Err(MacroError::RepeatTooLarge {
+                count,
+                limit: REPEAT_LIMIT,
+                location: at_count,
+            });
+        }
+        self.skip_blanks();
+        if self.peek() != Some('{') {
+            return Err(malformed(
+                Directive::Repeat.spelling(),
+                "expected '{' to open the body to repeat".to_string(),
+                self.at,
+            ));
+        }
+        let (body_start, body_end) = self.body_span(Directive::Repeat.spelling(), location)?;
+        self.end_of_directive(Directive::Repeat)?;
+
+        for _ in 0..count {
+            self.scan_span(body_start, body_end)?;
+        }
+        Ok(())
+    }
+
+    /// Expand a span of the source in place, and come back.
+    ///
+    /// Not an invocation. The body is *here*, in the scope it is written in,
+    /// so there is no frame to push -- and everything that tells a repeated
+    /// body from a called one follows from that: whose line an emitted byte
+    /// names, whether a `@var` in it counts as being inside a macro, what it
+    /// spends from the invocation budget, and whether the word `repeat` turns
+    /// up in a chain of macros that use each other.
+    ///
+    /// Making it a fake invocation got all four of those wrong at once, which
+    /// is what the origin check said first: every byte of a repeated body
+    /// pointed at the `@repeat` line rather than at the instruction on it.
+    fn scan_span(&mut self, start: SourceLocation, end: usize) -> Result<(), MacroError> {
+        let resume = std::mem::replace(&mut self.at, start);
+        let result = self.scan_until(end);
+        self.at = resume;
+        result
+    }
+
+    /// The `{ ... }` a directive or an invocation opens, and where it ends.
+    fn body_span(
+        &mut self,
+        name: &str,
+        location: SourceLocation,
+    ) -> Result<(SourceLocation, usize), MacroError> {
+        self.bump(); // past '{'
+        let body_start = self.at;
+        let body_end = self.skip_body(name, location)?;
+        Ok((body_start, body_end))
+    }
+
+    /// The `{ ... }` after an invocation's arguments.
+    ///
+    /// The body is not read now -- only found -- and what it is read *with*
+    /// is settled now: the frame it was written in, so that a block can name
+    /// the parameters of the macro that wrote it. At file scope there is no
+    /// frame and there is nothing to carry.
+    fn block_argument(
+        &mut self,
+        name: &str,
+        location: SourceLocation,
+    ) -> Result<Symbol, MacroError> {
+        let (body_start, body_end) = self.body_span(name, location)?;
+        let (params, arguments) = match self.frames.last() {
+            Some(frame) => (frame.def.params.clone(), frame.arguments.clone()),
+            None => (Vec::new(), Vec::new()),
+        };
+        Ok(Symbol::Block(Rc::new(BlockArgument {
+            def: Rc::new(MacroDef {
+                params,
+                body_start,
+                body_end,
+            }),
+            arguments,
+        })))
+    }
+
+    /// A block handed to a macro, expanded where it was written.
+    fn invoke_block(
+        &mut self,
+        name: String,
+        block: Rc<BlockArgument>,
+        location: SourceLocation,
+    ) -> Result<(), MacroError> {
+        self.end_of_directive(Directive::Macro)?;
+        // No cycle check, and not for want of trying. The test that finds one
+        // for a macro -- the same invocation twice on the stack -- does not
+        // identify a block: `@body` sits at one fixed place inside the macro
+        // that takes it, and two nested `@while`s re-enter that place with two
+        // different bodies. Depth is what bounds a block that really does
+        // reach itself.
+        self.guard_depth(location)?;
+        let (def, arguments) = (Rc::clone(&block.def), block.arguments.clone());
+        self.enter(name, def, arguments, location)
+    }
+
+    /// The limits every invocation is subject to, whatever it is invoking.
+    ///
+    /// A cycle is caught before these, and catches only what it can name; a
+    /// chain of macros long enough to be a mistake but not a loop is what
+    /// these are for.
+    fn guard_depth(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         if self.frames.len() >= MACRO_DEPTH_LIMIT {
             return Err(MacroError::MacroTooDeep {
                 limit: MACRO_DEPTH_LIMIT,
@@ -1626,10 +1804,19 @@ impl Scanner {
                 location,
             });
         }
+        Ok(())
+    }
 
-        // A push, a scan, a pop. What used to be saved and restored around
-        // this by hand lives in the frame, so there is no invariant left to
-        // break -- and no way for an early return to leak half of it.
+    /// A push, a scan, a pop. What used to be saved and restored around
+    /// this by hand lives in the frame, so there is no invariant left to
+    /// break -- and no way for an early return to leak half of it.
+    fn enter(
+        &mut self,
+        name: String,
+        def: Rc<MacroDef>,
+        arguments: Vec<(Symbol, SourceLocation)>,
+        location: SourceLocation,
+    ) -> Result<(), MacroError> {
         let (body_start, body_end) = (def.body_start, def.body_end);
         self.frames.push(Invocation {
             name,
@@ -2934,7 +3121,19 @@ mod macro_tests {
         let MacroError::CircularMacro { chain, .. } = &indirect else {
             panic!("expected a cycle, got {indirect:?}");
         };
-        assert_eq!(chain, &["a".to_string(), "b".to_string(), "a".to_string()]);
+        // Round and round once more than a check by name would have gone: a
+        // cycle is the same invocation reached from inside itself, and that
+        // takes one more turn to show than the same name does. What it costs
+        // in turns it gains in not calling two nested loops a recursion.
+        assert_eq!(
+            chain,
+            &[
+                "a".to_string(),
+                "b".to_string(),
+                "a".to_string(),
+                "b".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -3084,7 +3283,7 @@ mod macro_tests {
 
     #[test]
     fn a_deep_chain_of_distinct_macros_is_refused_rather_than_exhausting_the_stack() {
-        // Cycles are caught by name, which bounds nothing here: a thousand
+        // Cycles are caught as cycles, which bounds nothing here: a thousand
         // different macros each using the next is not a cycle, and expansion
         // recurses, so this aborted the process instead of reporting.
         let mut source = String::from("@macro m0 { + }\n");
@@ -3737,6 +3936,116 @@ mod one_lexer {
             let hint = expand(&source).unwrap_err().hint().unwrap_or_default();
             assert!(hint.contains("defined below this line"), "{body}: {hint}");
         }
+    }
+}
+
+#[cfg(test)]
+/// Bodies handed to macros, and bodies repeated.
+///
+/// Both exist because the alternative was writing the loop out. A macro could
+/// take a cell and a count but not a *body*, so every `[` in the corpus is
+/// written where it is used, and `@repeat` had no way to exist at all: a macro
+/// cannot count, because expansion has no loop of its own.
+mod blocks {
+    use super::tests::expanded;
+    use super::*;
+
+    const WHILE: &str = "@macro while(cell, body) {\n@to cell\n[\n@body\n@to cell\n]\n}\n";
+
+    #[test]
+    fn a_macro_can_take_a_body() {
+        let source = format!("@var n at 0\n{WHILE}@to n\n+{{3}}\n@while(n) {{\n@to n\n-\n}}\n");
+        assert_eq!(expanded(&source), "+++[-]");
+    }
+
+    /// The case the capture is for. `ch` belongs to `emit`, and the block that
+    /// names it is expanded inside `while`, whose frame has no such parameter
+    /// -- so a block that carried nothing would fail here, and this is the
+    /// shape most uses of a block take.
+    #[test]
+    fn a_block_names_the_parameters_of_the_macro_that_wrote_it() {
+        let source = format!(
+            "@var n at 0\n{WHILE}\n@macro emit(step) {{\n@to n\n+{{2}}\n@while(n) {{\n@to n\n-{{step}}\n}}\n}}\n@emit(1)\n"
+        );
+        assert_eq!(expanded(&source), "++[-]");
+    }
+
+    #[test]
+    fn a_block_may_be_expanded_more_than_once() {
+        let source = "@macro twice(body) {\n@body\n@body\n}\n@twice {\n+\n}\n";
+        assert_eq!(expanded(source), "++");
+    }
+
+    #[test]
+    fn a_block_may_hold_another() {
+        let source = format!(
+            "@var n at 0\n@var m at 1\n{WHILE}@to n\n+\n@to m\n+\n@while(n) {{\n@while(m) {{\n@to m\n-\n}}\n@to n\n-\n}}\n"
+        );
+        assert_eq!(expanded(&source), "+>+<[>[-]<-]");
+    }
+
+    #[test]
+    fn a_macro_wanting_a_body_says_so_when_it_does_not_get_one() {
+        let source = format!("@var n at 0\n{WHILE}@while(n)\n");
+        let error = expand(&source).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                MacroError::ArgumentCount {
+                    expected: 2,
+                    actual: 1,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn repeat_expands_its_body_that_many_times() {
+        assert_eq!(expanded("@repeat 3 {\n+>\n}\n"), "+>+>+>");
+        assert_eq!(expanded("@repeat 0 {\n+\n}\n.\n"), ".");
+        assert_eq!(expanded("@define N 4\n@repeat N {\n>\n}\n"), ">>>>");
+    }
+
+    /// The reason it is a directive: a count is settled when the program is
+    /// built, so it is a number or a `@define` and never a cell.
+    #[test]
+    fn repeat_counts_at_expansion_time_or_says_why_not() {
+        let error = expand("@var n\n@repeat n {\n+\n}\n").unwrap_err();
+        assert!(matches!(error, MacroError::WrongKind { .. }), "{error:?}");
+
+        let error = expand("@repeat 3\n+\n").unwrap_err();
+        assert!(
+            matches!(error, MacroError::MalformedDirective { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn repeat_inside_a_macro_uses_that_macro_s_parameters() {
+        let source = "@macro row(step) {\n@repeat 3 {\n+{step}\n}\n}\n@row(2)\n";
+        assert_eq!(expanded(source), "++++++");
+    }
+
+    /// The bytes of a repeated body come from where they are written.
+    ///
+    /// A macro's bytes name the invocation, because a definition is somewhere
+    /// else and used many times. A repeated body is *here*, once, so it names
+    /// itself -- and the crate's own origin check is what says so.
+    #[test]
+    fn a_repeated_body_names_its_own_lines() {
+        super::tests::assert_origins_are_exact("@repeat 3 {\n+\n}\n");
+        super::tests::assert_origins_are_exact("@define N 2\n@repeat N {\n+>\n}\n");
+    }
+
+    #[test]
+    fn repeat_is_bounded() {
+        let error = expand("@repeat 2000000 {\n+\n}\n").unwrap_err();
+        assert!(
+            matches!(error, MacroError::RepeatTooLarge { .. }),
+            "{error:?}"
+        );
     }
 }
 

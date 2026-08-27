@@ -1,0 +1,105 @@
+* Arithmetic on numbers that do not fit in a cell.
+*
+* A cell holds 0 to 255. `lib/wide.bfm` holds a number in two of them -- `hi`
+* and `lo`, worth hi*256 + lo -- and this program works each operation on
+* values whose answers can be checked by hand.
+*
+* What it works out:
+*
+*     print(456 + 100)         # 556
+*     print(522 - 30)          # 492
+*     print(300 * 200)         # 60000
+*     print(261 < 265, 773 < 265)
+*
+* Each answer comes out as the two cells it is held in, printed as decimal by
+* the 8-bit `@divmod`: `556` is `2,44`, because 2*256 + 44 is 556. That is not
+* a presentation choice so much as an admission -- turning a two-cell number
+* into decimal digits needs division *by* a two-cell number, which is the next
+* thing this library wants and does not have yet.
+
+@include "lib/fast.bfm"
+@include "lib/wide.bfm"
+
+@var a_hi
+@var a_lo
+@var b_hi
+@var b_lo
+@var r_hi
+@var r_lo
+@var c_hi
+@var c_lo
+@var result
+@var same
+@var count
+@var step
+@var passed
+@var flag
+@var other
+@var held
+@var scratch
+@var spare
+@var q
+@var r
+@var ten
+@var digit
+@var out
+
+* One cell as decimal, with no leading zeros unless it is zero.
+*
+*     print(cell)              # 0 to 255, so up to three digits
+@macro show_byte(cell) {
+    @divmod(cell, ten, q, r)
+    @divmod(q, ten, digit, scratch)
+    @is_not_zero(digit, flag, other, spare)
+    @to flag
+    [
+        @show_digit(digit)
+        @clear(flag)
+    ]
+    @is_not_zero(q, flag, other, spare)
+    @to flag
+    [
+        @show_digit(scratch)
+        @clear(flag)
+    ]
+    @show_digit(r)
+}
+
+* A two-cell number, as the two cells it is.
+@macro show_wide(hi, lo) {
+    @show_byte(hi)
+    @say(out, ',')
+    @show_byte(lo)
+    @say(out, SPACE)
+}
+
+@put(ten, 10)
+
+* 456 + 100
+@wide_put(a_hi, a_lo, 1, 200)
+@wide_put(b_hi, b_lo, 0, 100)
+@wide_add(a_hi, a_lo, b_hi, b_lo, count, flag, held, spare)
+@show_wide(a_hi, a_lo)
+
+* 522 - 30
+@wide_put(a_hi, a_lo, 2, 10)
+@wide_put(b_hi, b_lo, 0, 30)
+@wide_sub(a_hi, a_lo, b_hi, b_lo, count, flag, held, spare)
+@show_wide(a_hi, a_lo)
+
+* 300 * 200
+@wide_put(a_hi, a_lo, 1, 44)
+@wide_put(b_hi, b_lo, 0, 200)
+@wide_multiply(a_hi, a_lo, b_hi, b_lo, r_hi, r_lo, c_hi, c_lo, count, flag, held, spare)
+@show_wide(a_hi, a_lo)
+
+* 261 < 265, then 773 < 265
+@wide_put(a_hi, a_lo, 1, 5)
+@wide_put(b_hi, b_lo, 1, 9)
+@wide_less(a_hi, a_lo, b_hi, b_lo, result, same, count, step, passed, flag, other, scratch, spare)
+@show_digit(result)
+@wide_put(a_hi, a_lo, 3, 5)
+@wide_put(b_hi, b_lo, 1, 9)
+@wide_less(a_hi, a_lo, b_hi, b_lo, result, same, count, step, passed, flag, other, scratch, spare)
+@show_digit(result)
+@newline(out)

@@ -158,7 +158,24 @@ and `@to` (named cells, with the cursor tracked and the movement emitted),
 `@here` (assert a position without moving), `@macro` with parameters, and
 `@ifdef`/`@ifndef`/`@endif` (a branch not taken is never expanded, so it may
 hold names and brackets that would be errors in one that is, and a body's test
-is made against the scope it is expanded into), and `@include`. A `@var` without
+is made against the scope it is expanded into), `@include`, and
+`@repeat N { ... }`.
+
+**A body is an argument.** A `{` after an invocation's arguments — on the same
+line, since a directive owns the rest of its line and nothing more — hands the
+macro a block as its last argument, in the shape `@macro` itself uses to take
+one, and the macro expands it with `@name`. That is what lets a loop be a
+macro rather than something every program writes out: `lib/idioms.bfm` now has
+`@while`, `@when` and `@unless`. A block carries the scope it was written in,
+so a block written inside `@emit(ch)` can say `ch` although it is expanded
+inside `@while` -- an argument is evaluated where it is written, which for a
+value means looked up there and for a body means expanded there.
+
+Blocks made the cycle check wrong. It compared frames by name, and a macro
+taking a body legitimately appears inside its own expansion -- two nested
+`@while`s are two loops, not a recursion. A cycle is the same *invocation*
+reached from inside itself, so it compares call sites now, which takes one
+more turn to notice and stops calling nested loops recursive. A `@var` without
 a cell has one chosen, and anywhere a number may be written so may an ASCII
 character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all 65. A
 directive must start its line and
