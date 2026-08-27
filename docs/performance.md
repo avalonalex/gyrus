@@ -12,31 +12,6 @@ not to pay. Nothing here is a promise about future work.
 Back to the [README](../README.md). For how the execution modes differ, see
 [execution models](execution-models.md).
 
-## Double-and-add multiplication in `.bfm` (August 2026) — did not pay
-
-`lib/signed.bfm` multiplies by adding `b` to nothing `a` times, which costs the
-*value* of `a`. Its own comment named the alternative: eight rounds of double
-and add, costing the number of digits instead. Built and measured, it is
-**2.5× worse** for the program that wanted it.
-
-| | naive | double-and-add |
-|---|---|---|
-| 40 × 20 | 27,000 | 17,041 |
-| 0 × 20 | ~600 | 9,527 |
-| `mandelbrot.bfm` | 91,513,283 | 227,244,885 |
-
-Eight rounds happen whatever the numbers are, and each round doubles a two-cell
-number — which in BrainFuck costs the value being doubled, because adding is
-counting. So the fixed cost is thousands of steps, and `mandelbrot.bfm` spends
-most of its multiplies on small operands and zeros, where counting `a` times is
-nearly free.
-
-The crossover is around 60, and `lib/signed.bfm` refuses operands whose product
-passes 4096 — so no legal input reaches it. A faster multiply for this library
-would have to make *doubling* cheap, which is the same wall
-`@signed_halve` hit: arithmetic on a cell costs its value unless the loop
-structure carries it.
-
 ## Where it stands
 
 | | mandelbrot | hanoi |
@@ -170,6 +145,53 @@ Two more were measured before being built at all, and then not built:
 **cancelling out `+++-` into `Add(2)`** covers 0.0% of executed instructions on
 every benchmark program, and **dead code elimination** would fire once in
 hanoi, twice in mandelbrot, and nowhere else.
+
+### One level up: double-and-add multiplication in `.bfm`
+
+Not the engine but a program run on it, recorded here because it is the same
+kind of result. `lib/wide.bfm`'s multiply comment named the idea:
+`@signed_multiply` adds `b` to nothing `a` times, costing the *value* of `a`,
+where doubling and adding would cost the number of digits instead. It was
+built, checked against the naive one on twelve products, and measured on
+`mandelbrot.bfm` — **91,513,283 steps became 227,244,885**, 2.5x worse.
+Reverted.
+
+The reason is a floor. Eight rounds happen whatever the numbers are, and each
+round doubles a two-cell number — which in BrainFuck costs the value being
+doubled, because adding is counting. The spike cost about 9,500 steps to
+multiply by zero, and since the eight rounds run regardless that is its floor.
+Naive has no floor; it costs what its operands cost.
+
+| naive `@signed_multiply` | steps |
+|---|---|
+| 0 × 20 | 162 |
+| 10 × 20 | 10,082 |
+| 40 × 20 | 16,072 |
+| 63 × 63 | 76,402 |
+
+`mandelbrot.bfm` lives in the first two rows: it multiplies small numbers and
+zeros, where counting `a` times costs less than the floor. That is the whole
+result, and it does not generalise past this program. There is no single
+crossover operand, because naive's cost is not monotonic in the product — the
+four `@signed_halve` calls are quadratic in the low byte, so 16 × 16 (product
+256) costs 4,978 steps while 15 × 17 (product 255) costs 12,811. And large
+operands are legal: 63 × 63 is the largest square the library's 4096 product
+limit allows, and nothing enforces that limit at run time — the cell wraps
+rather than complaining, as `@signed_multiply`'s own comment says. A program
+multiplying numbers that size would want double-and-add.
+
+A faster multiply for this library would have to make *doubling* cheap, and
+`@signed_halve` in `lib/signed.bfm` is the cautionary record. Its obvious fix
+did make the arithmetic free — a bit costs nothing to test — and still came out
+slower, because four macro calls a turn move the cursor further than the copy
+they replace. In `.bfm` the cursor is as expensive as the arithmetic.
+
+Step counts here are the optimized interpreter on expanded BrainFuck
+(`gyrus-tool expand`, then `gyrus --verbose`); the tree-walker a `.bfm` gets by
+default reports 171x more for the same multiply, so the engine has to be named
+for the numbers to mean anything. Every naive figure above reproduces. The two
+double-and-add figures are as measured at the time and cannot be re-derived:
+the spike was reverted and not kept.
 
 ## The finding
 

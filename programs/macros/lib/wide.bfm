@@ -209,8 +209,14 @@
 * when the only arithmetic is adding one, and which costs the *value* of `a`
 * rather than the number of digits in it. That is fine for checking an answer
 * and much too slow for a program that does it in a loop; a version that
-* doubles and adds costs the digits instead, and this one is what it will be
-* checked against.
+* doubles and adds costs the digits instead.
+*
+* I wrote that version and measured it, and for `mandelbrot.bfm` it is 2.5
+* times *slower* -- 227,244,885 steps against 91,513,283 -- because its eight
+* rounds happen whatever the numbers are, a floor of about 9,500 steps a
+* multiply, and mandelbrot multiplies small numbers and zeros. It is the right
+* shape for large operands and the wrong one here, so it was reverted;
+* `docs/performance.md` has the numbers.
 *
 * The counting is nested because a counter of two cells cannot be tested for
 * zero cheaply: the low half runs 256 times for each step of the high half,

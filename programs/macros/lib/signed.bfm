@@ -235,6 +235,11 @@
 * because a cell wraps rather than complaining. A first draft of this comment
 * said "below about 90", which is wrong by half and was wrong in the same
 * paragraph that says 64 times 64 does not fit.
+*
+* Counting `a` times costs the value of `a`, and doubling and adding instead
+* would cost its digits. That was built and measured and came out 2.5 times
+* slower on `mandelbrot.bfm`, which multiplies small numbers and zeros; it
+* would still win on operands near the 4096 limit. See `docs/performance.md`.
 @macro signed_multiply(a_sign, a_size, b_sign, b_size) {
     * A product faces the way its parts disagree.
     @clear(s_agree)
