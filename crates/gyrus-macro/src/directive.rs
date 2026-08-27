@@ -61,13 +61,28 @@ impl Directive {
         Self::ALL.into_iter().find(|d| d.spelling() == name)
     }
 
+    /// The same, from a name still in the source text. Spares the `String`
+    /// that the two walks over unexpanded text would otherwise allocate for
+    /// every line-start `@` they pass.
+    pub(crate) fn from_word(name: &[char]) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|d| crate::lex::matches(name, d.spelling()))
+    }
+
     /// Whether the expander implements it. The rest are refused by name
     /// rather than called unknown, which would be a lie about why they failed.
     pub(crate) fn implemented(self) -> bool {
         self.declaration().is_some()
             || matches!(
                 self,
-                Directive::To | Directive::Here | Directive::Stride | Directive::Macro
+                Directive::To
+                    | Directive::Here
+                    | Directive::Stride
+                    | Directive::Macro
+                    | Directive::Ifdef
+                    | Directive::Ifndef
+                    | Directive::Endif
             )
     }
 
@@ -81,6 +96,16 @@ impl Directive {
     #[cfg(test)]
     pub(crate) fn emits(self) -> bool {
         matches!(self, Directive::To)
+    }
+
+    /// Whether it opens a conditional, and whether the branch is taken when
+    /// the name it tests is defined.
+    pub(crate) fn conditional(self) -> Option<bool> {
+        match self {
+            Directive::Ifdef => Some(true),
+            Directive::Ifndef => Some(false),
+            _ => None,
+        }
     }
 
     /// How it declares a name, if it declares one.

@@ -45,15 +45,20 @@ fn the_macro_hello_world_expands_to_the_program_it_was_written_from() {
     );
 }
 
-/// Expand a `.bfm`, remap its debug info, run it, and return what it printed.
+/// Expand a `.bfm` from `programs/`, run it, and return what it printed.
+fn run(relative: &str, max_steps: u64) -> (String, String) {
+    run_source(&read(relative), max_steps)
+}
+
+/// The same, for source that is not a file: the conditional test expands one
+/// program twice, with a line taken out the second time.
 ///
 /// The sequence -- expand, `parse_with_debug`, `remap`, `interpret_with_io` --
 /// is what using this crate looks like end to end, so it is written once here
 /// rather than per test.
-fn run(relative: &str, max_steps: u64) -> (String, String) {
-    let bfm = read(relative);
+fn run_source(bfm: &str, max_steps: u64) -> (String, String) {
     let expansion =
-        gyrus_macro::expand(&bfm).unwrap_or_else(|e| panic!("{}", e.format_with_source(&bfm)));
+        gyrus_macro::expand(bfm).unwrap_or_else(|e| panic!("{}", e.format_with_source(bfm)));
 
     let (instructions, expanded) = parse_with_debug(expansion.brainfuck()).expect("parses");
     let debug_info = expansion.remap(&expanded);
@@ -175,4 +180,29 @@ fn the_records_example_walks_an_array_by_field_name() {
 fn the_compare_example_transcribes_a_catalogued_idiom() {
     let (_, printed) = run("programs/macros/compare.bfm", 1_000_000);
     assert_eq!(printed, "10110");
+}
+
+/// Conditional compilation, and what it means for it to be *compilation*.
+///
+/// The marks are not skipped at run time when `TRACE` is off -- they are
+/// absent from the BrainFuck. Expanding the same file with the `@define`
+/// removed is the whole demonstration, so the test does it both ways.
+#[test]
+fn the_conditional_example_compiles_its_tracing_in_and_out() {
+    let source = read("programs/macros/conditional.bfm");
+    let (with_trace, printed) = run_source(&source, 100_000);
+    assert_eq!(printed, "H.i.!");
+
+    let without = source.replace("@define TRACE 1", "* TRACE is off");
+    let (without_trace, printed) = run_source(&without, 100_000);
+    assert_eq!(printed, "Hi!");
+
+    // Shorter, not merely quieter: the marks left no instructions behind.
+    // The two numbers are the ones `programs/README.md` quotes, asserted here
+    // so the file cannot drift away from the claim made about it.
+    assert_eq!(
+        (with_trace.len(), without_trace.len()),
+        (322, 222),
+        "the instruction counts in programs/README.md are stale"
+    );
 }

@@ -155,10 +155,13 @@ built to replace.
 
 It understands `@define` (named constants), `OP{N}` (repeat counts), `@var`
 and `@to` (named cells, with the cursor tracked and the movement emitted),
-`@here` (assert a position without moving), and `@macro` with parameters. A
-`@var` without a cell has one chosen, and anywhere a number may be written so
-may an ASCII character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all
-65. A directive must start its line and
+`@here` (assert a position without moving), `@macro` with parameters, and
+`@ifdef`/`@ifndef`/`@endif` (a branch not taken is never expanded, so it may
+hold names and brackets that would be errors in one that is, and a body's test
+is made against the scope it is expanded into). A `@var` without
+a cell has one chosen, and anywhere a number may be written so may an ASCII
+character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all 65. A
+directive must start its line and
 owns the rest of it; `{` and `}` are reserved everywhere, `@` only at the start
 of a line, so BrainFuck's free-form prose comments survive.
 
@@ -171,13 +174,15 @@ loop metadata, which no foreign crate can construct — nothing in the error pat
 reads it, but `gyrus-debug` does, which is why stepping through a `.bfm` is not
 yet possible.
 
-**Three readers, one set of lexical rules.** The expander walks the source; a
-macro body is walked again to find its closing brace; and the "defined below
-this line" hint walks ahead of the cursor. They must agree about where a `*`
-comment ends, how far a `'x'` literal reaches, and whether a `{` is a repeat
+**Four readers, one set of lexical rules.** The expander walks the source; a
+macro body is walked again to find its closing brace; the "defined below this
+line" hint walks ahead of the cursor; and a branch of a conditional that is not
+taken is walked to its `@endif` without being expanded. They must agree about
+where a `*` comment ends, how far a `'x'` literal reaches, and whether a `{` is a repeat
 count — and each time they did not, it cost a bug. `lex.rs` holds one copy of
-each rule, as free functions over `(chars, offset)`, because the three callers
-share the text but not a cursor.
+each rule; `lex::step` holds the classification the two skipping walks share.
+The fourth reader arrived after that and was a caller rather than a copy, which
+is what the unification was for.
 
 **A macro is expanded in place, from a span of the source.** A body is not
 copied — invoking one moves the cursor and scans to the closing brace — so
