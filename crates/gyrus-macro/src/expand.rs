@@ -37,6 +37,9 @@
 //!   with `@name`. That is what lets a loop be a macro: `@while(n) { ... }`.
 //!   A block carries the scope it was written in, so a block written inside
 //!   `@emit(ch)` can say `ch` even though it is expanded inside `@while`.
+//!   The `{` goes on the invocation's own line, because a directive owns the
+//!   rest of its line and nothing more -- an invocation with the brace on the
+//!   next line is an invocation with one argument missing, and is told so.
 //! - `@repeat N { ... }` -- the body, N times, counted when the program is
 //!   built. `OP{N}` repeats one instruction; nothing could repeat a line, and
 //!   no macro can, because expansion has no loop of its own.
@@ -90,7 +93,7 @@
 //!
 //! Three limits bound expansion, and each exists because the others do not
 //! see the case it covers. [`EXPANSION_LIMIT`] counts emitted instructions,
-//! [`MACRO_DEPTH_LIMIT`] the nesting -- a cycle is caught by name, but a long
+//! [`MACRO_DEPTH_LIMIT`] the nesting -- a cycle is caught as a cycle, but a long
 //! enough chain of *different* macros is not, and expansion recurses -- and
 //! [`INVOCATION_LIMIT`] the invocations, because macros that emit nothing
 //! still cost time and a few doubling wrappers reach billions of them in half
@@ -182,7 +185,7 @@ pub const EXPANSION_LIMIT: usize = 1_000_000;
 
 /// How deep macro invocations may nest.
 ///
-/// A macro that uses itself is caught by name, but a chain of a thousand
+/// A macro reached from inside itself is caught as a cycle, but a chain of a thousand
 /// different macros is not -- and expansion recurses, so a deep enough chain
 /// aborts the process with a stack overflow instead of reporting anything.
 /// Nothing legible needs more than a handful of levels.
@@ -1658,20 +1661,7 @@ impl Scanner {
                 location,
             });
         }
-        // Cycles are caught by name; depth and volume are not.
-        if self.frames.len() >= MACRO_DEPTH_LIMIT {
-            return Err(MacroError::MacroTooDeep {
-                limit: MACRO_DEPTH_LIMIT,
-                location,
-            });
-        }
-        self.invocations += 1;
-        if self.invocations > INVOCATION_LIMIT {
-            return Err(MacroError::TooManyInvocations {
-                limit: INVOCATION_LIMIT,
-                location,
-            });
-        }
+        self.guard_depth(location)?;
 
         self.enter(name, def, arguments, location)
     }
@@ -1710,23 +1700,44 @@ impl Scanner {
                 self.at,
             ));
         }
-        let block = self.block_argument(Directive::Repeat.spelling(), location)?;
+        let (body_start, body_end) = self.body_span(Directive::Repeat.spelling(), location)?;
         self.end_of_directive(Directive::Repeat)?;
 
-        let Symbol::Block(block) = block else {
-            unreachable!("block_argument returns a block");
-        };
         for _ in 0..count {
-            self.guard_depth(Directive::Repeat.spelling(), location)?;
-            let (def, arguments) = (Rc::clone(&block.def), block.arguments.clone());
-            self.enter(
-                Directive::Repeat.spelling().to_string(),
-                def,
-                arguments,
-                location,
-            )?;
+            self.scan_span(body_start, body_end)?;
         }
         Ok(())
+    }
+
+    /// Expand a span of the source in place, and come back.
+    ///
+    /// Not an invocation. The body is *here*, in the scope it is written in,
+    /// so there is no frame to push -- and everything that tells a repeated
+    /// body from a called one follows from that: whose line an emitted byte
+    /// names, whether a `@var` in it counts as being inside a macro, what it
+    /// spends from the invocation budget, and whether the word `repeat` turns
+    /// up in a chain of macros that use each other.
+    ///
+    /// Making it a fake invocation got all four of those wrong at once, which
+    /// is what the origin check said first: every byte of a repeated body
+    /// pointed at the `@repeat` line rather than at the instruction on it.
+    fn scan_span(&mut self, start: SourceLocation, end: usize) -> Result<(), MacroError> {
+        let resume = std::mem::replace(&mut self.at, start);
+        let result = self.scan_until(end);
+        self.at = resume;
+        result
+    }
+
+    /// The `{ ... }` a directive or an invocation opens, and where it ends.
+    fn body_span(
+        &mut self,
+        name: &str,
+        location: SourceLocation,
+    ) -> Result<(SourceLocation, usize), MacroError> {
+        self.bump(); // past '{'
+        let body_start = self.at;
+        let body_end = self.skip_body(name, location)?;
+        Ok((body_start, body_end))
     }
 
     /// The `{ ... }` after an invocation's arguments.
@@ -1740,9 +1751,7 @@ impl Scanner {
         name: &str,
         location: SourceLocation,
     ) -> Result<Symbol, MacroError> {
-        self.bump(); // past '{'
-        let body_start = self.at;
-        let body_end = self.skip_body(name, location)?;
+        let (body_start, body_end) = self.body_span(name, location)?;
         let (params, arguments) = match self.frames.last() {
             Some(frame) => (frame.def.params.clone(), frame.arguments.clone()),
             None => (Vec::new(), Vec::new()),
@@ -1765,13 +1774,23 @@ impl Scanner {
         location: SourceLocation,
     ) -> Result<(), MacroError> {
         self.end_of_directive(Directive::Macro)?;
-        self.guard_depth(&name, location)?;
+        // No cycle check, and not for want of trying. The test that finds one
+        // for a macro -- the same invocation twice on the stack -- does not
+        // identify a block: `@body` sits at one fixed place inside the macro
+        // that takes it, and two nested `@while`s re-enter that place with two
+        // different bodies. Depth is what bounds a block that really does
+        // reach itself.
+        self.guard_depth(location)?;
         let (def, arguments) = (Rc::clone(&block.def), block.arguments.clone());
         self.enter(name, def, arguments, location)
     }
 
     /// The limits every invocation is subject to, whatever it is invoking.
-    fn guard_depth(&mut self, name: &str, location: SourceLocation) -> Result<(), MacroError> {
+    ///
+    /// A cycle is caught before these, and catches only what it can name; a
+    /// chain of macros long enough to be a mistake but not a loop is what
+    /// these are for.
+    fn guard_depth(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         if self.frames.len() >= MACRO_DEPTH_LIMIT {
             return Err(MacroError::MacroTooDeep {
                 limit: MACRO_DEPTH_LIMIT,
@@ -1785,7 +1804,6 @@ impl Scanner {
                 location,
             });
         }
-        let _ = name;
         Ok(())
     }
 
@@ -3265,7 +3283,7 @@ mod macro_tests {
 
     #[test]
     fn a_deep_chain_of_distinct_macros_is_refused_rather_than_exhausting_the_stack() {
-        // Cycles are caught by name, which bounds nothing here: a thousand
+        // Cycles are caught as cycles, which bounds nothing here: a thousand
         // different macros each using the next is not a cycle, and expansion
         // recurses, so this aborted the process instead of reporting.
         let mut source = String::from("@macro m0 { + }\n");
@@ -4008,6 +4026,17 @@ mod blocks {
     fn repeat_inside_a_macro_uses_that_macro_s_parameters() {
         let source = "@macro row(step) {\n@repeat 3 {\n+{step}\n}\n}\n@row(2)\n";
         assert_eq!(expanded(source), "++++++");
+    }
+
+    /// The bytes of a repeated body come from where they are written.
+    ///
+    /// A macro's bytes name the invocation, because a definition is somewhere
+    /// else and used many times. A repeated body is *here*, once, so it names
+    /// itself -- and the crate's own origin check is what says so.
+    #[test]
+    fn a_repeated_body_names_its_own_lines() {
+        super::tests::assert_origins_are_exact("@repeat 3 {\n+\n}\n");
+        super::tests::assert_origins_are_exact("@define N 2\n@repeat N {\n+>\n}\n");
     }
 
     #[test]

@@ -161,7 +161,8 @@ hold names and brackets that would be errors in one that is, and a body's test
 is made against the scope it is expanded into), `@include`, and
 `@repeat N { ... }`.
 
-**A body is an argument.** A `{` after an invocation's arguments hands the
+**A body is an argument.** A `{` after an invocation's arguments — on the same
+line, since a directive owns the rest of its line and nothing more — hands the
 macro a block as its last argument, in the shape `@macro` itself uses to take
 one, and the macro expands it with `@name`. That is what lets a loop be a
 macro rather than something every program writes out: `lib/idioms.bfm` now has

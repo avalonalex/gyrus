@@ -497,8 +497,8 @@ impl MacroError {
                 Some("This ']' closes a loop that was never opened.".to_string())
             }
             MacroError::MacroTooDeep { .. } => Some(
-                "A macro that uses itself is caught by name, but a long enough chain of \
-                 different macros is not -- and expansion is recursive, so a deep enough one \
+                "A macro reached from inside itself is caught as a cycle, but a long enough \
+                 chain of different macros is not -- and expansion is recursive, so a deep enough one \
                  would exhaust the stack rather than report anything."
                     .to_string(),
             ),

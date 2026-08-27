@@ -102,13 +102,6 @@ file.
   measured by where it began and ended, an idiom like that one could only
   appear in a straight line.
 
-**Every one of them with a loop in it says what the loop is for**, as a block
-of pseudocode in its comments. Naming cells makes a *line* legible without
-making the *program* legible -- `@to ones` `[` `-` says what is happening and
-not why -- so each file carries what it would be in a language that has
-numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
-with logic in it has some; only a reader can check that it is right.
-
 - **`bignum.bfm`** - add, subtract, multiply and compare on numbers held in
   two cells, from **`lib/wide.bfm`**. The multiply is the naive one, adding
   `b` to nothing `a` times: it costs the *value* rather than the number of
@@ -119,6 +112,13 @@ with logic in it has some; only a reader can check that it is right.
 - **`blocks.bfm`** - `@while`, `@when` and `@unless` as ordinary macros, and
   `@repeat` around a body. Every other program here writes its loops out,
   because until a macro could take a *body* there was nothing else to do.
+
+**Every one of them with a loop in it says what the loop is for**, as a block
+of pseudocode in its comments. Naming cells makes a *line* legible without
+making the *program* legible -- `@to ones` `[` `-` says what is happening and
+not why -- so each file carries what it would be in a language that has
+numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
+with logic in it has some; only a reader can check that it is right.
 
 All seventeen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
