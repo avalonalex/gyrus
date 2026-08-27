@@ -27,20 +27,21 @@
 * second, two sizes that cancel leave the sign of whichever was written first,
 * so `-4 + 4` came out as a zero that compared unequal to zero.
 *
-* **This file owns cells 20 to 35**, the way `lib/fast.bfm` owns 0 to 19. The
+* **This file owns cells 20 to 45**, the way `lib/fast.bfm` owns 0 to 19. The
 * first draft passed the scratch in and `@signed_add` took fourteen
 * parameters, eleven of them cells nobody wanted to name. Two `at`s naming one
 * cell are allowed on purpose, so nothing will tell you if a program pins one
-* of these; pin nothing below 36 in a program that includes this file.
+* of these; pin nothing below 46 in a program that includes this file.
 
 @include "idioms.bfm"
+@include "wide.bfm"
 
 @var s_agree at 20
 @var s_smaller at 21
 @var s_keep at 22
 @var s_bsign at 23
 @var s_bsize at 24
-@var s_count at 25
+@var s_walk at 25
 @var s_step at 26
 @var s_passed at 27
 @var s_flag at 28
@@ -51,6 +52,16 @@
 @var s_size at 33
 @var s_guard at 34
 @var s_inner at 35
+@var s_hi at 36
+@var s_lo at 37
+@var s_count at 38
+@var s_bit at 39
+@var s_half at 40
+@var s_carry at 41
+@var s_held at 42
+@var s_t0 at 43
+@var s_t1 at 44
+@var s_out at 45
 
 * A signed value from a sign and a size written down. A size of nothing is
 * positive whatever was asked for, because that is the only zero this file
@@ -111,7 +122,7 @@
     }
 
     @unless(s_agree, s_guard, s_scratch, s_spare) {
-        @less(a_size, s_bsize, s_smaller, s_count, s_step, s_passed, s_flag, s_other, s_scratch, s_spare)
+        @less(a_size, s_bsize, s_smaller, s_walk, s_step, s_passed, s_flag, s_other, s_scratch, s_spare)
 
         @when(s_smaller, s_inner, s_scratch, s_spare) {
             * b is the larger, so the answer faces b's way and is b - a.
@@ -158,4 +169,90 @@
     @copy(b_size, s_size, s_spare)
     @signed_negate(s_sign, s_size)
     @signed_add(a_sign, a_size, s_sign, s_size)
+}
+
+* Half of a cell, thrown away one pair at a time.
+*
+*     out = cell // 2          # and `cell` is emptied
+*
+* Take one, and look for a second: two taken together are one half. The
+* remainder is whatever was taken alone, which nothing here wants and
+* everything here has to account for.
+@macro halve(cell, out) {
+    @clear(out)
+    @clear(s_bit)
+    @while(cell) {
+        @to cell
+        -
+        @to s_bit
+        +
+        @when(cell, s_guard, s_scratch, s_spare) {
+            @to cell
+            -
+            @to s_bit
+            -
+            @to out
+            +
+        }
+    }
+    @clear(s_bit)
+}
+
+* `a` becomes `a` times `b`, at the scale a fixed-point number is kept at;
+* `b` keeps its value.
+*
+*     size = (a_size * b_size) >> FRACTION_BITS
+*     sign = (a_sign != b_sign)
+*
+* This is the whole reason the sign is a cell of its own: the sizes multiply
+* and the signs are compared, where two wrapped numbers would each have to
+* have a sign pulled back out of them first.
+*
+* The product is two cells because 64 times 64 does not fit in one, and the
+* four shifts that bring it back down are four halvings of the low half plus
+* sixteen times the high one -- `(hi*256 + lo) >> 4` is `hi*16 + lo>>4`. Sizes
+* must stay small enough that the answer fits a cell again: below about 90,
+* which the escape test in a mandelbrot enforces on its own.
+@macro signed_multiply(a_sign, a_size, b_sign, b_size) {
+    * A product faces the way its parts disagree.
+    @clear(s_agree)
+    @copy(a_sign, s_agree, s_spare)
+    @equal(s_agree, b_sign, s_scratch, s_spare)
+    @clear(a_sign)
+    @unless(s_agree, s_guard, s_scratch, s_spare) {
+        @put(a_sign, 1)
+    }
+
+    * The product, in two cells: `b` added to nothing, `a` times over.
+    @clear(s_hi)
+    @clear(s_lo)
+    @clear(s_count)
+    @copy(a_size, s_count, s_spare)
+    @while(s_count) {
+        @clear(s_t0)
+        @copy(b_size, s_t0, s_spare)
+        @while(s_t0) {
+            @wide_inc(s_hi, s_lo, s_carry, s_held)
+            @to s_t0
+            -
+        }
+        @to s_count
+        -
+    }
+
+    * Down four bits: the low half halved four times, and the high half worth
+    * sixteen of what is left.
+    @halve(s_lo, s_half)
+    @halve(s_half, s_lo)
+    @halve(s_lo, s_half)
+    @halve(s_half, s_lo)
+    @put(s_t1, 16)
+    @multiply(s_hi, s_t1, s_t0, s_out)
+    @clear(a_size)
+    @copy(s_lo, a_size, s_spare)
+    @copy(s_hi, a_size, s_spare)
+
+    @unless(a_size, s_guard, s_scratch, s_spare) {
+        @clear(a_sign)
+    }
 }

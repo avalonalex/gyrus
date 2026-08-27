@@ -120,6 +120,13 @@ file.
   each first — a trade the library states plainly, including that the multiply
   it is paying for is not written yet.
 
+- **`mandelbrot.bfm`** - the set, at a sixteenth. 150 lines of named cells and
+  signed fixed point, expanding to 32,537 instructions, checked against a model
+  of the same arithmetic. Not the byte-for-byte equal of
+  `third-party/advanced/mandelbrot.bf` and not trying to be: that one is 128 by
+  48 at sixteen bits from a different representation. This one is what the
+  macro language can *say*.
+
 **Every one of them with a loop in it says what the loop is for**, as a block
 of pseudocode in its comments. Naming cells makes a *line* legible without
 making the *program* legible -- `@to ones` `[` `-` says what is happening and
@@ -127,7 +134,7 @@ not why -- so each file carries what it would be in a language that has
 numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
 with logic in it has some; only a reader can check that it is right.
 
-All eighteen are load-bearing rather than illustrative:
+All nineteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

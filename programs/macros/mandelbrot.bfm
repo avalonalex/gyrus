@@ -1,0 +1,167 @@
+* The Mandelbrot set, in fixed point.
+*
+* A cell holds 0 to 255 and has nowhere to put a minus sign or a decimal
+* point, so both are conventions: `lib/signed.bfm` keeps a value as a sign and
+* a size, and everything here counts in sixteenths, so 16 means 1 and -34
+* means -2.125. Four fractional bits is coarse, and it is enough -- the set is
+* still the set at a sixteenth.
+*
+* What it does:
+*
+*     for cy in range(-15, 17, 2):          # -0.9375 to 0.9375
+*         for cx in range(-33, 11):         # -2.0625 to 0.625
+*             zx = zy = 0
+*             for _ in range(12):
+*                 zx2, zy2 = zx*zx, zy*zy   # all three at one sixteenth
+*                 if zx2 + zy2 > 4:
+*                     break
+*                 zx, zy = zx2 - zy2 + cx, 2*zx*zy + cy
+*             print('*' if it did not escape else ' ')
+*         print()
+*
+* The multiply is the slow one -- `b` added to nothing `a` times -- so 704
+* points cost 92 million steps: a fifth of a second optimized, a tenth jitted,
+* and minutes on the tree-walker a `.bfm` defaults to. Run it with `--jit`.
+*
+* This is not Bosman's picture and is not trying to be. His is 128 by 48 at
+* sixteen bits, from numbers held one bit per record; this is the same set at
+* a sixteenth, from numbers held as a sign and a size. What it is for is
+* showing that the language can say it.
+
+@include "lib/signed.bfm"
+
+@var cx_sign
+@var cx_size
+@var cy_sign
+@var cy_size
+@var zx_sign
+@var zx_size
+@var zy_sign
+@var zy_size
+@var ax_sign
+@var ax_size
+@var ay_sign
+@var ay_size
+@var bx_sign
+@var bx_size
+@var t_sign
+@var t_size
+
+@var row
+@var col
+@var iter
+@var escaped
+@var gone
+@var sum
+@var limit
+@var flag
+@var other
+@var scratch
+@var spare
+@var count
+@var step
+@var passed
+@var out
+
+* One signed value onto another.
+@macro copy_pair(from_sign, from_size, to_sign, to_size) {
+    @clear(to_sign)
+    @copy(from_sign, to_sign, spare)
+    @clear(to_size)
+    @copy(from_size, to_size, spare)
+}
+
+* Move a signed value along by a written-down amount.
+@macro step_by(sign, size, by_sign, by_size) {
+    @signed_put(t_sign, t_size, by_sign, by_size)
+    @signed_add(sign, size, t_sign, t_size)
+}
+
+* One point: iterate until it runs away or the count is used up, then print.
+@macro plot {
+    @signed_put(zx_sign, zx_size, 0, 0)
+    @signed_put(zy_sign, zy_size, 0, 0)
+    @clear(escaped)
+    @put(iter, 12)
+
+    @while(iter) {
+        @copy_pair(zx_sign, zx_size, ax_sign, ax_size)
+        @signed_multiply(ax_sign, ax_size, zx_sign, zx_size)
+        @copy_pair(zy_sign, zy_size, ay_sign, ay_size)
+        @signed_multiply(ay_sign, ay_size, zy_sign, zy_size)
+
+        * Away for good once the two squares pass four, which is 64 here.
+        @clear(sum)
+        @copy(ax_size, sum, spare)
+        @copy(ay_size, sum, spare)
+        @put(limit, 64)
+        @less(limit, sum, gone, count, step, passed, flag, other, scratch, spare)
+
+        @when(gone, flag, scratch, spare) {
+            @put(escaped, 1)
+            @clear(iter)
+        }
+
+        @unless(gone, flag, scratch, spare) {
+            * zy = 2*zx*zy + cy, worked out before zx is overwritten.
+            @copy_pair(zx_sign, zx_size, bx_sign, bx_size)
+            @signed_multiply(bx_sign, bx_size, zy_sign, zy_size)
+
+            * zx = zx*zx - zy*zy + cx
+            @copy_pair(ax_sign, ax_size, zx_sign, zx_size)
+            @signed_sub(zx_sign, zx_size, ay_sign, ay_size)
+            @signed_add(zx_sign, zx_size, cx_sign, cx_size)
+
+            @copy_pair(bx_sign, bx_size, zy_sign, zy_size)
+            @signed_add(zy_sign, zy_size, bx_sign, bx_size)
+            @signed_add(zy_sign, zy_size, cy_sign, cy_size)
+
+            * Anything past two and a half has gone for good, and squaring it
+            * would not fit a cell: 98 squared is 600, and a size counts to
+            * 255. The test above catches the same points one turn later,
+            * which is one turn too late to do the arithmetic in.
+            @put(limit, 40)
+            @less(limit, zx_size, gone, count, step, passed, flag, other, scratch, spare)
+            @when(gone, flag, scratch, spare) {
+                @put(escaped, 1)
+            }
+            @put(limit, 40)
+            @less(limit, zy_size, gone, count, step, passed, flag, other, scratch, spare)
+            @when(gone, flag, scratch, spare) {
+                @put(escaped, 1)
+            }
+            @when(escaped, flag, scratch, spare) {
+                @clear(iter)
+            }
+
+            @unless(escaped, flag, scratch, spare) {
+                @to iter
+                -
+            }
+        }
+    }
+
+    @when(escaped, flag, scratch, spare) {
+        @say(out, SPACE)
+    }
+    @unless(escaped, flag, scratch, spare) {
+        @say(out, '*')
+    }
+}
+
+@signed_put(cy_sign, cy_size, 1, 15)
+@put(row, 16)
+@while(row) {
+    @signed_put(cx_sign, cx_size, 1, 33)
+    @put(col, 44)
+    @while(col) {
+        @plot
+        @step_by(cx_sign, cx_size, 0, 1)
+        @to col
+        -
+    }
+    @newline(out)
+    @step_by(cy_sign, cy_size, 0, 2)
+    @to row
+    -
+}

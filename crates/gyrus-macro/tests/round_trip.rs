@@ -342,6 +342,32 @@ fn loops_and_branches_read_as_loops_and_branches() {
     assert_eq!(printed, "[*** - [***** \n====\n");
 }
 
+/// The Mandelbrot set, from a `.bfm`.
+///
+/// The point of the corpus, and the thing the libraries were built towards: a
+/// program with a picture for an answer, written in named cells and signed
+/// fixed point rather than in `>` and `<`. 150 lines expand to 32,537
+/// instructions and 92 million steps.
+///
+/// Checked against `benchmarks/expected/mandelbrot-bfm.txt`, which is what a
+/// model of the same arithmetic -- sign and size, four fractional bits,
+/// truncating -- produces. Not Bosman's picture and not meant to be: his is
+/// 128 by 48 at sixteen-bit precision from a different representation. This
+/// is the same set at a sixteenth.
+#[test]
+fn the_mandelbrot_set_comes_out() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/mandelbrot.bfm");
+    let source = read("programs/macros/mandelbrot.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    assert_eq!(
+        run_optimized(&expansion, 200_000_000),
+        read("benchmarks/expected/mandelbrot-bfm.txt")
+    );
+    assert_origins_name_the_program(&expansion, &source);
+}
+
 /// Every sign and size against Python's answer, rather than nine of them.
 ///
 /// The nine in `signed.bfm` are what a reader can check by eye, and they are
