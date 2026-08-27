@@ -21,6 +21,28 @@
 * smaller than the divisor, whatever is left is prime. That is one comparison,
 * and it saves trying every divisor up to 255.
 *
+* The whole program, in a language that has numbers:
+*
+*     n = 13911
+*     print(n, end=':')
+*     v = 2
+*     while True:
+*         q, r = divmod(n, v)
+*         if r == 0:                # v divides it: take it out and say so
+*             n = q
+*             print('', v, end='')
+*         elif q < v:               # past the square root: what is left is prime
+*             break
+*         else:
+*             v += 1
+*             if v == 256:          # a divisor is one cell
+*                 break
+*         if n == 1:
+*             break
+*     if n != 1:
+*         print('', n, end='')
+*     print()
+*
 * It prints `13911: 3 4637`, which is what
 * `programs/third-party/advanced/factor.bf` prints when given 13911 -- a
 * program somebody else wrote, and the reason the answer here is checked
@@ -188,6 +210,16 @@
 * The working register, in decimal, most significant digit first. Dividing by
 * ten five times peels the digits off backwards, so they are kept and then
 * read in the other order. Five is enough: two cells cannot hold 100,000.
+*
+*     digits = []
+*     for _ in range(5):
+*         x, r = divmod(x, 10)
+*         digits.append(r)
+*     started = False
+*     for d in reversed(digits):
+*         if d or started:
+*             print(d, end='')
+*             started = True
 @macro show_working {
     @clear(d0)
     @clear(d1)
@@ -234,6 +266,8 @@
 * so only the low halves are ever compared. The comparison itself is `@less`
 * from the idiom library -- it was written out here first, which is how it
 * ended up in the library.
+*
+*     smaller = x_hi == 0 and x_lo < v
 @macro quotient_is_smaller {
     @clear(smaller)
     @is_zero(x_hi, zero, scratch, spare)

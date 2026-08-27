@@ -87,6 +87,13 @@
 * across the five cells from where it started. Everything below is moving
 * values into that shape and taking two of them back out.
 *
+*     if d == 0:                    # nothing goes into anything
+*         quotient, remainder = 0, n
+*     elif d == 1:                  # and one goes into it n times
+*         quotient, remainder = n, 0
+*     else:
+*         quotient, remainder = divmod(n, d)
+*
 * Cells only, so `n` and `d` are at most 255. Wider division is not this.
 *
 * **Two divisors the snippet cannot do, and the macro can.** Given one it

@@ -11,6 +11,13 @@
 * than by what it emitted, an idiom like this one could only appear in a
 * straight line -- which is no use, because a division belongs in a loop.
 *
+* The whole program:
+*
+*     for n in range(2, 100):
+*         if all(n % d for d in range(2, n)):
+*             print(n, end=' ')
+*     print()
+*
 * Answer: twenty-five numbers, and a fact about arithmetic rather than about
 * this program.
 
@@ -36,6 +43,11 @@
 
 * A number below a hundred, without a leading zero. The same `@divmod`, given
 * ten: a digit is a remainder.
+*
+*     tens, r = divmod(n, 10)
+*     if tens:
+*         print(tens, end='')
+*     print(r, end='')
 @macro show_number {
     @divmod(n, ten, tens, r)
     @is_not_zero(tens, flag, scratch, spare)

@@ -14,6 +14,17 @@
 * BrainFuck has no branch, so each is the same idiom: empty a cell into a loop
 * that runs once and clears it. Named, they read as what they are.
 *
+* The whole program:
+*
+*     n = 99
+*     for _ in range(99):
+*         print(f"{n} Bottle{'' if n == 1 else 's'} of beer on the wall")
+*         print(f"{n} Bottle{'' if n == 1 else 's'} of beer")
+*         print("Take one down and pass it around")
+*         n -= 1
+*         print(f"{n} Bottle{'' if n == 1 else 's'} of beer on the wall")
+*         print()
+*
 * Checked against `benchmarks/expected/99beer.txt`, which is the output of
 * `programs/third-party/advanced/99beer.bf` -- a program written by somebody
 * else, byte for byte.
@@ -36,6 +47,10 @@
 
 
 * The number, without a leading zero: the tens digit only if there is one.
+*
+*     if tens:
+*         print(tens, end='')
+*     print(ones, end='')
 @macro show_number {
     @copy(tens, scratch, spare)
     @to scratch
@@ -52,6 +67,12 @@
 * The `@move(ones, held)` inside the loop is how a loop is made to run once:
 * emptying the cell it is testing ends it, and `held` gives the value back
 * afterwards. There is no other way to say "if" here.
+*
+*     if ones:
+*         ones -= 1
+*     else:
+*         ones = 9
+*         tens -= 1
 @macro step_down {
     @put(borrow, 1)
     @to ones
@@ -72,6 +93,11 @@
 
 * " Bottle", and an "s" unless there is exactly one. Two tests, either of which
 * is enough: a non-zero tens digit, or a ones digit that is not one.
+*
+*     plural = bool(tens) or ones != 1
+*     print(" Bottle", end='')
+*     if plural:
+*         print("s", end='')
 @macro bottles {
     @clear(plural)
     @copy(tens, scratch, spare)

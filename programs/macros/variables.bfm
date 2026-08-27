@@ -7,6 +7,12 @@
 *
 * The loop body puts the cursor back where it found it, which is what lets @to
 * be used inside it at all.
+*
+*     counter, letter = 8, 1
+*     while counter:           # letter += 8 * 9, the long way round
+*         letter += 9
+*         counter -= 1
+*     print(chr(letter))
 
 @var counter at 0
 @var letter  at 1

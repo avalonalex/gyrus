@@ -12,16 +12,23 @@
 *
 * Every carry and borrow below is the same idiom, the one BrainFuck uses for
 * every branch: empty a cell into a loop, so the loop runs once and stops.
+*
+* Each macro carries what it would be in a language with two-byte integers,
+* which is the shortest way to say what the loops underneath it are for.
 
 @include "idioms.bfm"
 
 * Both halves zero.
+*
+*     hi, lo = 0, 0
 @macro wide_clear(hi, lo) {
     @clear(hi)
     @clear(lo)
 }
 
 * A wide number holding hi*256 + lo.
+*
+*     hi, lo = high, low
 @macro wide_put(hi, lo, high, low) {
     @put(hi, high)
     @put(lo, low)
@@ -32,6 +39,12 @@
 *
 * `held` is where the low half is parked so that the loop reading it ends;
 * `flag` says whether the borrow is still owed. Both are left empty.
+*
+*     if lo:
+*         lo -= 1
+*     else:
+*         lo = 255
+*         hi -= 1
 @macro wide_dec(hi, lo, flag, held) {
     @put(flag, 1)
     @to lo
@@ -52,6 +65,10 @@
 
 * One more. The carry is read off the wrap rather than predicted: add one, and
 * if the low half is now zero it must have gone past 255.
+*
+*     lo += 1
+*     if lo == 0:              # it went past 255 and came back
+*         hi += 1
 @macro wide_inc(hi, lo, flag, held) {
     @to lo
     +
@@ -71,6 +88,8 @@
 }
 
 * `flag` becomes 1 if the number is zero, 0 if it is not.
+*
+*     flag = not hi and not lo
 @macro wide_is_zero(hi, lo, flag, scratch, spare) {
     @put(flag, 1)
     @clear(scratch)
@@ -90,6 +109,8 @@
 }
 
 * And the other way round, which is what a loop wants to test.
+*
+*     flag = bool(hi or lo)
 @macro wide_is_not_zero(hi, lo, flag, scratch, spare) {
     @clear(flag)
     @clear(scratch)
@@ -109,6 +130,8 @@
 }
 
 * `to` gains what `from` has, and `from` keeps it.
+*
+*     to_hi, to_lo = from_hi, from_lo
 @macro wide_copy(from_hi, from_lo, to_hi, to_lo, scratch) {
     @clear(to_hi)
     @clear(to_lo)

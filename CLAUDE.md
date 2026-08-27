@@ -479,6 +479,7 @@ scripts/check-readme-commands.py      # every flag README.md and docs/ use exist
 scripts/check-doc-links.py            # every relative Markdown link resolves
 scripts/check-examples.sh             # every example still runs, not just compiles
 scripts/check-tape-access.py          # the tape is only indexed where the contract is enforced
+scripts/check-bfm-pseudocode.py       # every .bfm with a loop says what the loop is for
 ```
 
 ### Benchmarking and profiling

@@ -7,16 +7,25 @@
 * says which three, and the expander emits the movement between them.
 *
 * This file declares and does not emit. It includes another that does the same.
+*
+* Every macro below carries the same thing above it: what it would be if the
+* language had a way to say it. BrainFuck reads a cell at a time and an
+* algorithm does not, so the loops are the letters and the block in the
+* comment is the word.
 
 @include "ascii.bfm"
 
 * Empty a cell. `[+]` also gets there, in about 256 iterations.
+*
+*     cell = 0
 @macro clear(cell) {
     @to cell
     [-]
 }
 
 * A cell holding a value, whatever it held before.
+*
+*     cell = value
 @macro put(cell, value) {
     @clear(cell)
     @to cell
@@ -25,6 +34,10 @@
 
 * `to` gains what `from` had; `from` is left empty. The loop every other idiom
 * here is built out of.
+*
+*     while from:
+*         to += 1
+*         from -= 1
 @macro move(from, to) {
     @to from
     [
@@ -38,6 +51,15 @@
 * `to` gains what `from` has, and `from` keeps it. A cell can only be read by
 * emptying it, so the value goes to both `to` and `scratch` and comes back from
 * `scratch` -- which is why copying needs a cell it is allowed to destroy.
+*
+*     scratch = 0
+*     while from:
+*         to += 1
+*         scratch += 1
+*         from -= 1
+*     while scratch:            # and put it back
+*         from += 1
+*         scratch -= 1
 @macro copy(from, to, scratch) {
     @clear(scratch)
     @to from
@@ -56,6 +78,12 @@
 * BrainFuck can ask directly -- `[` asks it -- written as a value, so that a
 * program can ask it about a cell it is not standing on and act on the answer
 * later.
+*
+*     flag = 0
+*     scratch = copy(cell)
+*     while scratch:            # runs once, or not at all
+*         flag = 1
+*         scratch = 0
 @macro is_not_zero(cell, flag, scratch, spare) {
     @clear(flag)
     @clear(scratch)
@@ -68,6 +96,12 @@
 }
 
 * And the other way round.
+*
+*     flag = 1
+*     scratch = copy(cell)
+*     while scratch:
+*         flag = 0
+*         scratch = 0
 @macro is_zero(cell, flag, scratch, spare) {
     @put(flag, 1)
     @clear(scratch)
@@ -86,6 +120,12 @@
 * the only arithmetic there is is adding one -- and why it costs the product
 * rather than the number of digits, which is the thing to know before using it
 * on anything large.
+*
+*     temp1 = x
+*     x = 0
+*     while temp1:
+*         x += y
+*         temp1 -= 1
 @macro multiply(x, y, temp0, temp1) {
     @clear(temp0)
     @clear(temp1)
@@ -103,6 +143,12 @@
 * Counting one down against the other and seeing whether anything is left,
 * which is the only way to compare two cells without a subtraction that can go
 * below zero.
+*
+*     temp1 = x
+*     x = 1
+*     temp1 -= y               # y is copied out and put back as it goes
+*     if temp1:                # anything left over means they differed
+*         x = 0
 @macro equal(x, y, temp0, temp1) {
     @clear(temp0)
     @clear(temp1)
@@ -132,6 +178,17 @@
 *
 * Counts them down together and sees which runs out first. `passed` remembers
 * that `y` ran out, which is the case that says `x` was not smaller.
+*
+*     result = 0
+*     count, step, passed = x, y, 0
+*     while count:
+*         if step == 0:
+*             passed = 1       # y ran out first: x is not smaller
+*         else:
+*             step -= 1
+*         count -= 1
+*     if not passed and step:  # x ran out and y had further to go
+*         result = 1
 @macro less(x, y, result, count, step, passed, flag, other, scratch, spare) {
     @clear(result)
     @clear(count)
@@ -171,6 +228,8 @@
 }
 
 * The two cells trade values.
+*
+*     temp0, x, y = x, y, temp0
 @macro swap(x, y, temp0) {
     @clear(temp0)
     @move(x, temp0)
@@ -179,6 +238,9 @@
 }
 
 * Print one character, through a cell set aside for it.
+*
+*     cell = letter
+*     print(cell)
 @macro say(cell, letter) {
     @put(cell, letter)
     .
@@ -190,6 +252,8 @@
 
 * Print a value 0-9 as the digit it names, and leave it where it was. Adding
 * the 48 and taking it back is cheaper than copying it somewhere to destroy.
+*
+*     print(chr(cell + ord('0')))
 @macro show_digit(cell) {
     @to cell
     +{48}

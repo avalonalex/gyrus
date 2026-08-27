@@ -2,6 +2,13 @@
 * control-flow pattern the design's standard library proposes. Whether the
 * bracket stack and the balance check survive a loop split across two macro
 * bodies is not obvious.
+* What it does:
+*
+*     count = 5
+*     while count:
+*         print('*')
+*         count -= 1
+*
 @var counter at 0
 @var letter  at 1
 
