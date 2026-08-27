@@ -2,14 +2,16 @@
 *
 * `@include` reads another file's declarations here. The path is relative to
 * this file, so where the command is run from cannot change what it means, and
-* a file included twice is read once -- which is what lets two libraries share
-* a third without anybody writing a guard.
+* a file included twice is read once, which is what lets two libraries share a
+* third without either of them knowing. Nothing here needs that -- this file
+* names one library, which names one more -- but `lib/fast.bfm` and
+* `lib/wide.bfm` both include `lib/idioms.bfm`, so a program wanting both gets
+* it once.
 
-@include "lib/ascii.bfm"
+@include "lib/idioms.bfm"
 
 @var out
 
-@to out
-@put('h')
-@put('i')
-@put(NL)
+@say(out, 'h')
+@say(out, 'i')
+@newline(out)

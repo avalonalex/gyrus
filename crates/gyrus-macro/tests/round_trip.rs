@@ -12,7 +12,8 @@
 //! corpus-directory test counts `.bf` files, and this directory holds none.
 
 use gyrus::{
-    ExecutionConfigBuilder, interpret_with_io, io::StringIo, minify, parse, parse_with_debug,
+    ExecutionConfigBuilder, interpret_optimized_with_io, interpret_with_io, io::StringIo, minify,
+    optimize_with_cell_model, parse, parse_with_debug,
 };
 
 fn read(relative: &str) -> String {
@@ -187,6 +188,183 @@ fn the_compare_example_transcribes_a_catalogued_idiom() {
     assert_eq!(printed, "10110");
 }
 
+/// The same, on the optimized interpreter.
+///
+/// For the programs that do enough work to care which engine runs them.
+/// `factor.bfm` is 1.73 billion steps on the tree-walker, which takes it forty
+/// seconds; the optimizer fuses those into 8.6 million and finishes in fifty
+/// milliseconds. Two engines, two counts -- the same work.
+///
+/// The expansion is ordinary BrainFuck, so every engine is entitled to run it,
+/// and that they agree is what the differential suite in `gyrus` is for rather
+/// than this one. What is skipped here is `remap`, which the tests using
+/// `run_expansion` cover.
+fn run_optimized(expansion: &gyrus_macro::Expansion, max_steps: u64) -> String {
+    let instructions = parse(expansion.brainfuck()).expect("parses");
+    // From the config that is about to run it, not from the default. The
+    // optimized interpreter refuses a program built for a different cell model
+    // outright, and every other caller in the workspace passes it this way.
+    let config = ExecutionConfigBuilder::new()
+        .with_memory_size(30_000)
+        .with_max_steps(max_steps)
+        .build();
+    let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
+    let (mut input, mut output) = (StringIo::empty(), StringIo::empty());
+    interpret_optimized_with_io(&optimized, config, &mut input, &mut output).expect("runs");
+    output.output_string()
+}
+
+/// Every emitted byte names a line of the program, and never a line inside a
+/// macro body.
+///
+/// The bound alone -- "no line number past the end of the file" -- is what
+/// these tests asserted first, and it passes if all eleven thousand bytes
+/// claim line one. This is the claim the origin policy actually makes: a
+/// byte made inside a macro reports the *invocation*, so it lands on the line
+/// somebody wrote rather than in the definition it was written from.
+fn assert_origins_name_the_program(expansion: &gyrus_macro::Expansion, source: &str) {
+    let mut inside_a_body = false;
+    let inside: Vec<bool> = source
+        .lines()
+        .map(|line| {
+            let line = line.trim();
+            if line.starts_with("@macro") && !line.contains('}') {
+                inside_a_body = true;
+                false
+            } else if line == "}" {
+                inside_a_body = false;
+                false
+            } else {
+                inside_a_body
+            }
+        })
+        .collect();
+
+    for offset in 0..expansion.brainfuck().len() {
+        let origin = expansion.origin(offset).expect("every byte has an origin");
+        let line = origin.line;
+        assert!(
+            line >= 1 && line <= inside.len(),
+            "byte {offset} names line {line}"
+        );
+        assert!(
+            !inside[line - 1],
+            "byte {offset} names line {line}, which is inside a macro body"
+        );
+    }
+}
+
+/// Arithmetic on numbers too big for a cell, which is what a factoring program
+/// is mostly made of.
+///
+/// 13911 is 3 times 4637, and 4637 is prime. `factor.bf` -- a program written
+/// by somebody else -- says `13911: 3 4637` when given that number, and so
+/// does this. The answer is also a fact about 13911 rather than about either
+/// program, which is the better half of the reason to check it.
+#[test]
+fn the_factors_of_13911_come_out_as_three_and_4637() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/factor.bfm");
+    let source = read("programs/macros/factor.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    assert_eq!(run_optimized(&expansion, 50_000_000), "13911: 3 4637\n");
+
+    // Thirty thousand instructions, every one of them still pointing at a line
+    // somebody wrote rather than at the macro it came out of.
+    assert_origins_name_the_program(&expansion, &source);
+}
+
+/// A pasted-in idiom used the way one actually gets used: inside a loop.
+///
+/// The division here is the catalogue's, and the loop around it is what the
+/// balance rule had to learn to allow -- a scan leaves the emitted movement
+/// meaningless, so a body is measured by where it began and ended instead. The
+/// primes below a hundred are twenty-five and are not a fact about this
+/// program.
+#[test]
+fn the_primes_below_a_hundred_come_out() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/primes.bfm");
+    let source = read("programs/macros/primes.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let expected: String = (2..100)
+        .filter(|n| (2..*n).all(|d| n % d != 0))
+        .map(|n| format!("{n} "))
+        .collect();
+    assert_eq!(
+        run_optimized(&expansion, 100_000_000),
+        format!("{expected}\n")
+    );
+}
+
+/// The idioms nothing else in the corpus calls.
+///
+/// `multiply`, `equal`, `less` and `swap` came out of the catalogue with the
+/// division and had no caller, which in this repository is the same as having
+/// no check: they were correct when they were written and nothing would have
+/// said otherwise afterwards.
+#[test]
+fn the_idiom_library_does_what_it_says() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/library.bfm");
+    let source = read("programs/macros/library.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    // 3*3 with y intact; equal then unequal; less, greater, equal; a swap.
+    let (_, printed) = run_expansion(&expansion, 1_000_000);
+    assert_eq!(printed, "93 10 100 71\n");
+}
+
+/// The catalogue's own division, pasted in whole.
+///
+/// `lib/fast.bfm` is the one place in the corpus where an idiom is *not*
+/// expressed in the macro language: the algorithm is a pointer walking a fixed
+/// workspace, so the cells are pinned and the snippet goes in verbatim. This
+/// pins its contract, including the two divisors it cannot do on its own --
+/// one, which walks it off the end of its workspace, and zero, which has no
+/// answer. Both were found by testing every divisor rather than a convenient
+/// one, and neither is mentioned on the wiki.
+#[test]
+fn the_pasted_in_division_divides() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/divide.bfm");
+    let source = read("programs/macros/divide.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (_, printed) = run_expansion(&expansion, 1_000_000);
+    assert_eq!(
+        printed,
+        "9/2=4,1 7/7=1,0 5/9=0,5 6/3=2,0 0/4=0,0 8/1=8,0 4/0=0,4 \n"
+    );
+}
+
+/// The one that is a program rather than a demonstration.
+///
+/// 199 lines of `.bfm` against 11,354 bytes of output, checked byte for byte
+/// against `benchmarks/expected/99beer.txt` -- which is what
+/// `programs/third-party/advanced/99beer.bf` prints, a program written by
+/// somebody else years ago. Nothing here and nothing in this crate had a hand
+/// in deciding what that file says, which is the whole point of testing
+/// against it: agreement with it is not agreement with ourselves.
+#[test]
+fn ninety_nine_bottles_prints_what_the_program_it_was_written_from_prints() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/99bottles.bfm");
+    let source = read("programs/macros/99bottles.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    assert_eq!(
+        run_optimized(&expansion, 20_000_000),
+        read("benchmarks/expected/99beer.txt")
+    );
+
+    // Every byte of eleven thousand names the verse, not the insides of
+    // `@say`: a macro's bytes report the invocation.
+    assert_origins_name_the_program(&expansion, &source);
+}
+
 /// A program whose vocabulary comes from another file.
 ///
 /// Through `expand_file` rather than `run_source`, because the path in the
@@ -206,14 +384,7 @@ fn the_include_example_takes_its_vocabulary_from_a_library() {
     // macros and two names, and the instructions are the ones this file asked
     // for. That is what makes the source map still hold.
     assert!(brainfuck.chars().all(|c| "+-<>.,[]".contains(c)));
-    for offset in 0..brainfuck.len() {
-        let origin = expansion.origin(offset).expect("every byte has an origin");
-        assert!(
-            expansion.source().lines().count() >= origin.line,
-            "byte {offset} names line {} of a file with fewer",
-            origin.line
-        );
-    }
+    assert_origins_name_the_program(&expansion, &source);
 }
 
 /// Conditional compilation, and what it means for it to be *compilation*.

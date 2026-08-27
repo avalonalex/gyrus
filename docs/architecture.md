@@ -168,6 +168,15 @@ of a line, so BrainFuck's free-form prose comments survive.
 Three things are worth knowing about the design, all documented in full in the
 crate's module documentation:
 
+**Numbers wider than a cell are a library, not a language.** The design
+recorded multi-cell variables as something the expander would have to grow, on
+the assumption that a `size` on a declaration was the only way to get them.
+`programs/macros/lib/wide.bfm` does it without one, in a hundred lines of which
+two thirds are prose, because a macro parameter can name a cell: `@wide_dec(n_hi, n_lo, flag, held)` says
+which four, and the carry is the same "empty a cell into a loop" idiom every
+other branch in BrainFuck is. `programs/macros/factor.bfm` factors 13911 with
+it.
+
 **An included file declares; it does not emit.** `@include "lib.bfm"` reads
 another file's `@define`s, `@var`s and `@macro`s, resolved relative to the file
 that wrote the path, and reads a file named twice only once — so two libraries
@@ -206,7 +215,15 @@ map holds one position per byte.
 
 **Cursor tracking is measured in movement, not position.** A loop body that
 does not return the cursor leaves the position unknown rather than being
-refused, because `[>]` is ordinary BrainFuck.
+refused, because `[>]` is ordinary BrainFuck. The exception is a body that
+both begins and ends at a *known* cell: then the movement is the difference
+between them, whatever it emitted in between. That is what makes a scan
+followed by `@here` usable inside a loop — and so what makes the
+pointer-walking idioms in `programs/macros/lib/fast.bfm` usable at all, since
+a division belongs in a loop. The price is one new refusal: a `@here` naming a
+cell the expander already knows the cursor is *not* at is now an error rather
+than a claim to be caught two lines later, because the rule above believes a
+position and so the position has to be worth believing.
 
 **A record's stride is what a scan preserves.** With `@stride` declared, a loop
 whose body moves by a whole number of records loses the cursor's *cell* but

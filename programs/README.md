@@ -62,11 +62,54 @@ file.
   `the_conditional_example_compiles_its_tracing_in_and_out`.
 
 - **`include.bfm`** - a program that is only the program: its vocabulary comes
-  from **`lib/ascii.bfm`**, which declares three macros and two named
-  characters and emits nothing. An included file cannot emit, which is what
-  keeps every byte's origin inside the file being expanded.
+  from **`lib/idioms.bfm`**, which includes **`lib/ascii.bfm`** in turn. An
+  included file cannot emit, which is what keeps every byte's origin inside the
+  file being expanded.
+- **`99bottles.bfm`** - the one that is a program rather than a demonstration.
+  199 lines produce 11,354 bytes of output, byte for byte the same as
+  `benchmarks/expected/99beer.txt` -- which is what
+  `third-party/advanced/99beer.bf` prints. Two-digit counting with a borrow,
+  a number printed without a leading zero, and "bottle" against "bottles":
+  three branches in a language that has none, each written once as a named
+  macro. It costs 11,556 instructions against that program's 1,762, and the
+  gap is honest -- `@say` sets a cell from empty for every character, where a
+  hand-written program walks from each character to the next.
 
-All ten are load-bearing rather than illustrative:
+- **`factor.bfm`** - the prime factors of 13911, which is 3 times 4637. The
+  number does not fit in a cell, so every value here is a pair of cells and
+  the arithmetic is **`lib/wide.bfm`** -- a library, not a language feature,
+  which is the interesting part: working in numbers wider than a cell was
+  written down as something the expander would have to grow. 332 lines expand
+  to 30,629 instructions. Run it with `--jit`: it is the first program here
+  that does enough work to care which engine runs it, at 0.05 seconds
+  optimized against 40 on the tree-walker.
+
+- **`divide.bfm`** - division by a snippet from
+  [the esolangs catalogue](https://esolangs.org/wiki/Brainfuck_algorithms),
+  pasted in verbatim. **`lib/fast.bfm`** pins the cells beside each other and
+  tells the expander where the cursor lands, because that algorithm is a
+  pointer walking a fixed workspace and naming cells is exactly what it does
+  not do. About a third the cost of the same division built from named idioms
+  -- and it cannot yet be used inside a loop, which that file explains.
+
+- **`library.bfm`** - the four idioms nothing else calls: multiply, equal,
+  less, swap. An idiom with no caller is a claim about BrainFuck that nothing
+  checks, so this is their caller.
+
+- **`primes.bfm`** - the primes below a hundred, by trial division, with the
+  pasted-in `@divmod` *inside the loop*. That it can be is the point: a scan
+  leaves the movement a loop emits meaningless, so until a body could be
+  measured by where it began and ended, an idiom like that one could only
+  appear in a straight line.
+
+**Every one of them with a loop in it says what the loop is for**, as a block
+of pseudocode in its comments. Naming cells makes a *line* legible without
+making the *program* legible -- `@to ones` `[` `-` says what is happening and
+not why -- so each file carries what it would be in a language that has
+numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
+with logic in it has some; only a reader can check that it is right.
+
+All fifteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

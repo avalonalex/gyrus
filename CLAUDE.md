@@ -479,6 +479,7 @@ scripts/check-readme-commands.py      # every flag README.md and docs/ use exist
 scripts/check-doc-links.py            # every relative Markdown link resolves
 scripts/check-examples.sh             # every example still runs, not just compiles
 scripts/check-tape-access.py          # the tape is only indexed where the contract is enforced
+scripts/check-bfm-pseudocode.py       # every .bfm with a loop says what the loop is for
 ```
 
 ### Benchmarking and profiling
@@ -689,6 +690,12 @@ that proves correctness rather than agreement between engines. `gyrus` runs a
 `.bfm` and `gyrus-tool expand` produces the BrainFuck. Its PRD was deleted when
 it shipped, per the rule above; `docs/architecture.md` describes what the crate
 does.
+
+`programs/macros/` is where to look for what the language is *for*:
+`99bottles.bfm` prints 11,354 bytes that match a hand-written program byte for
+byte, and `factor.bfm` factors 13911 using wide arithmetic that turned out to
+be a library (`lib/wide.bfm`) rather than the language feature the design
+assumed it needed.
 
 **One rule of that crate is worth knowing before reading it**: an `@include`d
 file *declares* — it does not emit, and does not move the cursor. The source map holds one position per

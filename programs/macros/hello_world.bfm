@@ -7,6 +7,19 @@
 * Nothing here is a new abstraction yet -- no variables, no macros. It is the
 * smallest thing that shows the point of the preprocessor: a run of eight '+'
 * is a number, and reads better as one.
+*
+* The setup, which is the only part with a loop in it:
+*
+*     tape[0] = 8
+*     while tape[0]:           # eight rounds, filling four cells as it goes
+*         tape[1] += 4
+*         tape[2] += 7
+*         tape[3] += 3
+*         tape[4] += 1
+*         tape[0] -= 1
+*
+* After which every letter is that row nudged up or down to the character
+* wanted, which is what the rest of the file is.
 
 * --- setup: eight rounds of a loop that fills four cells -------------------
 

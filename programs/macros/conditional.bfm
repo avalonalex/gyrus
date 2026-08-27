@@ -5,6 +5,12 @@
 * a conditional here and an `if` in the program: this one costs nothing when
 * it is off, because there is nothing left of it.
 *
+* What it does, with `TRACE` defined and without:
+*
+*     def mark():
+*         if TRACE:            # decided when the program is built, not run
+*             say('.')
+*
 * A branch not taken is never expanded, so it may hold names and brackets that
 * would be errors in a branch that is. The one at the bottom does.
 

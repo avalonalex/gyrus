@@ -4,6 +4,12 @@
 * Its 'x', 'y', 'temp0' are cell names and its juxtaposition is movement --
 * which is what @var and @to are. Every loop body here returns to the cell it
 * tested, so the expander tracks the cursor through all of it.
+*
+*     t1 = x
+*     x = 1
+*     t1 -= y                  # y copied out through t0 and put back
+*     if t1:                   # anything left means they differed
+*         x = 0
 @var x
 @var y
 @var t0

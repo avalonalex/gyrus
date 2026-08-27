@@ -4,6 +4,12 @@
 * The letters are written as letters. `+{'H'}` and `+{72}` expand to the same
 * seventy-two plus signs; only one of them says what it is for.
 
+* What it does:
+*
+*     while tape[here]:        # a scan: walk right to the first empty cell
+*         here += 1
+*     # `@here` then tells the expander where that left the cursor
+*
 @var first
 @var second
 @var third

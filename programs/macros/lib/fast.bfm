@@ -1,0 +1,170 @@
+* Idioms whose layout is the algorithm.
+*
+* Everything in `idioms.bfm` takes the cells it works on as parameters, and
+* the expander emits the movement between them. That is the whole point of
+* naming cells -- and it is also why those idioms cost what they cost: a value
+* is copied when it could have been moved, and a cell is asked whether it is
+* zero by spending its value to find out.
+*
+* The fast algorithms in the catalogue at
+* https://esolangs.org/wiki/Brainfuck_algorithms are not written that way.
+* They are written as a pointer walking a fixed workspace, and their layout
+* notes -- "x, temp0, temp1, y" -- *are* the algorithm. Nothing is copied and
+* no cell is named, which is exactly why they are quick, and exactly why `@to`
+* cannot express them.
+*
+* So they are not expressed. They are pasted in, and the two things the
+* expander needs are supplied around them:
+*
+*   - the cells are pinned with `at`, because a snippet made of `>` and `<`
+*     needs its neighbours to be its neighbours;
+*   - `@here` says where the snippet leaves the cursor, because a `[>+>>]` is
+*     a scan and the expander cannot follow one.
+*
+* **A `@divmod` may appear inside a loop**, which it may not always have been
+* able to. A snippet like this one makes the movement a loop emits stop
+* meaning anything, and the expander measures a loop's balance in movement --
+* so every loop around one used to be a loop it could no longer promise
+* anything about, and a `@to` inside it was refused. Since a division belongs
+* in a loop, that was most of the use. It now measures a body by where it
+* began and where it ended whenever both are known, which is exactly what the
+* `@here` below restores. `programs/macros/primes.bfm` is the loop.
+*
+* The workspace is pinned low, and a program including this file gets its own
+* cells above it, so the copies in and out are short. **Cells 0 to 19 belong to
+* this file, and nothing will tell you if you take one.** A cell chosen by the
+* expander is never one that was pinned, so `@var mine` is safe; two `at`s
+* naming the same cell are allowed on purpose, so `@var mine at 6` silently
+* becomes another name for `fast_n` and every division after it returns
+* nonsense. Pin nothing below 20 in a program that includes this file.
+*
+* Six of those cells are in front of the workspace and hold nothing. A
+* snippet that walks a pointer walks it both ways: this one steps three cells
+* to the left of where it started, transiently, and dividing by one is what
+* found that out -- as `Attempted to access cell -3`, which is at least the
+* kind of failure that cannot be missed.
+
+@include "idioms.bfm"
+
+* Room to the left. Reserved rather than merely left empty, so that a
+* program's own cells are given out above them instead of underneath the
+* snippet.
+@var fast_room0 at 0
+@var fast_room1 at 1
+@var fast_room2 at 2
+@var fast_room3 at 3
+@var fast_room4 at 4
+@var fast_room5 at 5
+
+@var fast_n at 6
+@var fast_gap at 7
+@var fast_d at 8
+@var fast_rem at 9
+@var fast_quo at 10
+
+* Room to the right, for the same reason.
+@var fast_room6 at 11
+@var fast_room7 at 12
+
+@var fast_flag at 13
+@var fast_other at 14
+@var fast_temp at 15
+@var fast_spare at 16
+@var fast_safe at 17
+@var fast_one at 18
+@var fast_none at 19
+
+* `quotient` and `remainder` are filled in from `n` divided by `d`. Neither `n`
+* nor `d` is disturbed.
+*
+* The snippet is `[->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]`, verbatim. Its contract is
+* not written down anywhere in a form that can be trusted, so it was
+* established by running it: starting on a cell holding `n`, with a zero and
+* then `d` after it, it finishes on that same cell having left
+*
+*     0   n   d-remainder   remainder   quotient
+*
+* across the five cells from where it started. Everything below is moving
+* values into that shape and taking two of them back out.
+*
+*     if d == 0:                    # nothing goes into anything
+*         quotient, remainder = 0, n
+*     elif d == 1:                  # and one goes into it n times
+*         quotient, remainder = n, 0
+*     else:
+*         quotient, remainder = divmod(n, d)
+*
+* Cells only, so `n` and `d` are at most 255. Wider division is not this.
+*
+* **Two divisors the snippet cannot do, and the macro can.** Given one it
+* walks off the left of its workspace and finishes two cells from where it
+* said it would, which makes the `@here` above a lie and everything after it
+* wrong -- silently, since `@here` is trusted rather than checked. Given zero
+* it has no answer to give. Both are answered here instead, before the snippet
+* is reached: one goes into anything exactly as many times as the thing is,
+* and nothing goes into anything at all.
+*
+* Neither hole is written down on the wiki. Both turned up the first time the
+* contract was tested against every divisor rather than a convenient one.
+@macro divmod(n, d, quotient, remainder) {
+    * A divisor the snippet survives. The two it does not are put right
+    * afterwards; what matters here is that it is never handed one of them,
+    * because what it does with them is not an error but a wrong answer.
+    @clear(fast_safe)
+    @copy(d, fast_safe, fast_temp)
+
+    * Both awkward divisors are recognised once and remembered, because each
+    * is wanted twice: here, to keep the snippet away from them, and below, to
+    * put its answer right.
+    @is_zero(d, fast_none, fast_temp, fast_spare)
+    @put(fast_one, 1)
+    @equal(fast_one, d, fast_temp, fast_spare)
+
+    @clear(fast_flag)
+    @copy(fast_none, fast_flag, fast_spare)
+    @copy(fast_one, fast_flag, fast_spare)
+    @to fast_flag
+    [
+        @put(fast_safe, 2)
+        @clear(fast_flag)
+    ]
+
+    @clear(fast_n)
+    @clear(fast_gap)
+    @clear(fast_d)
+    @clear(fast_rem)
+    @clear(fast_quo)
+    @copy(n, fast_n, fast_temp)
+    @move(fast_safe, fast_d)
+
+    * The snippet, at the top of the body and not inside anything. The
+    * expander measures a loop's balance in movement, and it cannot measure
+    * this one's -- so a `[` anywhere around it is a loop it can no longer
+    * promise anything about, and it says so.
+    @to fast_n
+    [->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]
+    @here fast_n
+
+    @clear(quotient)
+    @move(fast_quo, quotient)
+    @clear(remainder)
+    @move(fast_rem, remainder)
+
+    * Nothing goes into anything: no times, with all of it left over.
+    @to fast_none
+    [
+        @clear(quotient)
+        @clear(remainder)
+        @copy(n, remainder, fast_spare)
+        @clear(fast_none)
+    ]
+
+    * One goes into anything exactly as many times as the thing is.
+    @to fast_one
+    [
+        @clear(quotient)
+        @copy(n, quotient, fast_spare)
+        @clear(remainder)
+        @clear(fast_one)
+    ]
+}

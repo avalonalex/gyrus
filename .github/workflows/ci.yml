@@ -83,6 +83,7 @@ jobs:
     - run: scripts/check-readme-commands.py
     - run: scripts/check-doc-links.py
     - run: scripts/check-tape-access.py
+    - run: scripts/check-bfm-pseudocode.py
     # The macro crate's design rests on three measurements of mandelbrot; this
     # is what makes them claims that execute rather than numbers in a comment.
     - run: scripts/check-mandelbrot-claims.py

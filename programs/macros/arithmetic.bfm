@@ -5,6 +5,11 @@
 * be 'H'. That is the property a generated program needs if its expected
 * output is to prove anything.
 
+* What it works out:
+*
+*     a, b = 7, 5
+*     print(a + b, a * b)
+*
 @var a       at 0
 @var b       at 1
 @var product at 2

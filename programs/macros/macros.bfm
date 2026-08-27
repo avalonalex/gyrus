@@ -6,6 +6,12 @@
 * is one line per letter, and the numbers are the only thing that varies.
 *
 * Expands to the same BrainFuck either way -- a macro is not a subroutine.
+*
+*     def emit(count, step):
+*         cell = 0
+*         for _ in range(count):
+*             cell += step
+*         print(chr(cell))
 * What it saves is the writing and the reading, which for BrainFuck is most of
 * the difficulty.
 

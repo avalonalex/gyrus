@@ -12,6 +12,11 @@
 
 @define STRIDE 3
 
+* What it does:
+*
+*     for record in records:   # a scan walking whole records at a time
+*         print(record.letter)
+*
 @stride STRIDE
 @field marker at 0
 @field letter at 1

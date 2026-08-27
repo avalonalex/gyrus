@@ -1,27 +1,10 @@
-* Named characters, and the idioms that print them.
+* Names for the characters that have no printable spelling.
 *
-* An included file declares: names, and macros made of them. It cannot emit
-* BrainFuck, which is why there is not a single instruction below that is not
-* inside a `@macro` -- and why the instructions this file describes report the
-* line that invoked them rather than a line of a file nobody opened.
+* `'A'` says itself, and `'\n'` says itself too -- but a program reads better
+* saying `NL` than either, and a tab or an escape has no character to write at
+* all. This file is names, and nothing else.
 
 @define NL 10
+@define TAB 9
 @define SPACE 32
-
-* Empty the cell under the cursor. The idiomatic clear: `[+]` also works and
-* takes about 256 iterations to do it.
-@macro clear {
-    [-]
-}
-
-* Put a value in the cell under the cursor, whatever it held before.
-@macro set(value) {
-    @clear
-    +{value}
-}
-
-* Print one character, and leave the cell holding it.
-@macro put(letter) {
-    @set(letter)
-    .
-}
+@define ESCAPE 27

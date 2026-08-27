@@ -1,0 +1,107 @@
+* Every prime below a hundred, by trying every divisor.
+*
+* The division is the snippet from the esolangs catalogue, pasted into
+* `lib/fast.bfm` whole -- a pointer walking a fixed workspace, which is what
+* the macro language cannot express and why it is pasted rather than written.
+* The loop below invokes it like anything else and never sees it.
+*
+* That it can be invoked *from inside a loop* is what this program is really
+* demonstrating. A scan makes the emitted movement stop meaning anything, so
+* until the `]` learned to measure a body by where it began and ended rather
+* than by what it emitted, an idiom like this one could only appear in a
+* straight line -- which is no use, because a division belongs in a loop.
+*
+* The whole program:
+*
+*     for n in range(2, 100):
+*         if all(n % d for d in range(2, n)):
+*             print(n, end=' ')
+*     print()
+*
+* Answer: twenty-five numbers, and a fact about arithmetic rather than about
+* this program.
+
+@include "lib/fast.bfm"
+
+@var n            * the candidate
+@var d            * the divisor being tried
+@var q
+@var r
+@var ten
+@var prime        * whether nothing has divided the candidate yet
+@var trying       * whether there are divisors left to try
+@var tens
+@var going
+@var flag
+@var count
+@var step
+@var passed
+@var other
+@var scratch
+@var spare
+@var out
+
+* A number below a hundred, without a leading zero. The same `@divmod`, given
+* ten: a digit is a remainder.
+*
+*     tens, r = divmod(n, 10)
+*     if tens:
+*         print(tens, end='')
+*     print(r, end='')
+@macro show_number {
+    @divmod(n, ten, tens, r)
+    @is_not_zero(tens, flag, scratch, spare)
+    @to flag
+    [
+        @show_digit(tens)
+        @clear(flag)
+    ]
+    @show_digit(r)
+}
+
+@put(ten, 10)
+@put(n, 2)
+@put(going, 1)
+@to going
+[
+    @put(prime, 1)
+    @put(d, 2)
+
+    * Every divisor below the candidate. Stopping at its square root would
+    * save half the work and cost a comparison; a hundred candidates is not
+    * enough work to buy one.
+    @less(d, n, trying, count, step, passed, flag, other, scratch, spare)
+    @to trying
+    [
+        @divmod(n, d, q, r)
+        @is_zero(r, flag, scratch, spare)
+        @to flag
+        [
+            @clear(prime)
+            @clear(flag)
+        ]
+        @to d
+        +
+        @less(d, n, trying, count, step, passed, flag, other, scratch, spare)
+        @to trying
+    ]
+
+    @to prime
+    [
+        @show_number
+        @say(out, SPACE)
+        @clear(prime)
+    ]
+
+    @to n
+    +
+    @put(count, 100)
+    @equal(count, n, scratch, spare)
+    @to count
+    [
+        @clear(going)
+        @clear(count)
+    ]
+    @to going
+]
+@newline(out)
