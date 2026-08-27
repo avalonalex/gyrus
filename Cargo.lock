@@ -863,6 +863,7 @@ dependencies = [
  "clap",
  "gyrus",
  "gyrus-jit",
+ "gyrus-macro",
 ]
 
 [[package]]
@@ -878,6 +879,7 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "gyrus",
+ "gyrus-macro",
  "gyrus-tui",
 ]
 
@@ -912,6 +914,7 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "gyrus",
+ "gyrus-macro",
  "rand 0.9.5",
  "serde_json",
 ]

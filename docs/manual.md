@@ -31,6 +31,33 @@ stdout, its input comes from stdin, and nothing else is printed. Add `--verbose`
 for statistics and runtime warnings afterwards, or `--quiet` to suppress the
 warnings you would otherwise get from a program that wraps cells (most of them).
 
+## Run a macro program
+
+```bash
+gyrus programs/macros/records.bfm
+```
+
+A `.bfm` is macro source: named cells, named record fields, constants and
+macros, which the expander turns into ordinary BrainFuck before running it. It
+behaves like any other program, with one difference that matters — a runtime
+error reports the line and column of the `.bfm`, not of the expansion nobody
+wrote.
+
+To see the BrainFuck rather than run it:
+
+```bash
+gyrus-tool expand programs/macros/records.bfm
+gyrus-tool expand prog.bfm -o prog.bf     # and then treat it as any other .bf
+```
+
+Everything else in `gyrus-tool` takes BrainFuck, and refuses a `.bfm` rather
+than reading it as one — which would not fail, it would quietly be a different
+program.
+
+[The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
+describes what the language is; `programs/macros/` has eight programs written
+in it.
+
 ## Pick an execution mode
 
 There are four, and the default is right until it is not:
@@ -45,6 +72,11 @@ There are four, and the default is right until it is not:
 All four produce the same output and the same errors. That is held by a
 differential test suite rather than by intention — see
 [Testing](testing.md#differential-testing-is-the-backbone).
+
+**A `.bfm` defaults to `--debug` instead**, because it exists so that errors
+point back at macro source and the optimized interpreter is the one engine that
+cannot name a source position. [Usage](usage.md#running-a-macro-program) has
+the rest.
 
 [Execution models](execution-models.md#the-jit) has the JIT's details.
 

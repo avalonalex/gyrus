@@ -1,9 +1,10 @@
 //! Expand a `.bfm` and run what comes out.
 //!
-//! The only way to run a macro program today: `gyrus` does not accept `.bfm`
-//! yet, and `gyrus-tool expand` is not built. It is also the shortest
-//! statement of what this crate is for -- expand, remap the debug info, run --
-//! which is four lines in the middle of this file.
+//! What `gyrus prog.bfm` does, in the four lines in the middle of this file:
+//! expand, parse the expansion, rewrite its debug symbols to name the macro
+//! source, run. Kept as an example rather than folded into the CLI because it
+//! is the shortest statement of how a program uses this crate, and because
+//! `scripts/check-examples.sh` then runs the whole pipeline on every commit.
 //!
 //! ```text
 //! cargo run -p gyrus-macro --example expand_and_run -- programs/macros/scan.bfm

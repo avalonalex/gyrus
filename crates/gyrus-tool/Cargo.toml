@@ -14,6 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 gyrus = { workspace = true, features = ["random"] }
+# `expand`: .bfm source to BrainFuck.
+gyrus-macro.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 rand.workspace = true

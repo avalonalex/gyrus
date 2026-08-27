@@ -13,9 +13,8 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 shopt -s nullglob
-# Every crate, not only `gyrus`: this globbed one directory, so
-# `gyrus-macro`'s example -- the only way to run a .bfm until the CLI accepts
-# one -- was compiled by clippy and run by nothing, which is the exact gap
+# Every crate, not only `gyrus`: this globbed one directory, so `gyrus-macro`'s
+# example was compiled by clippy and run by nothing, which is the exact gap
 # this script exists to close.
 EXAMPLES=(crates/*/examples/*.rs)
 if [ "${#EXAMPLES[@]}" -eq 0 ]; then

@@ -9,6 +9,8 @@ use gyrus::{
     io::{StdInput, StdOutput},
     optimize_with_cell_model, parse, parse_with_debug,
 };
+use gyrus::{DebugInfo, Instruction};
+use gyrus_macro::ProgramError;
 use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
@@ -78,11 +80,109 @@ struct Cli {
     #[cfg(feature = "jit")]
     #[arg(long, conflicts_with_all = ["debug", "trace"])]
     jit: bool,
+
+    /// Treat the file as macro source whatever it is called. Expansion is
+    /// chosen by the `.bfm` extension otherwise, which a temporary file or a
+    /// process substitution has no way to carry.
+    #[arg(long)]
+    r#macro: bool,
+}
+
+/// Which engine runs the program.
+///
+/// Resolved once, from the flags and the file's extension, because the default
+/// depends on both. A `.bfm` runs on an engine that can name a source
+/// position: it exists so that errors point back at macro source, and the
+/// optimized interpreter is the one engine that cannot do that. There is
+/// deliberately no flag to ask for it -- `--jit` is faster anyway and keeps
+/// the locations.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Optimized,
+    Debug,
+    Trace,
+    Jit,
+}
+
+impl Mode {
+    fn name(self) -> &'static str {
+        match self {
+            Mode::Optimized => "Optimized",
+            Mode::Debug => "Debug (standard + symbols)",
+            Mode::Trace => "Trace (profiling + debug)",
+            Mode::Jit => "JIT (Cranelift)",
+        }
+    }
+
+    /// Whether to parse with debug symbols. Everything but the optimized
+    /// interpreter uses them: the JIT maps every failure site to its
+    /// instruction, so they buy located errors at no run-time cost.
+    fn wants_symbols(self) -> bool {
+        self != Mode::Optimized
+    }
+}
+
+/// A program ready to run.
+struct Program {
+    instructions: Vec<Instruction>,
+    debug_info: Option<DebugInfo>,
+    /// The text a located error should be rendered against. For a `.bfm` that
+    /// is the macro source, not the expansion nobody wrote.
+    source: String,
+}
+
+/// Read a file, or say why not.
+fn read_source(path: &std::path::Path) -> Result<String, BfError> {
+    fs::read_to_string(path).map_err(|source| BfError::FileError {
+        path: path.to_path_buf(),
+        source,
+        hint: format!(
+            "Make sure the file exists and you have permission to read it. \
+             Current path: {}",
+            path.display()
+        ),
+    })
+}
+
+/// A BrainFuck file, with debug symbols if the engine will use them.
+fn load_bf(path: &std::path::Path, symbols: bool) -> Result<Program, ProgramError> {
+    let source = read_source(path)?;
+    // MultipleBracketErrors carries every error and formats them all, so it
+    // needs no special case here.
+    let (instructions, debug_info) = match symbols {
+        true => parse_with_debug(&source).map(|(i, d)| (i, Some(d)))?,
+        false => (parse(&source)?, None),
+    };
+    Ok(Program {
+        instructions,
+        debug_info,
+        source,
+    })
+}
+
+/// A macro file: expanded, then parsed with its symbols rewritten to name the
+/// `.bfm` rather than the expansion nobody wrote.
+///
+/// Symbols unconditionally, because the mode resolution guarantees a macro
+/// program never reaches an engine that discards them -- expressed there as a
+/// match arm rather than here as an assertion about another function.
+fn load_macro(path: &std::path::Path) -> Result<Program, ProgramError> {
+    let source = read_source(path)?;
+    let expansion = gyrus_macro::expand(&source).map_err(|error| ProgramError::Macro {
+        error,
+        source: source.clone(),
+    })?;
+    let (instructions, expanded) = parse_with_debug(expansion.brainfuck())?;
+    Ok(Program {
+        instructions,
+        debug_info: Some(expansion.remap(&expanded)),
+        source,
+    })
 }
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("{}", e.format_detailed());
+    if let Err(failure) = run() {
+        eprintln!("{}", failure.report());
         std::process::exit(1);
     }
 }
@@ -101,45 +201,40 @@ where
     })
 }
 
-fn run() -> Result<(), BfError> {
+fn run() -> Result<(), ProgramError> {
     let cli = Cli::parse();
 
-    // Determine execution mode
-    // Default: Optimized interpreter (fast, no tracking)
-    // --debug: Standard interpreter with debug symbols
-    // --trace: Standard interpreter with debug symbols + profiling
     #[cfg(feature = "jit")]
-    let use_jit = cli.jit;
+    let asked_for_jit = cli.jit;
     #[cfg(not(feature = "jit"))]
-    let use_jit = false;
-    let use_optimized = !cli.debug && !cli.trace && !use_jit;
-    let enable_profiling = cli.trace;
+    let asked_for_jit = false;
 
-    // Read the source file
-    let source = fs::read_to_string(&cli.file).map_err(|source| BfError::FileError {
-        path: cli.file.clone(),
-        source,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. \
-             Current path: {}",
-            cli.file.display()
-        ),
-    })?;
-
-    // Parse the program
-    // - Optimized mode: parse without debug symbols (fast)
-    // - Debug/trace mode: parse with debug symbols for source tracking
-    // - JIT: with debug symbols too. The JIT maps every failure site to its
-    //   instruction, so the symbols buy located errors at no run-time cost.
-    let (instructions, debug_info) = if cli.debug || cli.trace || use_jit {
-        // Debug mode: parse with debug symbols for source location tracking
-        // MultipleBracketErrors now carries every error and formats them all,
-        // so it needs no special case here.
-        let (instructions, debug_info) = parse_with_debug(&source)?;
-        (instructions, Some(debug_info))
+    let requested = if cli.trace {
+        Mode::Trace
+    } else if asked_for_jit {
+        Mode::Jit
+    } else if cli.debug {
+        Mode::Debug
     } else {
-        // Fast mode (default): parse without debug symbols
-        (parse(&source)?, None)
+        Mode::Optimized
+    };
+    // What was asked for, then what the format requires. A macro program only
+    // ever runs on an engine that can name a source position, and stating that
+    // as one arm is what keeps it true: as an ordering of `else if`s it held
+    // only because two other branches happened to be tested first.
+    let expanding = cli.r#macro || gyrus_macro::is_macro_path(&cli.file);
+    let mode = match (expanding, requested) {
+        (true, engine) if !engine.wants_symbols() => Mode::Debug,
+        (_, engine) => engine,
+    };
+
+    let Program {
+        instructions,
+        debug_info,
+        source,
+    } = match expanding {
+        true => load_macro(&cli.file)?,
+        false => load_bf(&cli.file, mode.wants_symbols())?,
     };
 
     // Parse cell model
@@ -206,7 +301,7 @@ fn run() -> Result<(), BfError> {
     let mut config = builder.build();
 
     // Create profiler hook if --trace flag is set
-    let profiler_handle = if enable_profiling {
+    let profiler_handle = if mode == Mode::Trace {
         let profiler = Arc::new(Mutex::new(ProfilingHook::new()));
         let profiler_clone = Arc::clone(&profiler);
         config.register_hook(Box::new(SharedProfilingHook::new_with_shared(
@@ -230,18 +325,7 @@ fn run() -> Result<(), BfError> {
 
     if cli.verbose && !cli.quiet {
         eprintln!("Configuration:");
-        eprintln!(
-            "  Execution mode: {}",
-            if use_optimized {
-                "Optimized (default)"
-            } else if use_jit {
-                "JIT (Cranelift)"
-            } else if enable_profiling {
-                "Trace (profiling + debug)"
-            } else {
-                "Debug (standard + symbols)"
-            }
-        );
+        eprintln!("  Execution mode: {}", mode.name());
         eprintln!("  Memory model: {}", config.memory_model());
         eprintln!("  Cell model: {}", config.cell_model());
         eprintln!(
@@ -264,7 +348,7 @@ fn run() -> Result<(), BfError> {
     let mut output = StdOutput;
     // The optimized interpreter and the JIT run the same optimized program;
     // it is built once, and reported once, for both.
-    let optimized = if use_optimized || use_jit {
+    let optimized = if matches!(mode, Mode::Optimized | Mode::Jit) {
         let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
         if cli.verbose && !cli.quiet {
             eprintln!("=== Optimization Results ===");
@@ -278,49 +362,51 @@ fn run() -> Result<(), BfError> {
         None
     };
 
-    let stats = if use_optimized {
-        // OPTIMIZED MODE (default): Fast execution, no tracking
-        let optimized = optimized.as_ref().expect("built above");
-        match interpret_optimized_with_io(optimized, config, &mut input, &mut output) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error: {}", e.format_detailed());
-                eprintln!(
-                    "\nHint: Use --jit or --debug for source location tracking and better error messages"
-                );
-                std::process::exit(1);
-            }
-        }
-    } else if use_jit {
-        #[cfg(feature = "jit")]
-        {
+    let stats = match mode {
+        Mode::Optimized => {
+            // OPTIMIZED MODE (default): Fast execution, no tracking
             let optimized = optimized.as_ref().expect("built above");
-            // Counting costs; --verbose is the only thing that reads the counts.
-            let statistics = if cli.verbose {
-                gyrus_jit::Statistics::Full
-            } else {
-                gyrus_jit::Statistics::Cheap
-            };
-            match gyrus_jit::run_with(
-                optimized,
-                &config,
-                &mut input,
-                &mut output,
-                debug_info.as_ref(),
-                statistics,
-            ) {
+            match interpret_optimized_with_io(optimized, config, &mut input, &mut output) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("{}", e.format_with_source(&source));
+                    eprintln!("Error: {}", e.format_detailed());
+                    eprintln!(
+                        "\nHint: Use --jit or --debug for source location tracking and better error messages"
+                    );
                     std::process::exit(1);
                 }
             }
         }
-        #[cfg(not(feature = "jit"))]
-        unreachable!("--jit is not a flag without the jit feature")
-    } else {
-        // DEBUG/TRACE MODE: Standard interpreter with debug symbols
-        match interpret_with_io(
+        Mode::Jit => {
+            #[cfg(feature = "jit")]
+            {
+                let optimized = optimized.as_ref().expect("built above");
+                // Counting costs; --verbose is the only thing that reads the counts.
+                let statistics = if cli.verbose {
+                    gyrus_jit::Statistics::Full
+                } else {
+                    gyrus_jit::Statistics::Cheap
+                };
+                match gyrus_jit::run_with(
+                    optimized,
+                    &config,
+                    &mut input,
+                    &mut output,
+                    debug_info.as_ref(),
+                    statistics,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{}", e.format_with_source(&source));
+                        std::process::exit(1);
+                    }
+                }
+            }
+            #[cfg(not(feature = "jit"))]
+            unreachable!("--jit is not a flag without the jit feature")
+        }
+        // The tree-walker, with or without the profiler attached to it.
+        Mode::Debug | Mode::Trace => match interpret_with_io(
             &instructions,
             config,
             &mut input,
@@ -332,7 +418,7 @@ fn run() -> Result<(), BfError> {
                 eprintln!("{}", e.format_with_source(&source));
                 std::process::exit(1);
             }
-        }
+        },
     };
 
     // Display runtime warnings only in verbose mode (cell wrapping is common in BF)
@@ -347,7 +433,7 @@ fn run() -> Result<(), BfError> {
     // Display statistics in verbose mode (unless --quiet)
     if cli.verbose && !cli.quiet {
         eprintln!("=== Execution Statistics ===");
-        if use_jit {
+        if mode == Mode::Jit {
             // The JIT counts loop iterations, nothing finer; see docs/execution-models.md.
             eprintln!(
                 "Total steps executed: {} (loop iterations)",
@@ -363,9 +449,11 @@ fn run() -> Result<(), BfError> {
         eprintln!("Bytes read: {}", stats.bytes_read);
         eprintln!("Bytes written: {}", stats.bytes_written);
 
-        // If debug mode is enabled (not trace-only), show where execution completed
-        if !enable_profiling
-            && cli.debug
+        // Where execution completed, when the mode kept enough to say. Asked
+        // of the mode rather than of `--debug`: a `.bfm` runs in Debug mode
+        // without the flag, and this was the one reader still consulting the
+        // flag, so it silently printed nothing for every macro program.
+        if mode == Mode::Debug
             && let Some(ref debug_info) = debug_info
         {
             let total_instructions = debug_info.len();

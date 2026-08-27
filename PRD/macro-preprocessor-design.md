@@ -140,10 +140,10 @@ document keeps only what is still to be decided or built. A running inventory
 of shipped behaviour is exactly the thing this directory deleted twelve
 thousand lines of.
 
-**Not built**: `gyrus-tool expand`, and `gyrus` accepting `.bfm`. The scoped
-phase-1 language is complete, and so is the oracle generator that was the
-stated reason for building it -- see `docs/testing.md`. What remains is
-plumbing: nothing can run a `.bfm` from a terminal yet.
+**Not built**: `@include` and the conditionals, which the 2026-08-25 review put
+out of scope until the first slice had been used to write something real. It
+has been: `programs/macros/` holds eight programs, and the oracle generator
+that was the stated reason for building any of this is in `docs/testing.md`.
 
 **Still missing for work at mandelbrot's scale**, in order: **address
 arithmetic** (`@to base + i * STRIDE` -- there are no expressions, and bfmacro

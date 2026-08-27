@@ -1,14 +1,59 @@
 # Development Tools (`gyrus-tool`)
 
-`gyrus` runs programs. `gyrus-tool` is everything else: validation,
-minification, syntax highlighting, and inspection of what the parser and
-optimizer did.
+`gyrus` runs programs. `gyrus-tool` is everything else: macro expansion,
+validation, minification, syntax highlighting, and inspection of what the
+parser and optimizer did.
 
 The two full-screen tools have their own pages: [the debugger](debugger.md) for
 stepping through a program, and [the tutorial](tutorial.md) for learning the
 language.
 
 Back to the [README](../README.md).
+
+## Macro Expansion
+
+```bash
+gyrus-tool expand prog.bfm                 # to stdout
+gyrus-tool expand prog.bfm -o prog.bf      # to a file
+gyrus-tool expand prog.bfm --verbose       # and what it cost
+```
+
+Turns `.bfm` macro source into BrainFuck. `gyrus prog.bfm` expands and runs in
+one step; this is the step on its own — for reading what a macro produced, for
+handing the result to something that only understands BrainFuck, and for
+checking that a `.bfm` expands at all, since anything wrong with it is reported
+here rather than at run time.
+
+Every other subcommand here takes BrainFuck and refuses a `.bfm`. Reading one
+as BrainFuck is not an error — every directive becomes a comment — so
+`validate` would report no warnings and `minify` would emit a program bearing
+no relation to the file.
+
+Errors are rendered against the macro source with a caret, the way a parse
+error is:
+
+```
+Error: Undefined symbol 'nowhere' at line 2, column 5
+
+   1 │ @var a
+   2 │ @to nowhere
+           ^
+```
+
+`--verbose` reports instructions written against instructions emitted, which is
+what the macros were worth. Not source bytes against instructions: a `.bfm` is
+mostly prose and declarations, so that would say more about how well it is
+commented than about what expanding it did.
+
+```
+  Instructions written: 23
+  Instructions emitted: 737
+  Expansion:            32.0x
+```
+
+Expanding over the macro source is refused rather than done — `-o prog.bf` is
+one character away from `-o prog.bfm`, and the second would replace a
+hand-written program with generated BrainFuck.
 
 ## Program Validation
 

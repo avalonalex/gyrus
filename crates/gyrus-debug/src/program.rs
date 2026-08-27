@@ -33,7 +33,24 @@ pub struct Program {
 
 impl Program {
     /// Parse `path`, keeping debug symbols.
+    ///
+    /// Macro source is refused rather than parsed. A `.bfm` read as BrainFuck
+    /// is not an error but a different program -- every directive becomes a
+    /// comment -- so the debugger would step confidently through something
+    /// nobody wrote. Stepping through the real one needs more than a loader:
+    /// a remapped symbol table carries no loop metadata, and this file's
+    /// position map holds one instruction per position where remapping is
+    /// many-to-one.
     pub fn load(path: &Path) -> Result<Self, BfError> {
+        if gyrus_macro::is_macro_path(path) {
+            return Err(BfError::ConfigurationError {
+                message: format!(
+                    "{} is macro source, which this cannot step through yet. Expand it first \
+                     with `gyrus-tool expand`.",
+                    path.display()
+                ),
+            });
+        }
         let source = std::fs::read_to_string(path).map_err(|source| BfError::FileError {
             path: path.to_path_buf(),
             source,

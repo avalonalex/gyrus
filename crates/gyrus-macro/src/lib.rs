@@ -103,6 +103,59 @@ mod error;
 mod expand;
 mod source_map;
 
+use std::path::Path;
+
+/// The extension macro source is written with.
+pub const EXTENSION: &str = "bfm";
+
+/// Whether a path names macro source.
+///
+/// Shared rather than tested wherever it is wanted, because getting it wrong
+/// is silent: macro source read as BrainFuck is not an error, it is a
+/// *different program* -- every directive becomes a comment and `+{200}`
+/// collapses to one `+` -- so it runs, prints something else, and exits zero.
+/// Every tool that takes a BrainFuck file needs the same answer, and the
+/// comparison ignores case because a filesystem that does not would otherwise
+/// make one file behave two ways depending on how its name was typed.
+pub fn is_macro_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(EXTENSION))
+}
+
+/// Either a BrainFuck error or a macro error.
+///
+/// The two are separate types on purpose -- `gyrus` knows nothing about macros
+/// -- and a program that handles both needs somewhere to put them. This crate
+/// is the only one that can name both, so it is that somewhere. Without it a
+/// binary reaches for `exit` from inside a function whose signature promises
+/// to return its failures, which both of them did.
+#[derive(Debug)]
+pub enum ProgramError {
+    Bf(gyrus::BfError),
+    /// A macro error, with the source its caret is drawn against.
+    Macro {
+        error: MacroError,
+        source: String,
+    },
+}
+
+impl From<gyrus::BfError> for ProgramError {
+    fn from(error: gyrus::BfError) -> Self {
+        ProgramError::Bf(error)
+    }
+}
+
+impl ProgramError {
+    /// The message to print: a macro error rendered against the macro source
+    /// with a caret, a BrainFuck error with its hint and its cause.
+    pub fn report(&self) -> String {
+        match self {
+            ProgramError::Bf(error) => error.format_detailed(),
+            ProgramError::Macro { error, source } => error.format_with_source(source),
+        }
+    }
+}
+
 pub use error::{Kind, MacroError, Wanted};
 pub use expand::{REPEAT_LIMIT, expand};
 pub use source_map::Expansion;
