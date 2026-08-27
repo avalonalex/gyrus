@@ -70,8 +70,6 @@ impl Directive {
             .find(|d| crate::lex::matches(name, d.spelling()))
     }
 
-    /// Whether the expander implements it. The rest are refused by name
-    /// rather than called unknown, which would be a lie about why they failed.
     /// Whether it can emit instructions nobody wrote literally. Only `@to`
     /// does today.
     ///

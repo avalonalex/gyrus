@@ -172,7 +172,8 @@ crate's module documentation:
 another file's `@define`s, `@var`s and `@macro`s, resolved relative to the file
 that wrote the path, and reads a file named twice only once — so two libraries
 can share a third and a cycle terminates instead of needing to be detected. It
-may not emit BrainFuck, and that is what the map below rests on: one position
+may not emit BrainFuck -- nor move the cursor with `@here`, the one way to do
+that without emitting -- and that is what the map below rests on: one position
 per emitted byte, against one text, is not a thing a second file can be written
 in. An instruction from a library would have to report either a line of the
 file that included it or a line number belonging to a file the reader is not

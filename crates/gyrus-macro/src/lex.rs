@@ -161,11 +161,6 @@ pub(crate) fn comment(chars: &[char], from: usize, closing_brace_ends_it: bool) 
     }
 }
 
-/// Past a character literal beginning at `from`, and whether it was closed.
-///
-/// A literal never spans a line. Without that an unclosed quote swallows the
-/// rest of the file looking for its pair and then blames a line far below the
-/// one it is on.
 /// Past a `".."` path beginning at `from`, and whether it was closed.
 ///
 /// The same shape as [`literal`] with a different delimiter, and separate
@@ -186,6 +181,11 @@ pub(crate) fn quoted(chars: &[char], from: usize) -> (usize, bool) {
     (at, false)
 }
 
+/// Past a character literal beginning at `from`, and whether it was closed.
+///
+/// A literal never spans a line. Without that an unclosed quote swallows the
+/// rest of the file looking for its pair and then blames a line far below the
+/// one it is on.
 pub(crate) fn literal(chars: &[char], from: usize) -> (usize, bool) {
     debug_assert_eq!(chars.get(from), Some(&'\''));
     let mut at = from + 1;

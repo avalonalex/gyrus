@@ -247,6 +247,12 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    /// `@here` in an included file: the other way to move the cursor.
+    #[error(
+        "'@here' at {location} moves the cursor, and an included file declares rather than moves it"
+    )]
+    IncludedFileMovesTheCursor { location: SourceLocation },
+
     /// `@include` in source that came as text rather than from a file.
     #[error("'@include' at {location} has no file to resolve its path against")]
     IncludeWithoutAFile { location: SourceLocation },
@@ -365,6 +371,7 @@ impl MacroError {
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
             | MacroError::IncludedFileEmits { location, .. }
+            | MacroError::IncludedFileMovesTheCursor { location }
             | MacroError::IncludeWithoutAFile { location }
             | MacroError::IncludeUnreadable { location, .. }
             | MacroError::IncludeTooDeep { location, .. }
@@ -514,6 +521,13 @@ impl MacroError {
                  `@stride`, `@macro`. Put the instructions in a `@macro` and invoke it where you \
                  want them -- the bytes then name that invocation, which is a line of the program \
                  somebody wrote, rather than a line of a file they may never open."
+                    .to_string(),
+            ),
+            MacroError::IncludedFileMovesTheCursor { .. } => Some(
+                "Where the cursor is belongs to the program, not to a library it reads: a `@here` \
+                 here would tell the includer the cursor had moved without moving it, and the \
+                 movement it emits next would be wrong. Put the `@here` beside the loop whose \
+                 landing place it is describing."
                     .to_string(),
             ),
             MacroError::IncludeWithoutAFile { .. } => Some(

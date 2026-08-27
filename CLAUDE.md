@@ -691,7 +691,7 @@ it shipped, per the rule above; `docs/architecture.md` describes what the crate
 does.
 
 **One rule of that crate is worth knowing before reading it**: an `@include`d
-file *declares* and does not emit. The source map holds one position per
+file *declares* — it does not emit, and does not move the cursor. The source map holds one position per
 emitted byte against one text, and a second file cannot be written in it — so
 an instruction from a library would otherwise report either a line of the file
 that included it or a line number belonging to a file the reader is not looking

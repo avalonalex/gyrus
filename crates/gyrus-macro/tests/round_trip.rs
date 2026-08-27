@@ -195,8 +195,9 @@ fn the_compare_example_transcribes_a_catalogued_idiom() {
 #[test]
 fn the_include_example_takes_its_vocabulary_from_a_library() {
     let path = gyrus_corpus::workspace_root().join("programs/macros/include.bfm");
-    let expansion =
-        gyrus_macro::expand_file(&path).unwrap_or_else(|failure| panic!("{}", failure.report()));
+    let source = read("programs/macros/include.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
 
     let (brainfuck, printed) = run_expansion(&expansion, 100_000);
     assert_eq!(printed, "hi\n");

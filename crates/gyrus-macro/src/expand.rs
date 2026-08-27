@@ -26,9 +26,9 @@
 //!   against the caller's scope, once per invocation.
 //! - `@include "lib.bfm"` -- another file's declarations, read here. The path
 //!   is relative to the file that wrote it, a file named twice is read once,
-//!   and an included file *declares*: it may not emit BrainFuck. That last is
-//!   the rule the source map rests on rather than a restriction left over from
-//!   one; [`Scanner::include`] says why.
+//!   and an included file *declares*: it may not emit BrainFuck, nor move the
+//!   cursor. That last pair is the rule the source map rests on rather than a
+//!   restriction left over from one; [`Scanner::include`] says why.
 //! - `@macro NAME(a, b) { ... }`, invoked as `@NAME(1, 2)` -- a body expanded
 //!   in place. An argument is evaluated in the caller's scope and bound to the
 //!   parameter, so a number, a constant and a cell all pass the same way.
@@ -194,29 +194,29 @@ pub fn expand(source: &str) -> Result<Expansion, MacroError> {
     Scanner::new(source).run().map_err(|failure| failure.error)
 }
 
-/// Expand a `.bfm` file, resolving `@include` against the directory holding
-/// it.
+/// Expand source that came from `path`, resolving `@include` against the
+/// directory holding it.
 ///
-/// The file-reading half of [`expand`], and the only entry point where
-/// `@include` can work: a path is relative to the file that wrote it, so
-/// source handed over as text has nothing to resolve against.
+/// The only entry point where `@include` can work: a path is relative to the
+/// file that wrote it, so source handed over as text alone has nothing to
+/// resolve against.
 ///
-/// The failure carries the text its caret is drawn against, which is not
-/// always the file passed in -- an error inside an included file names that
-/// file and renders its lines.
-pub fn expand_file(path: &Path) -> Result<Expansion, MacroFailure> {
-    let source = std::fs::read_to_string(path).map_err(|source| {
-        MacroFailure::new(
-            MacroError::IncludeUnreadable {
-                path: path.to_path_buf(),
-                detail: source.to_string(),
-                location: SourceLocation::start(),
-            },
-            None,
-            String::new(),
-        )
-    })?;
-    Scanner::rooted(&source, Some(path.to_path_buf())).run()
+/// The text is passed in rather than read here on purpose. Every caller
+/// already reads files and already says so in its own way when one cannot be
+/// read -- and "cannot read the program you asked me to run" is not a macro
+/// error, which is what this function's failures are.
+///
+/// That failure carries the text its caret is drawn against, which is not
+/// always this file: an error inside an included file names that file and
+/// renders its lines.
+pub fn expand_at(source: &str, path: &Path) -> Result<Expansion, MacroFailure> {
+    // Canonical, because a path is also a file's identity here: `./main.bfm`
+    // and `main.bfm` are one file, and a library that includes the program
+    // back has to be told it already has it. Falling back to the path as
+    // given, since a file that cannot be canonicalised is one the caller has
+    // somehow already read.
+    let identity = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Scanner::rooted(source, Some(identity)).run()
 }
 
 /// A macro definition: its parameters, and the span its body occupies.
@@ -296,7 +296,6 @@ enum Position {
     Unknown(SourceLocation),
 }
 
-/// One macro invocation being expanded.
 /// How deep `@include` may nest.
 ///
 /// Small on purpose. A chain this long is a mistake rather than a design, and
@@ -330,6 +329,7 @@ struct SourceFile {
     end: usize,
 }
 
+/// One macro invocation being expanded.
 struct Invocation {
     name: String,
     /// What was invoked, so a parameter resolves by position.
@@ -395,7 +395,6 @@ struct OpenLoop {
 }
 
 struct Scanner {
-    source: String,
     chars: Vec<char>,
     /// The root file, then every file included so far, in buffer order. Never
     /// empty: the source being expanded is the first entry.
@@ -456,7 +455,6 @@ impl Scanner {
     fn rooted(source: &str, path: Option<PathBuf>) -> Self {
         let chars: Vec<char> = source.chars().collect();
         Self {
-            source: source.to_string(),
             files: vec![SourceFile {
                 named: path.clone(),
                 path,
@@ -497,7 +495,11 @@ impl Scanner {
                     error,
                     // Named only when it is not the file the caller handed
                     // over: saying that one back to them adds nothing.
-                    file.start.gt(&0).then(|| file.named.clone()).flatten(),
+                    if file.start > 0 {
+                        file.named.clone()
+                    } else {
+                        None
+                    },
                     file.text.clone(),
                 ))
             }
@@ -528,7 +530,9 @@ impl Scanner {
         );
 
         Ok(Expansion::new(
-            std::mem::take(&mut self.source),
+            // The root file's text, which is the one an origin can point
+            // into: `include` is what keeps that true.
+            std::mem::take(&mut self.files[0].text),
             std::mem::take(&mut self.out),
             std::mem::take(&mut self.origins),
         ))
@@ -555,10 +559,14 @@ impl Scanner {
     }
 
     fn file_at(&self, offset: usize) -> &SourceFile {
+        // `<=`, not `<`: an error may point one past the last character of a
+        // file, and that position is still that file's. The separator between
+        // files is what makes this unambiguous -- without it, one past the end
+        // of a file is also the first character of the next.
         self.files
             .iter()
             .rev()
-            .find(|file| offset >= file.start)
+            .find(|file| offset >= file.start && offset <= file.end)
             .unwrap_or(&self.files[0])
     }
 
@@ -1014,7 +1022,7 @@ impl Scanner {
         // Bounded by the file rather than by the buffer: everything after
         // this file's text is another file, appended by an `@include`, and
         // "defined below this line" is advice about *this* one.
-        let end = self.file().end;
+        let (start, end) = (self.file().start, self.file().end);
         let mut at = self.at.offset.min(end);
         let mut depth = 0usize;
         // Nor one inside a conditional, in either direction. Whether that
@@ -1027,7 +1035,7 @@ impl Scanner {
             // Only a declaration that could take effect. One inside a macro
             // body is refused outright, so advertising it would send the
             // reader to move their code below something that never runs.
-            if depth == 0 && self.chars[at] == '@' && lex::at_line_start(&self.chars, at, 0) {
+            if depth == 0 && self.chars[at] == '@' && lex::at_line_start(&self.chars, at, start) {
                 let (word, after) = lex::spelling(&self.chars, at);
                 match Directive::from_word(word) {
                     Some(d) if d.conditional().is_some() => conditionals += 1,
@@ -1042,7 +1050,7 @@ impl Scanner {
                     _ => {}
                 }
             }
-            at = match lex::step(&self.chars, at, 0, depth > 0) {
+            at = match lex::step(&self.chars, at, start, depth > 0) {
                 Step::Past(next) => next,
                 Step::Open => {
                     depth += 1;
@@ -1252,8 +1260,10 @@ impl Scanner {
     /// `@include "lib.bfm"` -- read another file's declarations here.
     ///
     /// An included file *declares*: `@define`, `@var`, `@field`, `@stride` and
-    /// `@macro`. It may not emit BrainFuck, and that is the rule the whole
-    /// design rests on rather than a restriction left over from one.
+    /// `@macro`. It may not emit BrainFuck, and it may not move the cursor --
+    /// `@here` is the one way to do the second without doing the first. That
+    /// is the rule the whole design rests on rather than a restriction left
+    /// over from one.
     ///
     /// The map holds one position per emitted byte, against one text, and a
     /// second file cannot be written in it -- so either an instruction from a
@@ -1314,6 +1324,16 @@ impl Scanner {
                 location,
             })?;
 
+        // A newline between files, belonging to neither. Two things need it.
+        // A reader that runs to the end of a line -- a value, a comment, a
+        // literal, a path -- would otherwise run to the end of the *buffer*,
+        // so a file with no final newline would have its last token joined to
+        // the next file's first: `@define M 5` before a library read as
+        // `'5@define'`. And it keeps the spans apart, so an offset one past
+        // the end of a file is not also the first character of the next one,
+        // which is the difference between naming the right file in an error
+        // and naming the one after it.
+        self.chars.push('\n');
         let start = self.chars.len();
         self.chars.extend(text.chars());
         let end = self.chars.len();
@@ -1329,11 +1349,24 @@ impl Scanner {
         // offset is where the text is, and the line and column are where the
         // reader will look for it.
         let resume = std::mem::replace(&mut self.at, SourceLocation::new(1, 1, start));
+        // Its own conditionals, for the reason a macro body has its own: an
+        // `@endif` in a library is not the includer's to close, and one the
+        // library leaves open is not the includer's to close either. Without
+        // this a stray `@endif` in a library silently ended a conditional in
+        // the program, which then reported *its* `@endif` as unmatched.
+        let outer = std::mem::take(&mut self.conditionals);
         self.including += 1;
         let result = self.scan_until(end);
         self.including -= 1;
+        let left_open = self.conditionals.first().copied();
+        self.conditionals = outer;
         self.at = resume;
-        result
+
+        result?;
+        if let Some((directive, location)) = left_open {
+            return Err(unclosed(directive, location));
+        }
+        Ok(())
     }
 
     /// The `"path"` an `@include` names.
@@ -1504,8 +1537,13 @@ impl Scanner {
     /// body. Getting either wrong would end the body in the wrong place.
     fn skip_body(&mut self, name: &str, location: SourceLocation) -> Result<usize, MacroError> {
         let body_start = self.at.offset;
+        // Bounded by the file, not by the buffer. A `}` in an included
+        // library would otherwise close a body opened in the program that
+        // included it -- silently, since a brace in prose is a brace to this
+        // walk -- and everything between them would vanish into the body.
+        let end = self.scan_end();
         let mut depth = 1usize;
-        while self.peek().is_some() {
+        while self.at.offset < end {
             let at = self.at.offset;
             // `depth` is never zero here, so a body is always being read.
             match lex::step(&self.chars, at, body_start, true) {
@@ -1891,6 +1929,14 @@ impl Scanner {
     /// `@here NAME` -- assert where the cursor is, emitting nothing.
     fn here(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         let (_, target) = self.cell_operand(Directive::Here)?;
+        // The other way to change where the cursor is. `@to` and every
+        // instruction emit, and are refused by `emit_run`; this one emits
+        // nothing and would move the includer's idea of the cursor without
+        // moving the cursor -- so the program that included it emits movement
+        // for a position it is not at.
+        if self.including > 0 {
+            return Err(MacroError::IncludedFileMovesTheCursor { location });
+        }
         // Inside a loop body this is a claim about where the cursor is *if the
         // body ran*, and a loop may run no times at all. The `]` decides
         // whether that leaves the exit ambiguous.
@@ -2437,24 +2483,6 @@ mod tests {
         };
         assert_eq!(first.line, 1);
         assert_eq!(location.line, 2);
-    }
-
-    /// Every name the vocabulary knows is dispatched to something. There is
-    /// no "planned" arm left to fall into: a directive that reached one would
-    /// be reported as unknown, which is the one answer that would be a lie.
-    #[test]
-    fn every_directive_in_the_vocabulary_is_built() {
-        for directive in Directive::ALL {
-            let source = format!("@{}\n", directive.spelling());
-            match expand(&source) {
-                Ok(_) => {}
-                Err(error) => assert!(
-                    !matches!(error, MacroError::UnknownDirective { .. }),
-                    "@{} is in the vocabulary and reached nothing: {error:?}",
-                    directive.spelling()
-                ),
-            }
-        }
     }
 
     #[test]

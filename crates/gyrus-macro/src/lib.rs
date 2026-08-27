@@ -72,11 +72,11 @@
 //! ```
 //!
 //! `@include` needs a file to resolve its path against, so it works through
-//! [`expand_file`] and not [`expand`] -- which is also why it cannot appear in
-//! a block expanded from text.
+//! [`expand_at`] and not [`expand`] -- which is also why it cannot appear in a
+//! block expanded from text.
 //!
 //! An included file **declares**: `@define`, `@var`, `@field`, `@stride`,
-//! `@macro`. It may not emit BrainFuck. The map below holds one position per
+//! `@macro`. It may not emit BrainFuck, nor move the cursor with `@here`. The map below holds one position per
 //! emitted byte against one text, and a second file cannot be written in it,
 //! so an instruction from a library could only report a line of the file that
 //! included it or a line number belonging to a file the reader is not looking
@@ -186,7 +186,7 @@ impl ProgramError {
 }
 
 pub use error::{Kind, MacroError, MacroFailure, Wanted};
-pub use expand::{INCLUDE_DEPTH_LIMIT, REPEAT_LIMIT, expand, expand_file};
+pub use expand::{INCLUDE_DEPTH_LIMIT, REPEAT_LIMIT, expand, expand_at};
 pub use source_map::Expansion;
 
 #[cfg(test)]

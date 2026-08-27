@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use gyrus_macro::{MacroError, expand, expand_file};
+use gyrus_macro::{Expansion, MacroError, MacroFailure, expand, expand_at};
 
 /// A directory of `.bfm` files, removed when the test ends.
 ///
@@ -19,7 +19,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("gyrus-include-{name}"));
+        let dir = std::env::temp_dir().join(format!("gyrus-include-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a temporary directory");
         Fixture { dir }
@@ -39,6 +39,13 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Expand a file the way the binaries do: read it, then expand it *at* that
+/// path so `@include` has a directory to resolve against.
+fn expand_file(path: &std::path::Path) -> Result<Expansion, MacroFailure> {
+    let source = std::fs::read_to_string(path).expect("the fixture is there");
+    expand_at(&source, path)
 }
 
 fn expanded(path: &std::path::Path) -> String {
@@ -237,4 +244,191 @@ fn every_byte_still_comes_from_the_file_being_expanded() {
         assert_eq!(origin.line, 2, "byte {offset} came from the library");
         assert!(origin.line <= root_lines, "outside the file being expanded");
     }
+}
+
+/// A file is a scan of its own, and every one of these was a way out of it.
+///
+/// The included text is appended to one character buffer, because a macro body
+/// is a span of that buffer and a library's macros have to live in the same
+/// one. Everything below is a reader that was bounded by the buffer when it
+/// should have been bounded by the file, and each was a silently wrong program
+/// rather than an error.
+mod a_file_ends_where_it_ends {
+    use super::*;
+
+    /// A file with no final newline had its last token joined to the first
+    /// characters of the library appended after it: `@define M 5` read the
+    /// value as `5@define`.
+    #[test]
+    fn a_token_stops_at_the_end_of_its_file() {
+        let fixture = Fixture::new("no-trailing-newline");
+        fixture.write("lib.bfm", "@define K 3\n");
+        // Deliberately no `\n` at the end, which is the whole test.
+        let main = fixture.write("main.bfm", "@include \"lib.bfm\"\n+{K}\n@define M 5");
+
+        assert_eq!(expanded(&main), "+++");
+    }
+
+    /// Every construct that runs to the end of something, at a file's last
+    /// character. Each of these is a reader that would otherwise have carried
+    /// on into the library appended after it, and reported a position in a
+    /// file the reader is not looking at.
+    #[test]
+    fn an_unterminated_construct_stops_at_the_end_of_its_file() {
+        let fixture = Fixture::new("unterminated");
+        fixture.write("lib.bfm", "@define Q 1\n@macro m(a) {\n+{a}\n}\n");
+        // None of these end with a newline, which is the point.
+        for tail in ["+{3", "@m(1", "+{'", "@define M"] {
+            let main = fixture.write("main.bfm", &format!("@include \"lib.bfm\"\n{tail}"));
+            let failure = expand_file(&main).unwrap_err();
+            // In the program, not in the library it read.
+            assert!(
+                failure.file().is_none(),
+                "{tail:?} was blamed on {:?}",
+                failure.file()
+            );
+            assert_eq!(failure.error.location().line, 2, "{tail:?}");
+        }
+    }
+
+    /// A `}` in an included file -- in prose, even -- closed a macro body left
+    /// open in the program, swallowing everything between them. It expanded to
+    /// nothing, successfully.
+    #[test]
+    fn a_macro_body_cannot_be_closed_by_a_later_file() {
+        let fixture = Fixture::new("body-across-files");
+        fixture.write(
+            "lib.bfm",
+            "@define A 1\n* a trailing brace }\n@define B 2\n",
+        );
+        let main = fixture.write(
+            "main.bfm",
+            "@include \"lib.bfm\"\n@macro oops {\n+\n@oops\n",
+        );
+
+        let failure = expand_file(&main).unwrap_err();
+        assert!(
+            matches!(failure.error, MacroError::MalformedDirective { .. }),
+            "{:?}",
+            failure.error
+        );
+        assert!(
+            failure.report().contains("never closed"),
+            "{}",
+            failure.report()
+        );
+    }
+
+    /// The hint walks ahead of the cursor looking for a declaration, and its
+    /// idea of where a line starts has to be its file's.
+    #[test]
+    fn the_defined_below_hint_reads_the_right_lines() {
+        let fixture = Fixture::new("hint-across-files");
+        fixture.write("lib.bfm", "@define K 3\n");
+        let main = fixture.write(
+            "main.bfm",
+            "@include \"lib.bfm\"\n+{LATER}\n@define LATER 1\n",
+        );
+
+        let failure = expand_file(&main).unwrap_err();
+        let hint = failure.error.hint().unwrap_or_default();
+        assert!(hint.contains("defined below this line"), "{hint}");
+    }
+}
+
+/// A conditional opens and closes in one file, the way it does in one macro
+/// body -- and for the same reason.
+mod a_conditional_does_not_cross_a_file {
+    use super::*;
+
+    /// A stray `@endif` in a library used to pop the conditional the program
+    /// had open, silently, and the program's own `@endif` was then reported as
+    /// unmatched: the library's mistake, blamed on the file that read it.
+    #[test]
+    fn a_library_cannot_close_what_the_program_opened() {
+        let fixture = Fixture::new("library-closes");
+        fixture.write("lib.bfm", "@endif\n@define L 1\n");
+        let main = fixture.write(
+            "main.bfm",
+            "@define A 1\n@ifdef A\n@include \"lib.bfm\"\n+{L}\n@endif\n",
+        );
+
+        let failure = expand_file(&main).unwrap_err();
+        assert!(
+            matches!(failure.error, MacroError::UnmatchedEndif { .. }),
+            "{:?}",
+            failure.error
+        );
+        // Reported in the library, which is where the stray `@endif` is.
+        assert!(failure.file().is_some_and(|p| p.ends_with("lib.bfm")));
+    }
+
+    /// And one left open in a library used to eat the program's `@endif`,
+    /// which expanded to a working program for the wrong reason.
+    #[test]
+    fn a_library_cannot_leave_one_open_for_the_program_to_close() {
+        let fixture = Fixture::new("library-opens");
+        fixture.write("lib.bfm", "@define L 1\n@ifdef L\n");
+        let main = fixture.write("main.bfm", "@include \"lib.bfm\"\n+{L}\n@endif\n+\n");
+
+        assert!(matches!(
+            expand_file(&main).unwrap_err().error,
+            MacroError::UnclosedConditional { .. }
+        ));
+    }
+}
+
+/// Where the cursor is belongs to the program. `@to` and every instruction
+/// emit, and are refused; `@here` emits nothing and moved the includer's idea
+/// of the cursor without moving the cursor, so the program then emitted
+/// movement for a position it was not at -- `<` from cell 0, off the tape.
+#[test]
+fn a_library_may_not_move_the_cursor_either() {
+    let fixture = Fixture::new("here");
+    fixture.write("lib.bfm", "@var a\n@var b\n@here b\n");
+    let main = fixture.write("main.bfm", "@include \"lib.bfm\"\n@to a\n+\n");
+
+    assert!(matches!(
+        expand_file(&main).unwrap_err().error,
+        MacroError::IncludedFileMovesTheCursor { .. }
+    ));
+}
+
+/// A file is identified by where it is, not by how it was spelled. Without
+/// this the root was never recognised as already-included, so a library that
+/// includes the program back read it a second time -- and whether that
+/// happened depended on whether the command line said `./main.bfm`.
+#[test]
+fn the_program_is_the_same_file_however_its_path_was_written() {
+    let fixture = Fixture::new("root-identity");
+    fixture.write("lib.bfm", "@include \"main.bfm\"\n@define L 1\n");
+    let main = fixture.write(
+        "main.bfm",
+        "@include \"lib.bfm\"\n@define M 1\n+{L}\n+{M}\n",
+    );
+
+    let dotted = main.parent().unwrap().join(".").join("main.bfm");
+    assert_eq!(expanded(&main), "++");
+    assert_eq!(
+        expanded(&dotted),
+        "++",
+        "the spelling of the path changed the program"
+    );
+}
+
+/// An error one past the last character of a file is still that file's. The
+/// separator between files is what makes the answer unambiguous.
+#[test]
+fn an_error_at_the_very_end_of_a_file_names_that_file() {
+    let fixture = Fixture::new("end-of-file");
+    fixture.write("lib.bfm", "@define Z 9\n");
+    let main = fixture.write("main.bfm", "@include \"lib.bfm\"\n@include");
+
+    let failure = expand_file(&main).unwrap_err();
+    assert!(failure.file().is_none(), "named {:?}", failure.file());
+    assert!(
+        failure.source().contains("@include \"lib.bfm\""),
+        "{}",
+        failure.source()
+    );
 }
