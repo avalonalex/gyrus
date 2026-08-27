@@ -129,6 +129,123 @@
     ]
 }
 
+* `a` gains what `b` has; `b` keeps it.
+*
+*     a_hi += b_hi
+*     for _ in range(b_lo):
+*         a += 1                # carrying into the high half as it wraps
+*
+* The halves separately, which is how every machine with bytes does it and is
+* the whole reason to hold a number this way. Adding `b` by counting it down
+* one at a time would be right too, and would cost up to 65,535 steps where
+* this costs at most 510.
+@macro wide_add(a_hi, a_lo, b_hi, b_lo, count, flag, held, spare) {
+    @copy(b_hi, a_hi, spare)
+    @clear(count)
+    @copy(b_lo, count, spare)
+    @to count
+    [
+        @wide_inc(a_hi, a_lo, flag, held)
+        @to count
+        -
+    ]
+}
+
+* `a` loses what `b` has; `b` keeps it. Going below zero wraps, as a cell does.
+*
+*     a_hi -= b_hi
+*     for _ in range(b_lo):
+*         a -= 1                # borrowing from the high half as it wraps
+@macro wide_sub(a_hi, a_lo, b_hi, b_lo, count, flag, held, spare) {
+    @clear(count)
+    @copy(b_hi, count, spare)
+    @to count
+    [
+        @to a_hi
+        -
+        @to count
+        -
+    ]
+    @clear(count)
+    @copy(b_lo, count, spare)
+    @to count
+    [
+        @wide_dec(a_hi, a_lo, flag, held)
+        @to count
+        -
+    ]
+}
+
+* `result` becomes 1 if `a` is less than `b`, and 0 if it is not; both keep
+* their values.
+*
+*     if a_hi != b_hi:
+*         result = a_hi < b_hi
+*     else:
+*         result = a_lo < b_lo
+*
+* The high halves decide it unless they agree, which is the whole of comparing
+* two numbers written as digits.
+@macro wide_less(a_hi, a_lo, b_hi, b_lo, result, same, count, step, passed, flag, other, scratch, spare) {
+    @less(a_hi, b_hi, result, count, step, passed, flag, other, scratch, spare)
+    @clear(same)
+    @copy(a_hi, same, spare)
+    @equal(same, b_hi, scratch, spare)
+    @to same
+    [
+        @less(a_lo, b_lo, result, count, step, passed, flag, other, scratch, spare)
+        @clear(same)
+    ]
+}
+
+* `a` becomes `a` times `b`; `b` keeps its value.
+*
+*     result = 0
+*     for _ in range(a):        # a is two cells, so the counting is nested
+*         result += b
+*     a = result
+*
+* Adding `b` to nothing, `a` times over -- which is what multiplication is
+* when the only arithmetic is adding one, and which costs the *value* of `a`
+* rather than the number of digits in it. That is fine for checking an answer
+* and much too slow for a program that does it in a loop; a version that
+* doubles and adds costs the digits instead, and this one is what it will be
+* checked against.
+*
+* The counting is nested because a counter of two cells cannot be tested for
+* zero cheaply: the low half runs 256 times for each step of the high half,
+* which is the same shape a machine uses to loop more times than a register
+* can hold.
+@macro wide_multiply(a_hi, a_lo, b_hi, b_lo, r_hi, r_lo, c_hi, c_lo, count, flag, held, spare) {
+    @wide_clear(r_hi, r_lo)
+    @wide_copy(a_hi, a_lo, c_hi, c_lo, spare)
+
+    @to c_hi
+    [
+        @to c_lo
+        [
+            @wide_add(r_hi, r_lo, b_hi, b_lo, count, flag, held, spare)
+            @to c_lo
+            -
+        ]
+        * The step that takes the low half from zero to 255 and the high half
+        * down by one: 256 of them to an outer turn, and this is the 256th.
+        @wide_add(r_hi, r_lo, b_hi, b_lo, count, flag, held, spare)
+        @put(c_lo, 255)
+        @to c_hi
+        -
+    ]
+    @to c_lo
+    [
+        @wide_add(r_hi, r_lo, b_hi, b_lo, count, flag, held, spare)
+        @to c_lo
+        -
+    ]
+
+    @wide_clear(a_hi, a_lo)
+    @wide_copy(r_hi, r_lo, a_hi, a_lo, spare)
+}
+
 * `to` gains what `from` has, and `from` keeps it.
 *
 *     to_hi, to_lo = from_hi, from_lo

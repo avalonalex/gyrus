@@ -109,7 +109,14 @@ not why -- so each file carries what it would be in a language that has
 numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
 with logic in it has some; only a reader can check that it is right.
 
-All fifteen are load-bearing rather than illustrative:
+- **`bignum.bfm`** - add, subtract, multiply and compare on numbers held in
+  two cells, from **`lib/wide.bfm`**. The multiply is the naive one, adding
+  `b` to nothing `a` times: it costs the *value* rather than the number of
+  digits, which is fine for checking an answer and far too slow for a program
+  that does it in a loop. It is there to be what a faster one is checked
+  against.
+
+All sixteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash
