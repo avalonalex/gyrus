@@ -198,9 +198,13 @@ re-exports and crate docs.
    - Records every step of a run and lets the learner scrub through it in both
      directions. Affordable because a lesson tape is 16 cells and runs are
      capped at 20,000 steps; the debugger cannot do this on a 30,000-cell tape
-   - Lessons are one table in `src/lesson.rs`: prose, starter, answer, hints,
-     and a check. Three tests hold it together — every answer solves its own
-     lesson, every starter parses and runs, and no starter is already the answer
+   - Lessons are `course.toml`, compiled in with `include_str!` and read by a
+     small strict parser in `src/lesson.rs` — an unknown key is an error, as in
+     `gyrus-corpus`. Five tests hold it together: the file parses, every answer
+     solves its own lesson, every starter parses and runs, no starter is
+     already the answer, and every starter does what the course says it does
+     (`shows_ending`, `shows_cells`) — which is what stops a body's prose from
+     drifting away from the program printed beneath it
 
 ### Key Design Decisions
 

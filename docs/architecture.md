@@ -429,8 +429,9 @@ gyrus/
 │   │   │   └── error.rs     # Located errors, rendered like a parse error
 │   │   └── tests/           # Round trip, source locations, and the oracle
    ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
+│   │   ├── course.toml      # The thirteen lessons themselves, as prose
 │   │   └── src/
-│   │       ├── lesson.rs    # The thirteen lessons and their criteria
+│   │       ├── lesson.rs    # The course parser, criteria, and checking
 │   │       ├── trace.rs     # Recording every step of a run, for scrubbing
 │   │       ├── editor.rs    # A very small text editor
 │   │       ├── app.rs       # Lesson progress and the current attempt

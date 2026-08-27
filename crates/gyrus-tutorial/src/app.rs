@@ -72,7 +72,7 @@ impl App {
     /// Start at `lesson`.
     pub fn new(lesson: usize) -> Self {
         let lesson = lesson.min(LESSONS.len() - 1);
-        let editor = Editor::new(LESSONS[lesson].starter);
+        let editor = Editor::new(&LESSONS[lesson].starter);
         let document = SourceDocument::new(&editor.text());
         Self {
             theme: Theme::default(),
@@ -113,9 +113,9 @@ impl App {
     pub fn run(&mut self) {
         let lesson = self.current();
         let source = self.editor.text();
-        match trace::record(&source, lesson.input, lesson.cells, STEP_LIMIT) {
+        match trace::record(&source, &lesson.input, lesson.cells, STEP_LIMIT) {
             Ok(trace) => {
-                let verdict = evaluate(lesson.criteria, &trace, &source);
+                let verdict = evaluate(&lesson.criteria, &trace, &source);
                 if verdict.is_solved() {
                     self.solved[self.lesson] = true;
                 }
@@ -193,13 +193,13 @@ impl App {
 
     /// Put the lesson's starting program back in the editor.
     pub fn reset_editor(&mut self) {
-        self.editor = Editor::new(self.current().starter);
+        self.editor = Editor::new(&self.current().starter);
         self.refresh_document();
     }
 
     /// Load the lesson's answer into the editor.
     pub fn load_answer(&mut self) {
-        self.editor = Editor::new(self.current().answer);
+        self.editor = Editor::new(&self.current().answer);
         self.refresh_document();
         self.message = Some((
             "answer loaded — ctrl-r runs it, and F6 puts yours back".into(),

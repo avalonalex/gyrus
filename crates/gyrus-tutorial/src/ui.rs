@@ -113,7 +113,7 @@ fn draw(terminal: &mut Tui, app: &mut App) -> io::Result<()> {
                 prose: &app.prose,
                 scroll: app.lesson_scroll,
                 theme: &app.theme,
-                title: lesson.title,
+                title: &lesson.title,
             },
             panes.lesson,
         );
