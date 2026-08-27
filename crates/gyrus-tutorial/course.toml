@@ -1,0 +1,327 @@
+# The course.
+#
+# One [[lesson]] per lesson, in order. Read by `src/lesson.rs`, which parses
+# exactly this shape and refuses anything else -- a misspelled key is an error
+# rather than a claim quietly dropped.
+#
+# Keys:
+#   title, body, task           what the learner reads
+#   starter, answer, hints      what the editor opens with, and the way out
+#   cells, input                the tape the lesson runs on
+#   solved_cells/_output/_length   what the learner has to achieve; omit all
+#                               three for a lesson that only wants reading
+#   shows_ending                "finished" or "capped" -- what the starter does
+#   shows_cells/_output/_prefix    what the starter provably leaves behind,
+#                               tested so the prose cannot drift from the code
+#
+# Bodies are '''literal''' blocks: no escapes, and the first newline after the
+# opening delimiter is dropped.
+
+[[lesson]]
+title = "Welcome"
+cells = 16
+starter = ""
+answer = "+"
+solved_cells = [[0, 1]]
+shows_ending = "finished"
+hints = ["One character. The tape starts at zero, and + adds one."]
+task = '''
+Type a single + and run it with ctrl-r. Watch cell 0.'''
+body = '''
+BrainFuck gives you a tape of numbered cells, every one of them zero, and a pointer sitting on cell 0.
+
+There are eight commands, and they are the entire language:
+
+  +   add one to the cell under the pointer
+  -   subtract one
+  >   move the pointer one cell right
+  <   move it one cell left
+  .   print the cell as a character
+  ,   read a character into the cell
+  [   if the cell is zero, jump past the matching ]
+  ]   jump back to the matching [
+
+Every other character is a comment. That is why BrainFuck programs can be hidden inside English, and why a typo is silently ignored rather than reported.
+
+Those eight commands are enough to compute anything any computer can compute. The rest of this course is about why that is true and what it costs.'''
+
+[[lesson]]
+title = "Counting"
+cells = 16
+starter = "++++-"
+answer = "+++++++"
+solved_cells = [[0, 7]]
+shows_ending = "finished"
+shows_cells = [[0, 3]]
+hints = ["Seven pluses is the direct route.", "So is nine pluses and two minuses. Both are right; one is shorter."]
+task = '''
+Leave 7 in cell 0.'''
+body = '''
++ and - are the whole of arithmetic. There is no way to write the number seven. You write seven pluses.
+
+Run the program below, then press tab and walk through it with the arrow keys. Watch the value climb and then drop back.
+
+A cell holds one byte: 0 to 255. Add one to 255 and you are at 0 again. Subtract one from 0 and you are at 255. Nothing complains — the wheel simply turns. gyrus can be told to complain instead, with --cell-model checked, which is how you find the bug where you meant to subtract four and subtracted five.'''
+
+[[lesson]]
+title = "The pointer"
+cells = 16
+starter = "+>++>+++"
+answer = "+++>++>+"
+solved_cells = [[0, 3], [1, 2], [2, 1]]
+shows_ending = "finished"
+shows_cells = [[0, 1], [1, 2], [2, 3]]
+hints = ["Only the number of pluses in each group has to change."]
+task = '''
+Now reverse it: 3 in cell 0, 2 in cell 1, 1 in cell 2.'''
+body = '''
+> and < move the pointer. They change nothing on the tape; they change which cell + - . and , are talking about.
+
+Run +>++>+++ and step through it. The ▲ under the tape moves, and each cell keeps whatever it was given after the pointer leaves.
+
+The pointer is the only way this language has of pointing at anything. There are no names. "Cell 3 is the loop counter" is a fact you keep in your head, and losing track of where the pointer is left off is the most common way a BrainFuck program goes wrong. You will do it in lesson 9.'''
+
+[[lesson]]
+title = "Loops"
+cells = 16
+starter = "++[>+<-]"
+answer = "+++++[>>+<<-]"
+solved_cells = [[0, 0], [2, 5]]
+shows_ending = "finished"
+shows_cells = [[1, 2]]
+hints = ["Start with five pluses instead of two.", "Two > to reach cell 2 means two < to get back to the counter.", "Forget the second < and the ] will be testing the wrong cell."]
+task = '''
+Move a 5 from cell 0 into cell 2 rather than cell 1.'''
+body = '''
+[ and ] are the only branch and the only jump in the language.
+
+  [   if the cell under the pointer is zero, skip past the ]
+  ]   go back to the [
+
+So a loop runs while the current cell is not zero, which means the body has to change that cell or the loop never ends.
+
+Run ++[>+<-] and step through it slowly, watching two cells:
+
+  cell 0 counts down    2, 1, 0
+  cell 1 counts up      0, 1, 2
+
+When cell 0 reaches zero the [ stops jumping back.
+
+So what did it do? It moved the value. Not copied — moved. Cell 0 is empty at the end, and that is the price of the simplest loop in the language. Getting a copy instead takes lesson 10.'''
+
+[[lesson]]
+title = "Clearing"
+cells = 16
+starter = "+++++"
+answer = "+++++[-]>+++++++++"
+solved_cells = [[0, 0], [1, 9]]
+shows_ending = "finished"
+shows_cells = [[0, 5]]
+hints = ["Two steps: build the 5, then clear it with [-].", "Then move right and count to nine."]
+task = '''
+Set cell 0 to 5 and then clear it, and leave 9 in cell 1.'''
+body = '''
+How do you set a cell to zero when you do not know what is in it?
+
+  [-]
+
+Read it as a sentence: while this cell is not zero, subtract one. It lands on zero and stops, whatever it started at.
+
+You will see [-] constantly. gyrus's optimizer recognises it by shape and replaces the entire loop with a single store — run gyrus-tool optimize on a program and look for Zero in the output.
+
+Its evil twin is [+]. That terminates too, by climbing to 255 and wrapping round to 0, which takes 256 iterations to do what [-] does in as many as the cell needs. gyrus-tool validate warns about it, and under --cell-model checked it is not a slow program but a failing one.'''
+
+[[lesson]]
+title = "Multiplication"
+cells = 16
+starter = "+++[>++++<-]"
+answer = "++++++[>+++++++<-]"
+solved_cells = [[1, 42]]
+shows_ending = "finished"
+shows_cells = [[1, 12]]
+hints = ["Six in the counter, seven added each pass.", "Or seven in the counter and six added — multiplication does not mind."]
+task = '''
+Compute 6 x 7 and leave 42 in cell 1.'''
+body = '''
+A loop that adds to a second cell on every pass multiplies.
+
+  +++[>++++<-]
+
+Cell 0 counts three times; each pass adds four to cell 1. Three fours is twelve.
+
+What is in cell 0 afterwards? Zero. The counter is consumed. Multiplication always costs you the multiplier here, and keeping it means copying it first — which is lesson 10, and which is why BrainFuck programs are mostly bookkeeping.
+
+gyrus recognises this shape too. The optimizer calls it MultiplyAdd and computes the result without looping at all, which is why a program that spends its life in loops like this one runs far faster than its step count suggests it should.'''
+
+[[lesson]]
+title = "Why this is enough"
+cells = 16
+starter = "+++[>++++<-]>."
+answer = "+++[>++++<-]>."
+shows_ending = "finished"
+shows_cells = [[1, 12]]
+hints = ["There is nothing to get right here. ctrl-n moves on."]
+task = '''
+Nothing to solve. Run whatever you like, then press ctrl-n.'''
+body = '''
+Look at what six lessons of eight characters have built:
+
+  a value            a cell
+  a variable         a cell you decided to call something
+  assignment         [-] and then that many +
+  addition           [>+<-]
+  multiplication     a loop that adds
+  unbounded memory   the tape keeps going
+
+A language is Turing complete when it has unbounded storage, a way to branch on a value, and a way to repeat. You have all three, and you have not used anything that was not in lesson 3.
+
+The conclusion is not that BrainFuck is powerful. It is that power is cheap. Anything computable is computable here — slowly, and unreadably, but computable. Your compiler's back end and your CPU's instruction set are doing the same work against the same ceiling, with better ergonomics.
+
+Everything after this lesson is ergonomics.'''
+
+[[lesson]]
+title = "Input and output"
+cells = 16
+starter = "++++++++[>++++++++<-]>+."
+answer = "++++++++[>+++++++++<-]>.+++++++++++++++++++++++++++++++++."
+solved_output = "Hi"
+shows_ending = "finished"
+shows_cells = [[1, 65]]
+shows_output = "A"
+hints = ["Eight nines is 72, and 72 is H.", "i is 105, which is 33 more than H. You are already on the right cell."]
+task = '''
+Print Hi. H is 72 and i is 105.'''
+body = '''
+. prints the cell under the pointer as a character. , reads one into it.
+
+Characters are numbers: A is 65, a is 97, a space is 32, a newline is 10. So printing A means getting 65 into a cell and then saying . — and the short way to 65 is not sixty-five pluses:
+
+  ++++++++[>++++++++<-]>+.
+
+Eight eights is 64, and then one more. Run it.
+
+, reads a byte from the program's input. What happens when there is none left is a choice rather than a law, and implementations disagree: gyrus can give you 0, give you 255, leave the cell untouched, or stop with an error, under --eof-behavior. Here it gives you 0. A program that reads input and does not agree with its interpreter about this will read one byte too many and loop.'''
+
+[[lesson]]
+title = "Nested loops"
+cells = 16
+starter = "++++++++++[>++++++++++<-]"
+answer = "++++++++++[>>++++++++++<<-]"
+solved_cells = [[2, 100]]
+solved_length = 40
+shows_ending = "finished"
+shows_cells = [[1, 100]]
+hints = ["The starter puts 100 in cell 1. You want it one cell further right.", "Two > inside the loop means two < before the -."]
+task = '''
+Leave 100 in cell 2, in under 40 characters.'''
+body = '''
+A loop body can contain another loop, which is how you get large numbers without typing them.
+
+  ++++++++++[>++++++++++<-]
+
+Ten tens: cell 1 ends at 100, and you typed twenty-five characters instead of a hundred.
+
+The outer counter is consumed on the way, as always, so a two-level nest needs one cell per level plus one for the answer. Keeping track of which cell is counting what is the entire difficulty, and it does not get easier — it is why lesson 10 exists and why real BrainFuck programs are written with a diagram of the tape beside them.'''
+
+[[lesson]]
+title = "Making a decision"
+cells = 16
+starter = "+++++++++++[>+++++++++++<-]+++[>.<]"
+answer = "+++++++++++[>+++++++++++<-]+++[[-]>.<]"
+solved_cells = [[0, 0]]
+solved_output = "y"
+shows_ending = "capped"
+shows_cells = [[0, 3], [1, 121]]
+shows_output_prefix = "yyyy"
+hints = ["Lesson 3: a loop runs while its cell is not zero. Which cell does this one test?", "Nothing inside the body changes cell 0, so the test never changes its answer.", "[ [-] ... ] clears the flag on the way in, so the body runs once."]
+task = '''
+Make it print y exactly once and stop.'''
+body = '''
+There is no if. There is [ , which is an if that repeats — so an if is a loop you make sure cannot go round a second time:
+
+  [ clear the cell, then do the thing ]
+
+The program below builds the letter y in cell 1, puts a 3 in cell 0 as a flag, and is meant to print y once because that flag is not zero.
+
+Run it. It prints y several thousand times and the tutorial cuts it off.
+
+Nothing in the loop body ever touches cell 0, so lesson 3's rule bites: a loop runs while its cell is not zero, and this one has no way to become zero. Clearing the flag is the whole of what turns a loop into an if.
+
+The other way to get this wrong is subtler, and you will meet it soon enough. The ] tests whatever cell the pointer is on when it is reached, not the cell the [ tested. Drop the < and the loop starts asking a different cell every time round, and the pointer walks off down the tape.
+
+For a real else you need a second cell: set an else-flag to 1, clear it inside the then-branch, and follow with a loop on the else-flag.'''
+
+[[lesson]]
+title = "Copying"
+cells = 16
+starter = "+++++[>+>+<<-]"
+answer = "+++++[>+>+>+<<<-]>>>[<<<+>>>-]"
+solved_cells = [[0, 5], [1, 5], [2, 5]]
+shows_ending = "finished"
+shows_cells = [[1, 5], [2, 5]]
+hints = ["One pass can fill three cells, not two.", "Then move one of them back into cell 0 with a second loop.", "Every > inside a loop body needs its < before the ]."]
+task = '''
+Leave 5 in each of cells 0, 1 and 2. Use cell 3 as scratch.'''
+body = '''
+Moving a value takes one loop. Copying one takes a spare cell and a second pass:
+
+  [>+>+<<-]      empty cell 0 into cells 1 and 2
+  >>[<<+>>-]     empty cell 2 back into cell 0
+
+Cell 2 was scratch. Cell 0 ends with what it started with, cell 1 has the copy, and the scratch cell is zero again — which matters, because the next thing you write will assume it is.
+
+This is what passes for a subroutine here: a shape you write out again every time you need it, with the cell numbers adjusted by hand. There is no call, no return, and no arguments. Only a pattern, and the discipline to keep your tape straight.
+
+That is also the argument for the macro preprocessor gyrus has a design for and no code behind. Until it exists, you type the pattern out.'''
+
+[[lesson]]
+title = "Walking the tape"
+cells = 16
+starter = "++++++++++++++++[>++++>++++>++++<<<-]"
+answer = "++++++++++++++++[>++++>++++>++++<<<-]>+.>++.>+++."
+solved_output = "ABC"
+shows_ending = "finished"
+shows_cells = [[1, 64], [2, 64], [3, 64]]
+hints = ["The starter leaves 64 in each of cells 1, 2 and 3.", "64 is one less than A, two less than B, three less than C.", "Move right, add the difference, print. Three times."]
+task = '''
+Print ABC — 65, 66, 67 — by building the codes with a loop.'''
+body = '''
+A list is a run of consecutive cells, and the pointer is the index. To walk one until it runs out, use a zero cell as the end marker:
+
+  [>]     move right until you land on a zero
+  [<]     move left until you land on a zero
+
+Read [>] with lesson 3 in mind and it is obvious: while this cell is not zero, move right. It is a loop whose body never touches a value.
+
+gyrus recognises both. The optimizer calls them SeekRight and SeekLeft and does the whole walk as one operation rather than one step per cell, which is the difference between scanning a long tape and scanning it slowly.
+
+Building a string is the same idea run backwards: fill a run of cells with character codes, then walk it printing as you go.'''
+
+[[lesson]]
+title = "The halting problem"
+cells = 16
+starter = "+[]"
+answer = "+[]"
+shows_ending = "capped"
+shows_cells = [[0, 1]]
+hints = ["Nothing to solve. ctrl-r runs it; the cap does the rest."]
+task = '''
+Run it, watch the step cap stop it, and you are done.'''
+body = '''
+In lesson 9 you wrote a program that did not stop, and the tutorial cut it off after a fixed number of steps and said so.
+
+That cap is not laziness. No program can read an arbitrary BrainFuck program and decide whether it halts. Turing proved it in 1936, and the proof does not care which language is being asked about — only that the language can express a program that reads another program's verdict and does the opposite.
+
+BrainFuck can express that. It is the same property that made it Turing complete in lesson 6. The power and the undecidability are one fact seen from two sides: you cannot have a language that can compute anything and also always answer questions about what it will do.
+
+So every tool here has a cutoff where you might have wanted an answer:
+
+  gyrus --max-steps N     stop after N instructions
+  gyrus --timeout MS      stop after a wall-clock deadline
+  gyrus-tool validate     warns about loops it can prove never end,
+                          and says nothing about the rest
+
+That last one is the honest shape of every such tool. It catches the cases it can see and makes no claim about the others, which is not a limitation anyone is going to fix.
+
+Below is a cell set to one and a loop with an empty body that can never change it. Run it.'''
+

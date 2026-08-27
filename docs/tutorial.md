@@ -115,7 +115,20 @@ that the debugger uses — the interpreter dispatches only that hook point for
 the `LoopCheck` standing for `[`, and does so before the check runs.
 
 The lesson text, the starting programs, the answers, the hints, and the checks
-are one table in `crates/gyrus-tutorial/src/lesson.rs`. Three tests hold it
-together: every answer must satisfy its own lesson's check, every starting
-program must at least parse and run, and no starting program may already
-satisfy the lesson — a lesson whose starter is the answer teaches nothing.
+are `crates/gyrus-tutorial/course.toml`, compiled into the binary with
+`include_str!` and read by a small strict parser in `src/lesson.rs` — the same
+arrangement, and the same reasoning, as the program manifest `gyrus-corpus`
+reads. A key the parser does not recognise is an error rather than a lesson
+quietly missing its check.
+
+Five tests hold the course together: the file must parse; every answer must
+satisfy its own lesson's check; every starting program must at least parse and
+run; no starting program may already satisfy the lesson — a lesson whose
+starter is the answer teaches nothing; and every starter must do what the
+course says it does.
+
+That last one is why each lesson carries a `shows_ending` and usually a
+`shows_cells`. A body that says "run it and watch cell 1 reach 12" is a claim
+about the code beside it, and before the course was pinned this way a starter
+could be edited into disagreeing with its own paragraph without failing
+anything.

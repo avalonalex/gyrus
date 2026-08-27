@@ -1,6 +1,7 @@
 //! The course: what each lesson says, and what counts as having done it.
 
 use crate::trace::{Ending, Trace};
+use std::sync::LazyLock;
 
 /// One thing a lesson asks of the learner's program.
 ///
@@ -8,13 +9,13 @@ use crate::trace::{Ending, Trace};
 /// because criteria compose: two lessons already want a cell *and* an output,
 /// and a combining variant for every pair does not scale past two. An empty
 /// slice is a lesson that only wants reading.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Criterion {
     /// These cells must hold these values when the program finishes. Cells not
     /// listed can hold anything.
-    Cells(&'static [(usize, u8)]),
+    Cells(Vec<(usize, u8)>),
     /// The program must print exactly this.
-    Output(&'static str),
+    Output(String),
     /// The program must be no longer than this, counting non-whitespace
     /// characters — for the lessons whose point is brevity.
     Length(usize),
@@ -50,7 +51,7 @@ impl Criterion {
             }),
             Criterion::Output(expected) => {
                 let actual = String::from_utf8_lossy(&trace.output);
-                (actual != *expected).then(|| {
+                (actual != expected.as_str()).then(|| {
                     format!(
                         "the program printed {:?}, and the lesson asked for {:?}",
                         actual, expected
@@ -99,25 +100,52 @@ pub fn evaluate(criteria: &[Criterion], trace: &Trace, source: &str) -> Verdict 
 }
 
 /// One lesson.
+#[derive(Debug)]
 pub struct Lesson {
     /// Short name, shown in the header and in `--list`.
-    pub title: &'static str,
+    pub title: String,
     /// The explanation, in the left panel.
-    pub body: &'static str,
+    pub body: String,
     /// What the learner is asked to do.
-    pub task: &'static str,
+    pub task: String,
     /// The program the editor starts with — usually the example being explained.
-    pub starter: &'static str,
+    pub starter: String,
     /// A program that satisfies the check, revealed on request.
-    pub answer: &'static str,
+    pub answer: String,
     /// Nudges, revealed one at a time.
-    pub hints: &'static [&'static str],
+    pub hints: Vec<String>,
     /// What counts as done. Empty means the lesson only wants reading.
-    pub criteria: &'static [Criterion],
+    pub criteria: Vec<Criterion>,
+    /// What the starter provably does. Never shown to the learner and never
+    /// read by the running binary: it exists so the tests can hold the body's
+    /// prose to the code, and "run it and watch cell 1 reach 12" cannot
+    /// quietly stop being true.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub shows: Shows,
     /// Input handed to the program's `,`.
-    pub input: &'static str,
+    pub input: String,
     /// How many cells the tape has for this lesson.
     pub cells: usize,
+}
+
+/// What a lesson's starter is claimed to do, checked by the tests.
+#[derive(Debug, Default, Clone)]
+pub struct Shows {
+    /// Whether the starter finishes or runs into the step cap.
+    pub ending: Option<Expected>,
+    /// Cells it leaves non-zero. Every cell not listed must be zero.
+    pub cells: Option<Vec<(usize, u8)>>,
+    /// Exactly what it prints.
+    pub output: Option<String>,
+    /// What it prints first, for the starters that never stop.
+    pub output_prefix: Option<String>,
+}
+
+/// How a starter is expected to end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expected {
+    Finished,
+    Capped,
 }
 
 /// How many steps a lesson program may run before the tutorial gives up.
@@ -126,323 +154,286 @@ pub struct Lesson {
 /// wrong, and lesson 12 is about that being the only answer available.
 pub const STEP_LIMIT: usize = 20_000;
 
-/// The course, in order.
-pub const LESSONS: &[Lesson] = &[
-    Lesson {
-        title: "Welcome",
-        body: "\
-BrainFuck gives you a tape of numbered cells, every one of them zero, and a pointer sitting on cell 0.
+/// The course itself, compiled in and parsed at first use.
+///
+/// The lessons were a Rust table until the course grew past what is pleasant
+/// to edit inside string literals. `include_str!` keeps the binary a single
+/// file — the course is not something a user can lose or a packager can
+/// forget — while the prose lives somewhere it can be written as prose.
+///
+/// What that costs is a failure mode the compiler used to cover: a malformed
+/// course is a runtime panic rather than a build error. `the_course_parses`
+/// below is what pays it back, and it runs on every `cargo test`.
+pub static LESSONS: LazyLock<Vec<Lesson>> =
+    LazyLock::new(|| parse(COURSE).unwrap_or_else(|why| panic!("course.toml is malformed: {why}")));
 
-There are eight commands, and they are the entire language:
+const COURSE: &str = include_str!("../course.toml");
 
-  +   add one to the cell under the pointer
-  -   subtract one
-  >   move the pointer one cell right
-  <   move it one cell left
-  .   print the cell as a character
-  ,   read a character into the cell
-  [   if the cell is zero, jump past the matching ]
-  ]   jump back to the matching [
+/// One lesson under construction, before it is known to be complete.
+#[derive(Default)]
+struct Draft {
+    title: Option<String>,
+    body: Option<String>,
+    task: Option<String>,
+    starter: Option<String>,
+    answer: Option<String>,
+    hints: Option<Vec<String>>,
+    cells: Option<usize>,
+    input: Option<String>,
+    solved_cells: Option<Vec<(usize, u8)>>,
+    solved_output: Option<String>,
+    solved_length: Option<usize>,
+    shows: Shows,
+}
 
-Every other character is a comment. That is why BrainFuck programs can be hidden inside English, and why a typo is silently ignored rather than reported.
+impl Draft {
+    fn finish(self, line: usize) -> Result<Lesson, String> {
+        let title = self
+            .title
+            .ok_or_else(|| format!("line {line}: a lesson with no `title`"))?;
+        let need = |what: &str, value: Option<String>| {
+            value.ok_or_else(|| format!("{title}: no `{what}`"))
+        };
+        let mut criteria = Vec::new();
+        if let Some(cells) = self.solved_cells {
+            criteria.push(Criterion::Cells(cells));
+        }
+        if let Some(output) = self.solved_output {
+            criteria.push(Criterion::Output(output));
+        }
+        if let Some(limit) = self.solved_length {
+            criteria.push(Criterion::Length(limit));
+        }
+        Ok(Lesson {
+            body: need("body", self.body)?,
+            task: need("task", self.task)?,
+            starter: need("starter", self.starter)?,
+            answer: need("answer", self.answer)?,
+            hints: self.hints.ok_or_else(|| format!("{title}: no `hints`"))?,
+            cells: self.cells.ok_or_else(|| format!("{title}: no `cells`"))?,
+            input: self.input.unwrap_or_default(),
+            criteria,
+            shows: self.shows,
+            title,
+        })
+    }
+}
 
-Those eight commands are enough to compute anything any computer can compute. The rest of this course is about why that is true and what it costs.",
-        task: "Type a single + and run it with ctrl-r. Watch cell 0.",
-        starter: "",
-        answer: "+",
-        hints: &["One character. The tape starts at zero, and + adds one."],
-        criteria: &[Criterion::Cells(&[(0, 1)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Counting",
-        body: "\
-+ and - are the whole of arithmetic. There is no way to write the number seven. You write seven pluses.
+/// `course.toml` in, lessons out.
+///
+/// A deliberately small parser rather than a dependency, for the reason
+/// `gyrus-corpus` gives about the program manifest: it understands exactly
+/// this file's shape and refuses everything else, so a misspelled key is an
+/// error instead of a lesson quietly missing its check.
+fn parse(source: &str) -> Result<Vec<Lesson>, String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut lessons = Vec::new();
+    let mut draft: Option<Draft> = None;
+    let mut index = 0;
 
-Run the program below, then press tab and walk through it with the arrow keys. Watch the value climb and then drop back.
+    while index < lines.len() {
+        let number = index + 1;
+        let line = lines[index].trim();
+        index += 1;
 
-A cell holds one byte: 0 to 255. Add one to 255 and you are at 0 again. Subtract one from 0 and you are at 255. Nothing complains — the wheel simply turns. gyrus can be told to complain instead, with --cell-model checked, which is how you find the bug where you meant to subtract four and subtracted five.",
-        task: "Leave 7 in cell 0.",
-        starter: "++++-",
-        answer: "+++++++",
-        hints: &[
-            "Seven pluses is the direct route.",
-            "So is nine pluses and two minuses. Both are right; one is shorter.",
-        ],
-        criteria: &[Criterion::Cells(&[(0, 7)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "The pointer",
-        body: "\
-> and < move the pointer. They change nothing on the tape; they change which cell + - . and , are talking about.
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "[[lesson]]" {
+            if let Some(previous) = draft.take() {
+                lessons.push(previous.finish(number)?);
+            }
+            draft = Some(Draft::default());
+            continue;
+        }
 
-Run +>++>+++ and step through it. The ▲ under the tape moves, and each cell keeps whatever it was given after the pointer leaves.
+        let Some((key, rest)) = line.split_once('=') else {
+            return Err(format!("line {number}: {line:?} is not `key = value`"));
+        };
+        let (key, rest) = (key.trim(), rest.trim());
+        let Some(draft) = draft.as_mut() else {
+            return Err(format!("line {number}: `{key}` before any [[lesson]]"));
+        };
 
-The pointer is the only way this language has of pointing at anything. There are no names. \"Cell 3 is the loop counter\" is a fact you keep in your head, and losing track of where the pointer is left off is the most common way a BrainFuck program goes wrong. You will do it in lesson 9.",
-        task: "Now reverse it: 3 in cell 0, 2 in cell 1, 1 in cell 2.",
-        starter: "+>++>+++",
-        answer: "+++>++>+",
-        hints: &["Only the number of pluses in each group has to change."],
-        criteria: &[Criterion::Cells(&[(0, 3), (1, 2), (2, 1)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Loops",
-        body: "\
-[ and ] are the only branch and the only jump in the language.
+        // A literal block runs to the delimiter that closes it, which sits at
+        // the end of the last line of the text rather than on a line of its
+        // own. TOML drops the newline after the opening delimiter, so this
+        // way the value ends exactly where the text does and the parser and
+        // the format agree about every byte.
+        let value = if rest == TRIPLE {
+            let mut body = String::new();
+            loop {
+                let Some(next) = lines.get(index) else {
+                    return Err(format!("line {number}: `{key}` is never closed"));
+                };
+                index += 1;
+                if let Some(last) = next.strip_suffix(TRIPLE) {
+                    body.push_str(last);
+                    break;
+                }
+                body.push_str(next);
+                body.push('\n');
+            }
+            Value::Text(body)
+        } else {
+            value_of(rest, number)?
+        };
 
-  [   if the cell under the pointer is zero, skip past the ]
-  ]   go back to the [
+        match (key, value) {
+            ("title", Value::Text(v)) => draft.title = Some(v),
+            ("body", Value::Text(v)) => draft.body = Some(v),
+            ("task", Value::Text(v)) => draft.task = Some(v),
+            ("starter", Value::Text(v)) => draft.starter = Some(v),
+            ("answer", Value::Text(v)) => draft.answer = Some(v),
+            ("input", Value::Text(v)) => draft.input = Some(v),
+            ("cells", Value::Number(v)) => draft.cells = Some(v),
+            ("hints", Value::Strings(v)) => draft.hints = Some(v),
+            ("solved_cells", Value::Pairs(v)) => draft.solved_cells = Some(v),
+            ("solved_output", Value::Text(v)) => draft.solved_output = Some(v),
+            ("solved_length", Value::Number(v)) => draft.solved_length = Some(v),
+            ("shows_cells", Value::Pairs(v)) => draft.shows.cells = Some(v),
+            ("shows_output", Value::Text(v)) => draft.shows.output = Some(v),
+            ("shows_output_prefix", Value::Text(v)) => draft.shows.output_prefix = Some(v),
+            ("shows_ending", Value::Text(v)) => {
+                draft.shows.ending = Some(match v.as_str() {
+                    "finished" => Expected::Finished,
+                    "capped" => Expected::Capped,
+                    other => {
+                        return Err(format!(
+                            "line {number}: shows_ending is {other:?}, and the only two are \
+                             \"finished\" and \"capped\""
+                        ));
+                    }
+                });
+            }
+            (key, _) => {
+                return Err(format!(
+                    "line {number}: `{key}` is not a key this course understands, or its value \
+                     is the wrong shape"
+                ));
+            }
+        }
+    }
 
-So a loop runs while the current cell is not zero, which means the body has to change that cell or the loop never ends.
+    match draft {
+        Some(last) => lessons.push(last.finish(lines.len())?),
+        None => return Err("no lessons in the file".to_string()),
+    }
+    Ok(lessons)
+}
 
-Run ++[>+<-] and step through it slowly, watching two cells:
+/// The delimiter a prose block opens and closes with.
+const TRIPLE: &str = "'''";
 
-  cell 0 counts down    2, 1, 0
-  cell 1 counts up      0, 1, 2
+/// The four shapes a value can have here.
+enum Value {
+    Text(String),
+    Number(usize),
+    Strings(Vec<String>),
+    Pairs(Vec<(usize, u8)>),
+}
 
-When cell 0 reaches zero the [ stops jumping back.
+fn value_of(text: &str, line: usize) -> Result<Value, String> {
+    if let Some(inner) = quoted(text) {
+        return Ok(Value::Text(unescape(inner, line)?));
+    }
+    if let Ok(number) = text.parse::<usize>() {
+        return Ok(Value::Number(number));
+    }
+    let Some(inside) = text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) else {
+        return Err(format!(
+            "line {line}: {text:?} is not a string, a number or a list"
+        ));
+    };
+    let inside = inside.trim();
+    if inside.is_empty() {
+        return Ok(Value::Strings(Vec::new()));
+    }
+    if inside.starts_with('[') {
+        let mut pairs = Vec::new();
+        for item in inside.split("],") {
+            let item = item.trim().trim_start_matches('[').trim_end_matches(']');
+            let parts = item
+                .split_once(',')
+                .map(|(a, v)| (a.trim().parse::<usize>(), v.trim().parse::<u8>()));
+            match parts {
+                Some((Ok(address), Ok(value))) => pairs.push((address, value)),
+                _ => {
+                    return Err(format!("line {line}: {item:?} is not a [cell, value] pair"));
+                }
+            }
+        }
+        return Ok(Value::Pairs(pairs));
+    }
+    // A list of strings, split on the commas *between* them rather than on
+    // any comma inside one, which a hint is entitled to contain.
+    let mut strings = Vec::new();
+    let mut rest = inside;
+    loop {
+        rest = rest.trim_start();
+        let Some(end) = closing_quote(rest) else {
+            return Err(format!("line {line}: {rest:?} is not a quoted string"));
+        };
+        strings.push(unescape(&rest[1..end], line)?);
+        rest = rest[end + 1..].trim_start();
+        match rest.strip_prefix(',') {
+            Some(more) => rest = more,
+            None if rest.is_empty() => break,
+            None => {
+                return Err(format!(
+                    "line {line}: {rest:?} follows a string without a comma"
+                ));
+            }
+        }
+    }
+    Ok(Value::Strings(strings))
+}
 
-So what did it do? It moved the value. Not copied — moved. Cell 0 is empty at the end, and that is the price of the simplest loop in the language. Getting a copy instead takes lesson 10.",
-        task: "Move a 5 from cell 0 into cell 2 rather than cell 1.",
-        starter: "++[>+<-]",
-        answer: "+++++[>>+<<-]",
-        hints: &[
-            "Start with five pluses instead of two.",
-            "Two > to reach cell 2 means two < to get back to the counter.",
-            "Forget the second < and the ] will be testing the wrong cell.",
-        ],
-        criteria: &[Criterion::Cells(&[(0, 0), (2, 5)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Clearing",
-        body: "\
-How do you set a cell to zero when you do not know what is in it?
+/// The whole of `text` as one quoted string, or nothing.
+fn quoted(text: &str) -> Option<&str> {
+    let end = closing_quote(text)?;
+    (end == text.len() - 1).then(|| &text[1..end])
+}
 
-  [-]
+/// Where the string starting at `text[0]` ends, honouring backslash escapes.
+fn closing_quote(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.first() != Some(&b'"') {
+        return None;
+    }
+    let mut index = 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return Some(index),
+            _ => index += 1,
+        }
+    }
+    None
+}
 
-Read it as a sentence: while this cell is not zero, subtract one. It lands on zero and stops, whatever it started at.
-
-You will see [-] constantly. gyrus's optimizer recognises it by shape and replaces the entire loop with a single store — run gyrus-tool optimize on a program and look for Zero in the output.
-
-Its evil twin is [+]. That terminates too, by climbing to 255 and wrapping round to 0, which takes 256 iterations to do what [-] does in as many as the cell needs. gyrus-tool validate warns about it, and under --cell-model checked it is not a slow program but a failing one.",
-        task: "Set cell 0 to 5 and then clear it, and leave 9 in cell 1.",
-        starter: "+++++",
-        answer: "+++++[-]>+++++++++",
-        hints: &[
-            "Two steps: build the 5, then clear it with [-].",
-            "Then move right and count to nine.",
-        ],
-        criteria: &[Criterion::Cells(&[(0, 0), (1, 9)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Multiplication",
-        body: "\
-A loop that adds to a second cell on every pass multiplies.
-
-  +++[>++++<-]
-
-Cell 0 counts three times; each pass adds four to cell 1. Three fours is twelve.
-
-What is in cell 0 afterwards? Zero. The counter is consumed. Multiplication always costs you the multiplier here, and keeping it means copying it first — which is lesson 10, and which is why BrainFuck programs are mostly bookkeeping.
-
-gyrus recognises this shape too. The optimizer calls it MultiplyAdd and computes the result without looping at all, which is why a program that spends its life in loops like this one runs far faster than its step count suggests it should.",
-        task: "Compute 6 x 7 and leave 42 in cell 1.",
-        starter: "+++[>++++<-]",
-        answer: "++++++[>+++++++<-]",
-        hints: &[
-            "Six in the counter, seven added each pass.",
-            "Or seven in the counter and six added — multiplication does not mind.",
-        ],
-        criteria: &[Criterion::Cells(&[(1, 42)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Why this is enough",
-        body: "\
-Look at what six lessons of eight characters have built:
-
-  a value            a cell
-  a variable         a cell you decided to call something
-  assignment         [-] and then that many +
-  addition           [>+<-]
-  multiplication     a loop that adds
-  unbounded memory   the tape keeps going
-
-A language is Turing complete when it has unbounded storage, a way to branch on a value, and a way to repeat. You have all three, and you have not used anything that was not in lesson 3.
-
-The conclusion is not that BrainFuck is powerful. It is that power is cheap. Anything computable is computable here — slowly, and unreadably, but computable. Your compiler's back end and your CPU's instruction set are doing the same work against the same ceiling, with better ergonomics.
-
-Everything after this lesson is ergonomics.",
-        task: "Nothing to solve. Run whatever you like, then press ctrl-n.",
-        starter: "+++[>++++<-]>.",
-        answer: "+++[>++++<-]>.",
-        hints: &["There is nothing to get right here. ctrl-n moves on."],
-        criteria: &[],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Input and output",
-        body: "\
-. prints the cell under the pointer as a character. , reads one into it.
-
-Characters are numbers: A is 65, a is 97, a space is 32, a newline is 10. So printing A means getting 65 into a cell and then saying . — and the short way to 65 is not sixty-five pluses:
-
-  ++++++++[>++++++++<-]>+.
-
-Eight eights is 64, and then one more. Run it.
-
-, reads a byte from the program's input. What happens when there is none left is a choice rather than a law, and implementations disagree: gyrus can give you 0, give you 255, leave the cell untouched, or stop with an error, under --eof-behavior. Here it gives you 0. A program that reads input and does not agree with its interpreter about this will read one byte too many and loop.",
-        task: "Print Hi. H is 72 and i is 105.",
-        starter: "++++++++[>++++++++<-]>+.",
-        answer: "++++++++[>+++++++++<-]>.+++++++++++++++++++++++++++++++++.",
-        hints: &[
-            "Eight nines is 72, and 72 is H.",
-            "i is 105, which is 33 more than H. You are already on the right cell.",
-        ],
-        criteria: &[Criterion::Output("Hi")],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Nested loops",
-        body: "\
-A loop body can contain another loop, which is how you get large numbers without typing them.
-
-  ++++++++++[>++++++++++<-]
-
-Ten tens: cell 1 ends at 100, and you typed twenty-five characters instead of a hundred.
-
-The outer counter is consumed on the way, as always, so a two-level nest needs one cell per level plus one for the answer. Keeping track of which cell is counting what is the entire difficulty, and it does not get easier — it is why lesson 10 exists and why real BrainFuck programs are written with a diagram of the tape beside them.",
-        task: "Leave 100 in cell 2, in under 40 characters.",
-        starter: "++++++++++[>++++++++++<-]",
-        answer: "++++++++++[>>++++++++++<<-]",
-        hints: &[
-            "The starter puts 100 in cell 1. You want it one cell further right.",
-            "Two > inside the loop means two < before the -.",
-        ],
-        criteria: &[Criterion::Cells(&[(2, 100)]), Criterion::Length(40)],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Making a decision",
-        body: "\
-There is no if. There is [ , which is an if that repeats — so an if is a loop you make sure cannot go round a second time:
-
-  [ clear the cell, then do the thing ]
-
-The program below builds the letter y in cell 1, puts a 3 in cell 0 as a flag, and is meant to print y once because that flag is not zero.
-
-Run it. It prints y several thousand times and the tutorial cuts it off.
-
-Nothing in the loop body ever touches cell 0, so lesson 3's rule bites: a loop runs while its cell is not zero, and this one has no way to become zero. Clearing the flag is the whole of what turns a loop into an if.
-
-The other way to get this wrong is subtler, and you will meet it soon enough. The ] tests whatever cell the pointer is on when it is reached, not the cell the [ tested. Drop the < and the loop starts asking a different cell every time round, and the pointer walks off down the tape.
-
-For a real else you need a second cell: set an else-flag to 1, clear it inside the then-branch, and follow with a loop on the else-flag.",
-        task: "Make it print y exactly once and stop.",
-        starter: "+++++++++++[>+++++++++++<-]+++[>.<]",
-        answer: "+++++++++++[>+++++++++++<-]+++[[-]>.<]",
-        hints: &[
-            "Lesson 3: a loop runs while its cell is not zero. Which cell does this one test?",
-            "Nothing inside the body changes cell 0, so the test never changes its answer.",
-            "[ [-] ... ] clears the flag on the way in, so the body runs once.",
-        ],
-        // The flag has to end up cleared as well: a program that prints y and
-        // leaves the flag set is one that got out of the loop some other way.
-        criteria: &[Criterion::Cells(&[(0, 0)]), Criterion::Output("y")],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Copying",
-        body: "\
-Moving a value takes one loop. Copying one takes a spare cell and a second pass:
-
-  [>+>+<<-]      empty cell 0 into cells 1 and 2
-  >>[<<+>>-]     empty cell 2 back into cell 0
-
-Cell 2 was scratch. Cell 0 ends with what it started with, cell 1 has the copy, and the scratch cell is zero again — which matters, because the next thing you write will assume it is.
-
-This is what passes for a subroutine here: a shape you write out again every time you need it, with the cell numbers adjusted by hand. There is no call, no return, and no arguments. Only a pattern, and the discipline to keep your tape straight.
-
-That is also the argument for the macro preprocessor gyrus has a design for and no code behind. Until it exists, you type the pattern out.",
-        task: "Leave 5 in each of cells 0, 1 and 2. Use cell 3 as scratch.",
-        starter: "+++++[>+>+<<-]",
-        answer: "+++++[>+>+>+<<<-]>>>[<<<+>>>-]",
-        hints: &[
-            "One pass can fill three cells, not two.",
-            "Then move one of them back into cell 0 with a second loop.",
-            "Every > inside a loop body needs its < before the ].",
-        ],
-        criteria: &[Criterion::Cells(&[(0, 5), (1, 5), (2, 5)])],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "Walking the tape",
-        body: "\
-A list is a run of consecutive cells, and the pointer is the index. To walk one until it runs out, use a zero cell as the end marker:
-
-  [>]     move right until you land on a zero
-  [<]     move left until you land on a zero
-
-Read [>] with lesson 3 in mind and it is obvious: while this cell is not zero, move right. It is a loop whose body never touches a value.
-
-gyrus recognises both. The optimizer calls them SeekRight and SeekLeft and does the whole walk as one operation rather than one step per cell, which is the difference between scanning a long tape and scanning it slowly.
-
-Building a string is the same idea run backwards: fill a run of cells with character codes, then walk it printing as you go.",
-        task: "Print ABC — 65, 66, 67 — by building the codes with a loop.",
-        starter: "++++++++++++++++[>++++>++++>++++<<<-]",
-        answer: "++++++++++++++++[>++++>++++>++++<<<-]>+.>++.>+++.",
-        hints: &[
-            "The starter leaves 64 in each of cells 1, 2 and 3.",
-            "64 is one less than A, two less than B, three less than C.",
-            "Move right, add the difference, print. Three times.",
-        ],
-        criteria: &[Criterion::Output("ABC")],
-        input: "",
-        cells: 16,
-    },
-    Lesson {
-        title: "The halting problem",
-        body: "\
-In lesson 9 you wrote a program that did not stop, and the tutorial cut it off after a fixed number of steps and said so.
-
-That cap is not laziness. No program can read an arbitrary BrainFuck program and decide whether it halts. Turing proved it in 1936, and the proof does not care which language is being asked about — only that the language can express a program that reads another program's verdict and does the opposite.
-
-BrainFuck can express that. It is the same property that made it Turing complete in lesson 6. The power and the undecidability are one fact seen from two sides: you cannot have a language that can compute anything and also always answer questions about what it will do.
-
-So every tool here has a cutoff where you might have wanted an answer:
-
-  gyrus --max-steps N     stop after N instructions
-  gyrus --timeout MS      stop after a wall-clock deadline
-  gyrus-tool validate     warns about loops it can prove never end,
-                          and says nothing about the rest
-
-That last one is the honest shape of every such tool. It catches the cases it can see and makes no claim about the others, which is not a limitation anyone is going to fix.
-
-Below is a cell set to one and a loop with an empty body that can never change it. Run it.",
-        task: "Run it, watch the step cap stop it, and you are done.",
-        starter: "+[]",
-        answer: "+[]",
-        hints: &["Nothing to solve. ctrl-r runs it; the cap does the rest."],
-        criteria: &[],
-        input: "",
-        cells: 16,
-    },
-];
+/// The escapes this file is allowed to use. Anything else is an error rather
+/// than a backslash that silently survives into a lesson.
+fn unescape(text: &str, line: usize) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some(other) => return Err(format!("line {line}: \\{other} is not an escape")),
+            None => return Err(format!("line {line}: a backslash ends the string")),
+        }
+    }
+    Ok(out)
+}
 
 #[cfg(test)]
 mod tests {
@@ -450,7 +441,7 @@ mod tests {
     use crate::trace;
 
     fn run(source: &str, lesson: &Lesson) -> Trace {
-        trace::record(source, lesson.input, lesson.cells, STEP_LIMIT)
+        trace::record(source, &lesson.input, lesson.cells, STEP_LIMIT)
             .unwrap_or_else(|error| panic!("{:?} does not parse: {error}", source))
     }
 
@@ -462,8 +453,8 @@ mod tests {
     #[test]
     fn every_answer_solves_its_own_lesson() {
         for (index, lesson) in LESSONS.iter().enumerate() {
-            let trace = run(lesson.answer, lesson);
-            let verdict = evaluate(lesson.criteria, &trace, lesson.answer);
+            let trace = run(&lesson.answer, lesson);
+            let verdict = evaluate(&lesson.criteria, &trace, &lesson.answer);
             assert!(
                 verdict.is_solved(),
                 "lesson {index} ({}): the answer {:?} gives {verdict:?}",
@@ -481,7 +472,7 @@ mod tests {
     #[test]
     fn every_starter_parses_and_runs() {
         for (index, lesson) in LESSONS.iter().enumerate() {
-            let trace = run(lesson.starter, lesson);
+            let trace = run(&lesson.starter, lesson);
             assert!(
                 !matches!(trace.ending, Ending::Failed(_)),
                 "lesson {index} ({}): the starter failed: {:?}",
@@ -501,8 +492,8 @@ mod tests {
             if lesson.criteria.is_empty() {
                 continue;
             }
-            let trace = run(lesson.starter, lesson);
-            let verdict = evaluate(lesson.criteria, &trace, lesson.starter);
+            let trace = run(&lesson.starter, lesson);
+            let verdict = evaluate(&lesson.criteria, &trace, &lesson.starter);
             assert!(
                 !verdict.is_solved(),
                 "lesson {index} ({}): the starter already solves it, so there is nothing to do",
@@ -511,6 +502,105 @@ mod tests {
         }
     }
 
+    /// The course file has to parse, and say why if it does not.
+    ///
+    /// `LESSONS` panics on a malformed course, which in a shipped binary is
+    /// the worst moment to find out. This is the moment instead.
+    #[test]
+    fn the_course_parses() {
+        if let Err(why) = parse(COURSE) {
+            panic!("course.toml does not parse: {why}");
+        }
+    }
+
+    /// Every lesson's body says what its starter does. This checks it.
+    ///
+    /// Before the course moved to a file, a starter was only required to run
+    /// without crashing — so prose like "watch cell 1 reach 12" was a claim
+    /// nothing held anyone to, and editing the starter could falsify the
+    /// paragraph beside it without failing a single test.
+    #[test]
+    fn every_starter_does_what_the_course_says() {
+        for (index, lesson) in LESSONS.iter().enumerate() {
+            let where_ = format!("lesson {index} ({})", lesson.title);
+            let trace = run(&lesson.starter, lesson);
+
+            let ending = lesson
+                .shows
+                .ending
+                .unwrap_or_else(|| panic!("{where_}: no `shows_ending`, so nothing pins it"));
+            match (ending, &trace.ending) {
+                (Expected::Finished, Ending::Finished) => {}
+                (Expected::Capped, Ending::TooManySteps(_)) => {}
+                (expected, actual) => {
+                    panic!("{where_}: the course says {expected:?}, and it was {actual:?}")
+                }
+            }
+
+            if let Some(cells) = &lesson.shows.cells {
+                for (address, value) in cells {
+                    let actual = trace.memory.get(*address).copied().unwrap_or(0);
+                    assert_eq!(
+                        actual, *value,
+                        "{where_}: the course says cell {address} ends at {value}, and it is {actual}"
+                    );
+                }
+                // Everything the course did not list has to be zero, so a
+                // starter cannot quietly start leaving something behind.
+                for (address, actual) in trace.memory.iter().enumerate() {
+                    if *actual != 0 && !cells.iter().any(|(listed, _)| *listed == address) {
+                        panic!(
+                            "{where_}: cell {address} ends at {actual}, and the course does not mention it"
+                        );
+                    }
+                }
+            }
+
+            let printed = String::from_utf8_lossy(&trace.output).into_owned();
+            if let Some(expected) = &lesson.shows.output {
+                assert_eq!(&printed, expected, "{where_}: what the starter printed");
+            }
+            if let Some(prefix) = &lesson.shows.output_prefix {
+                assert!(
+                    printed.starts_with(prefix.as_str()),
+                    "{where_}: the course says it starts by printing {prefix:?}, and it printed {:?}",
+                    printed.chars().take(20).collect::<String>()
+                );
+            }
+        }
+    }
+
+    /// A key the parser does not know is an error, not a shrug.
+    ///
+    /// This is the whole reason for hand-writing the parser rather than
+    /// reaching for a permissive one: `solved_cell` instead of `solved_cells`
+    /// would otherwise be a lesson with no check that still looked complete.
+    #[test]
+    fn the_parser_refuses_a_key_it_does_not_know() {
+        let course = "[[lesson]]\ntitle = \"x\"\nsolved_cell = [[0, 1]]\n";
+        let why = parse(course).expect_err("a misspelled key has to be refused");
+        assert!(why.contains("solved_cell"), "{why}");
+    }
+
+    /// So is a lesson that is missing something.
+    #[test]
+    fn the_parser_refuses_an_incomplete_lesson() {
+        let course = "[[lesson]]\ntitle = \"Half a lesson\"\ncells = 16\n";
+        let why = parse(course).expect_err("an incomplete lesson has to be refused");
+        assert!(why.contains("Half a lesson"), "{why}");
+    }
+
+    /// A prose block keeps its newlines and drops the one after the delimiter.
+    #[test]
+    fn a_prose_block_is_read_verbatim() {
+        let course = concat!(
+            "[[lesson]]\ntitle = \"t\"\ncells = 16\nstarter = \"\"\nanswer = \"+\"\n",
+            "hints = [\"h\"]\ntask = '''\nonce'''\nbody = '''\nfirst\n\nthird'''\n"
+        );
+        let lessons = parse(course).expect("this course is well formed");
+        assert_eq!(lessons[0].body, "first\n\nthird");
+        assert_eq!(lessons[0].task, "once");
+    }
     /// Hints should not be empty strings, and answers should not be blank.
     #[test]
     fn each_lesson_is_filled_in() {
@@ -531,7 +621,7 @@ mod tests {
     fn a_check_reports_which_cell_is_wrong() {
         let lesson = &LESSONS[1];
         let trace = run("+", lesson);
-        match evaluate(lesson.criteria, &trace, "+") {
+        match evaluate(&lesson.criteria, &trace, "+") {
             Verdict::NotYet(why) => {
                 assert!(why.contains("cell 0"), "{why}");
                 assert!(why.contains('7'), "{why}");
@@ -544,7 +634,7 @@ mod tests {
     fn a_program_that_never_ends_is_reported_as_such_and_not_as_a_wrong_cell() {
         let lesson = &LESSONS[1];
         let trace = run("+[]", lesson);
-        match evaluate(lesson.criteria, &trace, "+[]") {
+        match evaluate(&lesson.criteria, &trace, "+[]") {
             Verdict::NotYet(why) => assert!(why.contains("still running"), "{why}"),
             other => panic!("expected NotYet, got {other:?}"),
         }
@@ -557,7 +647,7 @@ mod tests {
         let lesson = &LESSONS[8];
         let brute = format!(">>{}", "+".repeat(100));
         let trace = run(&brute, lesson);
-        match evaluate(lesson.criteria, &trace, &brute) {
+        match evaluate(&lesson.criteria, &trace, &brute) {
             Verdict::NotYet(why) => assert!(why.contains("limit"), "{why}"),
             other => panic!("expected NotYet, got {other:?}"),
         }
