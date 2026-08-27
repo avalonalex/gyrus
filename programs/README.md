@@ -117,7 +117,8 @@ file.
   cell and a size cell, because a cell counts upwards and has nowhere to put a
   minus. Sign-and-size rather than the wrapping arithmetic a machine uses,
   because multiplying two wrapped numbers means pulling the sign back out of
-  each first — the library says why.
+  each first — a trade the library states plainly, including that the multiply
+  it is paying for is not written yet.
 
 **Every one of them with a loop in it says what the loop is for**, as a block
 of pseudocode in its comments. Naming cells makes a *line* legible without
