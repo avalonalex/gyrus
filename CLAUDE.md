@@ -34,9 +34,9 @@ the development compiler.
   errors name the `.bfm` rather than the expansion. Written entirely against
   `gyrus`'s public API, as the debugger was. `@define`, `OP{N}`,
   `@var`/`@to`/`@here` with static cursor tracking, `@stride`/`@field` for
-  record-relative addressing, and `@macro` with parameters; `@include`, the
-  conditionals and the CLI wiring are not built.
-  See `docs/architecture.md`
+  record-relative addressing, and `@macro` with parameters. `gyrus` runs a
+  `.bfm` and `gyrus-tool expand` produces the BrainFuck; `@include` and the
+  conditionals are not built. See `docs/architecture.md`
 - **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
   `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
   read the same cases. Not a product crate; nothing depends on it outside

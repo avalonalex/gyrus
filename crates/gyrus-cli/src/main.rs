@@ -79,6 +79,12 @@ struct Cli {
     #[cfg(feature = "jit")]
     #[arg(long, conflicts_with_all = ["debug", "trace"])]
     jit: bool,
+
+    /// Treat the file as macro source whatever it is called. Expansion is
+    /// chosen by the `.bfm` extension otherwise, which a temporary file or a
+    /// process substitution has no way to carry.
+    #[arg(long)]
+    r#macro: bool,
 }
 
 /// Which engine runs the program.
@@ -115,6 +121,27 @@ impl Mode {
     }
 }
 
+/// Why a program could not be loaded or run.
+///
+/// A macro error is not a `BfError` and never will be -- `gyrus` knows nothing
+/// about macros -- but a loader whose signature promises to return its
+/// failures must not exit from inside itself instead. This is the two of them
+/// in one type, so `?` works and `main` does the reporting.
+enum Failure {
+    Bf(BfError),
+    Macro {
+        error: gyrus_macro::MacroError,
+        /// The macro source, which is what its caret is drawn against.
+        source: String,
+    },
+}
+
+impl From<BfError> for Failure {
+    fn from(error: BfError) -> Self {
+        Failure::Bf(error)
+    }
+}
+
 /// A program ready to run.
 struct Program {
     instructions: Vec<Instruction>,
@@ -129,7 +156,7 @@ struct Program {
 /// A `.bfm` is expanded first, and its debug symbols are rewritten to name the
 /// macro source -- which is the whole point of the format, and the reason it
 /// never runs on the engine that discards them.
-fn load(path: &std::path::Path, mode: Mode) -> Result<Program, BfError> {
+fn load(path: &std::path::Path, mode: Mode, expanding: bool) -> Result<Program, Failure> {
     let text = fs::read_to_string(path).map_err(|source| BfError::FileError {
         path: path.to_path_buf(),
         source,
@@ -140,7 +167,7 @@ fn load(path: &std::path::Path, mode: Mode) -> Result<Program, BfError> {
         ),
     })?;
 
-    if !is_macro_source(path) {
+    if !expanding {
         // MultipleBracketErrors carries every error and formats them all, so
         // it needs no special case here.
         let (instructions, debug_info) = match mode.wants_symbols() {
@@ -154,27 +181,55 @@ fn load(path: &std::path::Path, mode: Mode) -> Result<Program, BfError> {
         });
     }
 
-    let expansion = gyrus_macro::expand(&text).unwrap_or_else(|e| {
-        eprintln!("{}", e.format_with_source(&text));
-        std::process::exit(1);
-    });
+    // Symbols are unconditional here, and the mode is the reason: a macro
+    // program only ever runs on an engine that keeps them. Asserting it ties
+    // the two together, since the guarantee itself lives in `run`'s mode
+    // resolution, in another function.
+    debug_assert!(
+        mode.wants_symbols(),
+        "a macro program was about to run on an engine that discards its symbols"
+    );
+
+    let expansion = gyrus_macro::expand(&text).map_err(|error| Failure::Macro {
+        error,
+        source: text.clone(),
+    })?;
     let (instructions, expanded) = parse_with_debug(expansion.brainfuck())?;
     Ok(Program {
         instructions,
-        // Rewritten to name the `.bfm`. Always, because a `.bfm` never runs on
-        // the mode that would throw them away.
+        // Rewritten to name the `.bfm`.
         debug_info: Some(expansion.remap(&expanded)),
         source: text,
     })
 }
 
-fn is_macro_source(path: &std::path::Path) -> bool {
-    path.extension().is_some_and(|extension| extension == "bfm")
+/// Whether to expand this file rather than parse it as BrainFuck.
+///
+/// The comparison is case-insensitive because getting it wrong is silent: a
+/// `.BFM` read as BrainFuck is not an error, it is a *different program* --
+/// every directive becomes a comment and `+{200}` collapses to one `+` -- so
+/// it prints nothing and exits zero. On a case-insensitive filesystem that
+/// made one file behave two ways depending on how its name was typed.
+///
+/// `--macro` is for the cases a name cannot answer at all: a temporary file,
+/// a process substitution, anything not called `.bfm`.
+fn is_macro_source(path: &std::path::Path, forced: bool) -> bool {
+    forced
+        || path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bfm"))
 }
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("{}", e.format_detailed());
+    if let Err(failure) = run() {
+        match failure {
+            Failure::Bf(e) => eprintln!("{}", e.format_detailed()),
+            // Rendered against the macro source, with a caret, the way a parse
+            // error is.
+            Failure::Macro { error, source } => {
+                eprintln!("{}", error.format_with_source(&source))
+            }
+        }
         std::process::exit(1);
     }
 }
@@ -193,7 +248,7 @@ where
     })
 }
 
-fn run() -> Result<(), BfError> {
+fn run() -> Result<(), Failure> {
     let cli = Cli::parse();
 
     #[cfg(feature = "jit")]
@@ -201,26 +256,22 @@ fn run() -> Result<(), BfError> {
     #[cfg(not(feature = "jit"))]
     let asked_for_jit = false;
 
+    let expanding = is_macro_source(&cli.file, cli.r#macro);
     let mode = if cli.trace {
         Mode::Trace
     } else if asked_for_jit {
         Mode::Jit
-    } else if cli.debug || is_macro_source(&cli.file) {
+    } else if cli.debug || expanding {
         Mode::Debug
     } else {
         Mode::Optimized
     };
-    let (use_optimized, use_jit, enable_profiling) = (
-        mode == Mode::Optimized,
-        mode == Mode::Jit,
-        mode == Mode::Trace,
-    );
 
     let Program {
         instructions,
         debug_info,
         source,
-    } = load(&cli.file, mode)?;
+    } = load(&cli.file, mode, expanding)?;
 
     // Parse cell model
     let cell_model = parse_or_exit(
@@ -286,7 +337,7 @@ fn run() -> Result<(), BfError> {
     let mut config = builder.build();
 
     // Create profiler hook if --trace flag is set
-    let profiler_handle = if enable_profiling {
+    let profiler_handle = if mode == Mode::Trace {
         let profiler = Arc::new(Mutex::new(ProfilingHook::new()));
         let profiler_clone = Arc::clone(&profiler);
         config.register_hook(Box::new(SharedProfilingHook::new_with_shared(
@@ -333,7 +384,7 @@ fn run() -> Result<(), BfError> {
     let mut output = StdOutput;
     // The optimized interpreter and the JIT run the same optimized program;
     // it is built once, and reported once, for both.
-    let optimized = if use_optimized || use_jit {
+    let optimized = if matches!(mode, Mode::Optimized | Mode::Jit) {
         let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
         if cli.verbose && !cli.quiet {
             eprintln!("=== Optimization Results ===");
@@ -347,7 +398,7 @@ fn run() -> Result<(), BfError> {
         None
     };
 
-    let stats = if use_optimized {
+    let stats = if mode == Mode::Optimized {
         // OPTIMIZED MODE (default): Fast execution, no tracking
         let optimized = optimized.as_ref().expect("built above");
         match interpret_optimized_with_io(optimized, config, &mut input, &mut output) {
@@ -360,7 +411,7 @@ fn run() -> Result<(), BfError> {
                 std::process::exit(1);
             }
         }
-    } else if use_jit {
+    } else if mode == Mode::Jit {
         #[cfg(feature = "jit")]
         {
             let optimized = optimized.as_ref().expect("built above");
@@ -416,7 +467,7 @@ fn run() -> Result<(), BfError> {
     // Display statistics in verbose mode (unless --quiet)
     if cli.verbose && !cli.quiet {
         eprintln!("=== Execution Statistics ===");
-        if use_jit {
+        if mode == Mode::Jit {
             // The JIT counts loop iterations, nothing finer; see docs/execution-models.md.
             eprintln!(
                 "Total steps executed: {} (loop iterations)",
@@ -432,9 +483,11 @@ fn run() -> Result<(), BfError> {
         eprintln!("Bytes read: {}", stats.bytes_read);
         eprintln!("Bytes written: {}", stats.bytes_written);
 
-        // If debug mode is enabled (not trace-only), show where execution completed
-        if !enable_profiling
-            && cli.debug
+        // Where execution completed, when the mode kept enough to say. Asked
+        // of the mode rather than of `--debug`: a `.bfm` runs in Debug mode
+        // without the flag, and this was the one reader still consulting the
+        // flag, so it silently printed nothing for every macro program.
+        if mode == Mode::Debug
             && let Some(ref debug_info) = debug_info
         {
             let total_instructions = debug_info.len();

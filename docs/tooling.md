@@ -41,10 +41,14 @@ mostly prose and declarations, so that would say more about how well it is
 commented than about what expanding it did.
 
 ```
-  Instructions written: 37
+  Instructions written: 23
   Instructions emitted: 737
-  Expansion:            19.9x
+  Expansion:            32.0x
 ```
+
+Expanding over the macro source is refused rather than done — `-o prog.bf` is
+one character away from `-o prog.bfm`, and the second would replace a
+hand-written program with generated BrainFuck.
 
 ## Program Validation
 

@@ -175,7 +175,11 @@ enum Commands {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("Error: {}", e);
+        // `format_detailed` rather than `{}`: it prints the hint the error
+        // carries and the io::Error underneath it, both of which the bare
+        // Display drops -- so a failed write reported only its path and not
+        // why it failed.
+        eprintln!("{}", e.format_detailed());
         std::process::exit(1);
     }
 }
@@ -239,6 +243,34 @@ fn run() -> Result<(), BfError> {
         } => run_optimize(file, theme, plain, &cell_model),
     }
 }
+/// Whether two paths name the same file, as far as the filesystem will say.
+///
+/// Falls back to comparing the paths when either cannot be canonicalized --
+/// an output file that does not exist yet, most obviously.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Read a source file, or say why not.
+///
+/// The same six lines were written at each subcommand that reads one, and had
+/// already drifted: the newest copy carried a different hint from its
+/// neighbours, so the error text varied by subcommand for no reason.
+fn read_source(file: &std::path::Path) -> Result<String, BfError> {
+    fs::read_to_string(file).map_err(|source| BfError::FileError {
+        path: file.to_path_buf(),
+        source,
+        hint: format!(
+            "Make sure the file exists and you have permission to read it. \
+             Current path: {}",
+            file.display()
+        ),
+    })
+}
+
 /// Expand a macro program into BrainFuck.
 ///
 /// The counterpart to running one: `gyrus prog.bfm` expands and executes in a
@@ -247,11 +279,7 @@ fn run() -> Result<(), BfError> {
 /// checking that a `.bfm` expands at all, since anything wrong with it is
 /// reported here rather than at run time.
 fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {
-    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
-        path: file.clone(),
-        source: source_err,
-        hint: "Make sure the file exists and you have permission to read it.".to_string(),
-    })?;
+    let source = read_source(&file)?;
 
     // A macro error is rendered against the macro source, with a caret, the
     // way a parse error is. It is not a `BfError`, so it is reported and
@@ -268,7 +296,16 @@ fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(
         // comparing its size to the output says more about how well it is
         // commented than about what the macros did. What they did is expand
         // the instructions somebody typed into more of them.
-        let written = source.chars().filter(|c| "+-<>[],.".contains(*c)).count();
+        //
+        // Only the code part of each line. Counting the whole file counted
+        // every sentence-ending '.' and every ',' in the prose as an
+        // instruction, which reported hello_world.bfm as a 0.9x expansion --
+        // impossible, since every written instruction emits at least itself.
+        let written: usize = source
+            .lines()
+            .map(|line| line.split('*').next().unwrap_or(""))
+            .map(|code| code.chars().filter(|c| "+-<>[],.".contains(*c)).count())
+            .sum();
         let emitted = brainfuck.len();
         eprintln!("Expanded {}", file.display());
         eprintln!("  Macro source:        {} bytes", source.len());
@@ -285,10 +322,36 @@ fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(
 
     match output {
         Some(path) => {
-            fs::write(&path, format!("{brainfuck}\n")).map_err(|source| BfError::FileError {
-                path: path.clone(),
+            // Refused rather than done: the source was read into memory, so
+            // this would succeed and replace the only copy of a hand-written
+            // program with generated BrainFuck. `-o prog.bf` is one character
+            // away.
+            if same_file(&file, &path) {
+                return Err(BfError::ConfigurationError {
+                    message: format!(
+                        "{} is the macro source; expanding over it would destroy it",
+                        path.display()
+                    ),
+                });
+            }
+            // `FileError` says "Failed to read source file", which this is
+            // not. Writing the newline separately rather than through a
+            // `format!` also spares a second copy of an expansion that is the
+            // one thing this tool is meant to make large.
+            let mut out = fs::File::create(&path).map_err(|source| BfError::IoError {
+                operation: format!("creating {}", path.display()),
+                instruction_index: None,
                 source,
-                hint: "Check that the directory exists and is writable.".to_string(),
+            })?;
+            let write = |out: &mut fs::File| -> std::io::Result<()> {
+                use std::io::Write;
+                out.write_all(brainfuck.as_bytes())?;
+                out.write_all(b"\n")
+            };
+            write(&mut out).map_err(|source| BfError::IoError {
+                operation: format!("writing {}", path.display()),
+                instruction_index: None,
+                source,
             })?;
             if verbose {
                 eprintln!("Written to {}", path.display());

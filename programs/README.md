@@ -64,8 +64,6 @@ gyrus programs/macros/scan.bfm              # expand and run
 gyrus-tool expand programs/macros/scan.bfm  # just the BrainFuck
 ```
 
-There is no `gyrus`-side way to run these yet; they go through the library.
-
 ### `third-party/advanced/` - Complex Programs
 
 Sophisticated BrainFuck programs by other authors, used as a correctness and
