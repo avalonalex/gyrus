@@ -153,7 +153,7 @@ kind of result. `lib/wide.bfm`'s multiply comment named the idea:
 `@signed_multiply` adds `b` to nothing `a` times, costing the *value* of `a`,
 where doubling and adding would cost the number of digits instead. It was
 built, checked against the naive one on twelve products, and measured on
-`mandelbrot.bfm` — **91,513,283 steps became 227,244,885**, 2.5x worse.
+`mandelbrot.bfm` — **91,513,283 steps became 227,244,885**, 2.5x the steps.
 Reverted.
 
 The reason is a floor. Eight rounds happen whatever the numbers are, and each
@@ -189,9 +189,33 @@ they replace. In `.bfm` the cursor is as expensive as the arithmetic.
 Step counts here are the optimized interpreter on expanded BrainFuck
 (`gyrus-tool expand`, then `gyrus --verbose`); the tree-walker a `.bfm` gets by
 default reports 171x more for the same multiply, so the engine has to be named
-for the numbers to mean anything. Every naive figure above reproduces. The two
-double-and-add figures are as measured at the time and cannot be re-derived:
-the spike was reverted and not kept.
+for the numbers to mean anything. A step is not a fixed amount of work either:
+the optimizer collapses a whole loop into one, so the ratio between the two
+engines runs from 8x on `+++++[-]` to 171x on this multiply. Comparing two
+*algorithms* by step count is therefore weaker than a stopwatch, and 2.5x the
+steps is not the same claim as 2.5 times the seconds — it is the claim the
+surviving evidence supports. Every naive figure above reproduces; the two
+double-and-add figures are as measured at the time and cannot be re-derived,
+because the spike was reverted and not kept.
+
+### Peephole folding of expanded `.bfm`: the fold already happened
+
+The expander emits BrainFuck, so the obvious next thought is a peephole pass
+over its output — cancel every `><`, `<>`, `+-`, `-+`, to fixpoint. Run across
+all nineteen programs in `programs/macros/`, 150,795 emitted instructions, it
+removes **24 characters**, and seventeen of the nineteen offer none at all.
+The 24 are all inside `[><]`: an empty-body loop on a cell a preceding `[-]`
+has just zeroed, so they never execute.
+
+There is nothing to find because the fold already happened. `@to` emits
+movement computed from the statically tracked cursor, so a `>` is never
+followed by a `<` — the cursor tracking *is* the constant fold, done at
+emission rather than after it.
+
+The neighbouring idea fails on cost rather than on frequency. Eliding
+`@clear(x)` where `x` is provably zero would fire often, because clearing
+defensively is the library idiom, but `[-]` on a cell already at zero is **one
+step** on both engines.
 
 ## The finding
 
