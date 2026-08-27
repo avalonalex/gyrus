@@ -25,11 +25,11 @@
 *         print(f"{n} Bottle{'' if n == 1 else 's'} of beer on the wall")
 *         print()
 *
-* The words are `@print`, which asks `gyrus`'s codegen for the shortest way
+* The words are `@text`, which asks `gyrus`'s codegen for the shortest way
 * from each byte to the next -- about ten instructions a character where
 * setting a cell from empty costs a hundred. That took the program from 11,556
 * instructions to 3,958 without changing a byte of what it prints. It needs
-* somewhere to make a mess, which is what `page` is: `@print` walks right from
+* somewhere to make a mess, which is what `page` is: `@text` walks right from
 * wherever the cursor is, and every cell it walks over is emptied and then
 * left holding whatever the printing left.
 *
@@ -45,8 +45,9 @@
 @var tens
 @var ones
 
-@var out          * the cell every character is printed through
-@var page at 40   * where `@print` is allowed to make a mess
+@var out          * the digits and the plural are printed through this;
+                  * the words go through `page`, which `@text` needs
+@var page at 40   * where `@text` is allowed to make a mess
 @var plural       * whether this verse says "bottles"
 @var left         * verses still to sing
 @var borrow       * set while a decrement is still owed to the tens
@@ -124,7 +125,7 @@
     ]
 
     @to page
-    @print " Bottle"
+    @text " Bottle"
     @to plural
     [
         @say(out, 's')
@@ -134,17 +135,17 @@
 
 @macro of_beer {
     @to page
-    @print " of beer"
+    @text " of beer"
 }
 
 @macro on_the_wall {
     @to page
-    @print " on the wall"
+    @text " on the wall"
 }
 
 @macro take_one_down {
     @to page
-    @print "Take one down and pass it around"
+    @text "Take one down and pass it around"
 }
 
 

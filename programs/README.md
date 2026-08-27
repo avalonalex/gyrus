@@ -72,7 +72,7 @@ file.
   a number printed without a leading zero, and "bottle" against "bottles":
   three branches in a language that has none, each written once as a named
   macro. 3,958 instructions against that program's 1,762 — it was 11,556 until
-  the words became `@print`, which asks the same codegen `gyrus-tool compile`
+  the words became `@text`, which asks the same codegen `gyrus-tool compile`
   uses for the shortest way from each byte to the next.
 
 - **`factor.bfm`** - the prime factors of 13911, which is 3 times 4637. The

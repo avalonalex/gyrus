@@ -40,7 +40,7 @@
 //!   The `{` goes on the invocation's own line, because a directive owns the
 //!   rest of its line and nothing more -- an invocation with the brace on the
 //!   next line is an invocation with one argument missing, and is told so.
-//! - `@print "text"` -- the instructions that print it, from `gyrus`'s
+//! - `@text "..."` -- the instructions that print it, from `gyrus`'s
 //!   codegen: about ten a character, where setting a cell from empty costs a
 //!   hundred. It empties the cells it walks over and puts the cursor back.
 //! - `@repeat N { ... }` -- the body, N times, counted when the program is
@@ -437,6 +437,10 @@ struct Scanner {
     /// The root file, then every file included so far, in buffer order. Never
     /// empty: the source being expanded is the first entry.
     files: Vec<SourceFile>,
+    /// What each `@text` compiled to, kept because a `@text` in a macro body
+    /// is compiled once per invocation otherwise, and the answer cannot
+    /// change.
+    compiled: HashMap<String, Rc<str>>,
     /// How many `@include` scans are in flight. An included file declares and
     /// does not emit, so this is also "is emitting an error right now".
     including: usize,
@@ -493,6 +497,7 @@ impl Scanner {
     fn rooted(source: &str, path: Option<PathBuf>) -> Self {
         let chars: Vec<char> = source.chars().collect();
         Self {
+            compiled: HashMap::new(),
             files: vec![SourceFile {
                 named: path.clone(),
                 path,
@@ -750,7 +755,7 @@ impl Scanner {
     ///
     /// The quotes are why this is shared rather than written at each of the
     /// three places that read a value. `@define SPACE ' '` ends its token on a
-    /// space, `@print(',')` on a comma and `+{'}'}` on a brace -- each of them
+    /// space, `@text(',')` on a comma and `+{'}'}` on a brace -- each of them
     /// the delimiter that reader would otherwise stop at, and each of them the
     /// obvious thing to write.
     fn token(&mut self, ends: impl Fn(char) -> bool) -> String {
@@ -837,7 +842,7 @@ impl Scanner {
         // than whatever invoked the macro holding it.
         if self.including > 0 {
             return Err(MacroError::IncludedFileEmits {
-                instruction: c,
+                what: format!("'{c}'"),
                 location: origin,
             });
         }
@@ -887,7 +892,7 @@ impl Scanner {
     }
 
     /// The same, for a bracket that is not in the source: everything about a
-    /// loop except reading it. `@print` emits code nobody typed, and its
+    /// loop except reading it. `@text` emits code nobody typed, and its
     /// multiplication loops have to open and close on the same stack as the
     /// ones somebody did type, or the balance rules would not see them.
     fn bracket_at(&mut self, c: char, origin: SourceLocation) -> Result<(), MacroError> {
@@ -1153,7 +1158,7 @@ impl Scanner {
             Some(Directive::Endif) => self.endif(location),
             Some(Directive::Include) => self.include(location),
             Some(Directive::Repeat) => self.repeat(location),
-            Some(Directive::Print) => self.print(location),
+            Some(Directive::Text) => self.text(location),
             // Not a directive, so it may be a macro -- checked after the
             // directives, so no macro can shadow one, and a name that is
             // neither is reported as what it looks like.
@@ -1339,9 +1344,17 @@ impl Scanner {
         self.refuse_inside_a_macro(Directive::Include, location)?;
         let named = self.quoted_operand(
             Directive::Include.spelling(),
+            "path",
             "expected a quoted path, as in `@include \"lib.bfm\"`",
             location,
         )?;
+        if named.is_empty() {
+            return Err(malformed(
+                Directive::Include.spelling(),
+                "the path is empty".to_string(),
+                location,
+            ));
+        }
         self.end_of_directive(Directive::Include)?;
 
         // Relative to the file that wrote the `@include`, not to the process's
@@ -1434,6 +1447,7 @@ impl Scanner {
     fn quoted_operand(
         &mut self,
         name: &str,
+        noun: &str,
         expected: &str,
         location: SourceLocation,
     ) -> Result<String, MacroError> {
@@ -1446,15 +1460,12 @@ impl Scanner {
         if !closed {
             return Err(malformed(
                 name,
-                "the path is never closed: a `\"` opens one and a `\"` ends it".to_string(),
+                format!("the {noun} is never closed: a `\"` opens one and a `\"` ends it"),
                 location,
             ));
         }
         let named: String = self.chars[opens + 1..end - 1].iter().collect();
         self.advance_on_line(end);
-        if named.is_empty() {
-            return Err(malformed(name, "the path is empty".to_string(), location));
-        }
         Ok(named)
     }
 
@@ -1679,13 +1690,13 @@ impl Scanner {
         self.enter(name, def, arguments, location)
     }
 
-    /// `@print "text"` -- the instructions that print it, and nothing else.
+    /// `@text "..."` -- the instructions that print it, and nothing else.
     ///
     /// Printing a string was the most expensive thing a `.bfm` could do.
     /// `@say(out, 'B')` empties a cell and counts it up to 66, which is about
-    /// a hundred instructions a character; that is most of why the corpus's
-    /// `99bottles.bfm` is six and a half times the size of the program it
-    /// matches. `gyrus`'s `codegen` has done this properly all along -- a
+    /// a hundred instructions a character; that was most of why the corpus's
+    /// `99bottles.bfm` was six and a half times the size of the program it
+    /// matches byte for byte, and it is 2.2 times now. `gyrus`'s `codegen` has done this properly all along -- a
     /// table of the shortest way from any byte to any other, including
     /// multiplication loops, at around ten instructions a character -- and
     /// nothing connected the two.
@@ -1697,42 +1708,59 @@ impl Scanner {
     /// which is the one thing a directive can promise here and the one thing
     /// a program needs.
     ///
-    /// `\n`, `\t` and `\\` mean what they mean everywhere. A `"` cannot
-    /// appear, because the rule that finds the end of the string is the one
-    /// `@include` uses on paths, where a backslash is a separator and not an
-    /// escape.
-    fn print(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+    /// Escapes are the ones a `'x'` literal takes, from the same table: `\n`,
+    /// `\t`, `\r`, `\0`, `\\` and `\'`. Anything else is refused rather than
+    /// passed through, so a `\r` cannot quietly come out as two characters
+    /// here while meaning a carriage return one line above.
+    ///
+    /// A `"` cannot appear at all, because the rule that finds the end of the
+    /// text is the one `@include` uses on paths, where a backslash is a
+    /// separator and not an escape.
+    fn text(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        // Before generating anything, so the refusal names the directive
+        // rather than the first bracket of code nobody wrote.
+        if self.including > 0 {
+            return Err(MacroError::IncludedFileEmits {
+                what: "'@text'".to_string(),
+                location,
+            });
+        }
+        let name = Directive::Text.spelling();
         let text = self.quoted_operand(
-            Directive::Print.spelling(),
-            "expected quoted text, as in `@print \"Hello\"`",
+            name,
+            "text",
+            "expected quoted text, as in `@text \"Hello\"`",
             location,
         )?;
-        self.end_of_directive(Directive::Print)?;
+        self.end_of_directive(Directive::Text)?;
 
         let mut decoded = String::with_capacity(text.len());
         let mut chars = text.chars();
         while let Some(c) = chars.next() {
-            match (c, chars.clone().next()) {
-                ('\\', Some('n')) => {
-                    decoded.push('\n');
-                    chars.next();
-                }
-                ('\\', Some('t')) => {
-                    decoded.push('\t');
-                    chars.next();
-                }
-                ('\\', Some('\\')) => {
-                    decoded.push('\\');
-                    chars.next();
-                }
-                _ => decoded.push(c),
+            if c != '\\' {
+                decoded.push(c);
+                continue;
             }
+            let after = chars.next().ok_or_else(|| {
+                malformed(name, "nothing follows the backslash".to_string(), location)
+            })?;
+            decoded.push(escape(after).map_err(|detail| malformed(name, detail, location))?);
         }
 
-        let code = gyrus::codegen::compile_string(&decoded);
+        if decoded.is_empty() {
+            return Ok(());
+        }
+        let code = match self.compiled.get(&decoded) {
+            Some(code) => Rc::clone(code),
+            None => {
+                let code: Rc<str> = gyrus::codegen::compile_string(&decoded).into();
+                self.compiled.insert(decoded, Rc::clone(&code));
+                code
+            }
+        };
         // How far right it goes, and where it stops: both are known now, which
         // is what lets the cursor be put back and the tracking stay honest.
-        let (mut at, mut reach) = (0i64, 0i64);
+        let (mut at, mut reach, mut lowest) = (0i64, 0i64, 0i64);
         for c in code.chars() {
             match c {
                 '>' => at += 1,
@@ -1740,6 +1768,43 @@ impl Scanner {
                 _ => {}
             }
             reach = reach.max(at);
+            lowest = lowest.min(at);
+        }
+
+        // Two things are relied on and neither is written down in `codegen`:
+        // that it never steps left of where it started, and that it does not
+        // finish left of it either. Both hold because every multiplication
+        // loop it builds is `[-d>+n<]>`. If one stopped holding, the cells to
+        // the left would be used without being emptied -- the table needs
+        // them at zero -- and the cursor would be left somewhere the expander
+        // thinks it is not, which is worse than either.
+        assert!(
+            lowest >= 0 && at >= 0,
+            "codegen walked left of where it started: reached {lowest}, ended {at}"
+        );
+
+        // Nothing but the cursor's own cell may be in the way. The generated
+        // code assumes every cell it touches starts at zero, so those cells
+        // are emptied below -- and emptying a cell somebody named is the kind
+        // of wrong that produces a different answer rather than an error. How
+        // far it reaches depends on the text, so a longer string would
+        // silently take out more.
+        if let Position::Known(from) = self.position {
+            let taken: Vec<&String> = self
+                .defined
+                .iter()
+                .filter(|name| match self.symbols.get(*name) {
+                    Some((Symbol::Variable(cell), _)) => *cell > from && *cell <= from + reach,
+                    _ => false,
+                })
+                .collect();
+            if let Some(name) = taken.first() {
+                return Err(MacroError::TextOverAName {
+                    name: (*name).clone(),
+                    reach: reach as usize,
+                    location,
+                });
+            }
         }
 
         // Empty what it is about to use. The table assumes every cell it
@@ -1749,11 +1814,12 @@ impl Scanner {
         for _ in 0..=reach {
             prologue.push_str("[-]>");
         }
-        prologue.push_str(&"<".repeat((reach + 1) as usize));
-
         self.emit_generated(&prologue, location)?;
+        self.emit_run('<', (reach + 1) as u64, location)?;
         self.emit_generated(&code, location)?;
-        self.emit_generated(&"<".repeat(at.max(0) as usize), location)
+        // Back to where it started. A run of one character, so it goes through
+        // the bulk path rather than one call per step.
+        self.emit_run('<', at as u64, location)
     }
 
     /// Instructions the expander made rather than read, all reporting the
@@ -2466,6 +2532,25 @@ fn classify(token: &str) -> Operand<'_> {
 /// and the file is UTF-8. Accepting it would make the rule "characters that
 /// fit work", when only the half that round-trips does. A byte above 127 can
 /// still be written as a number, where nobody expects it to be a letter.
+/// What a backslash and a character mean together.
+///
+/// One table, because there are two readers of it: a `'x'` literal and the
+/// text of a `@text`. They had different tables for one commit, and `\r` in a
+/// `@text` came out as a backslash and an `r` while the same escape one line
+/// above gave a carriage return -- which is the shape of bug `lex.rs` counts
+/// its readers to avoid.
+fn escape(after: char) -> Result<char, String> {
+    match after {
+        'n' => Ok('\n'),
+        't' => Ok('\t'),
+        'r' => Ok('\r'),
+        '0' => Ok('\0'),
+        '\\' => Ok('\\'),
+        '\'' => Ok('\''),
+        other => Err(format!("\\{other} is not an escape this understands")),
+    }
+}
+
 fn character(token: &str) -> Result<u8, String> {
     let body = token
         .strip_prefix('\'')
@@ -2479,15 +2564,7 @@ fn character(token: &str) -> Result<u8, String> {
         })?;
     let mut chars = body.chars();
     let value = match chars.next().ok_or("it is empty")? {
-        '\\' => match chars.next().ok_or("nothing follows the backslash")? {
-            'n' => '\n',
-            't' => '\t',
-            'r' => '\r',
-            '0' => '\0',
-            '\\' => '\\',
-            '\'' => '\'',
-            other => return Err(format!("\\{other} is not an escape this understands")),
-        },
+        '\\' => escape(chars.next().ok_or("nothing follows the backslash")?)?,
         plain => plain,
     };
     if chars.next().is_some() {
@@ -2605,8 +2682,8 @@ mod tests {
                 "column disagrees with offset at byte {offset}"
             );
 
-            // `@to` and a macro invocation are the two constructs that emit
-            // instructions nobody wrote, so their bytes point at the
+            // `@to`, `@text` and a macro invocation are the constructs that
+            // emit instructions nobody wrote, so their bytes point at the
             // directive. Everything else still points at itself.
             if chars[origin.offset] != '@' {
                 assert_eq!(
@@ -2630,6 +2707,14 @@ mod tests {
                 Directive::from_spelling(&spelling).is_some_and(Directive::emits),
                 "byte {offset} points at @{spelling}, which does not emit"
             );
+            // A `@text` emits whatever the shortest way to print its string
+            // turns out to be, so there is nothing to say about which
+            // instruction a byte of it was -- only that it is credited to the
+            // directive, which is checked above.
+            let directive = Directive::from_spelling(&spelling).expect("checked just above");
+            if !directive.emits_only_movement() {
+                continue;
+            }
             assert!(
                 emitted == '>' || emitted == '<',
                 "@to emitted {emitted:?}, which is not a move"
@@ -2768,6 +2853,7 @@ mod tests {
     #[test]
     fn origins_are_exact_for_every_shape_the_expander_emits() {
         assert_origins_are_exact("@define X 65\n+{X}.\n");
+        assert_origins_are_exact("@var page\n@to page\n@text \"Hi\"\n");
         assert_origins_are_exact("+{3}[>{2}-{4}<{2}]>.\n");
         assert_origins_are_exact("* prose\n\n  +  \n  [ - ]  \n,.\n");
         assert_origins_are_exact("+ prose with @ and no directive\n[-]\n");
@@ -4144,9 +4230,9 @@ mod blocks {
     /// Printed text costs about a tenth of what setting a cell costs, and the
     /// cursor comes back to where it started so a program can carry on.
     #[test]
-    fn print_is_cheaper_than_setting_a_cell_at_a_time() {
+    fn text_is_cheaper_than_setting_a_cell_at_a_time() {
         let spelled = expanded("@var out\n@to out\n+{72}\n.\n[-]+{105}\n.\n");
-        let printed = expanded("@print \"Hi\"\n");
+        let printed = expanded("@text \"Hi\"\n");
         assert!(
             printed.len() * 2 < spelled.len(),
             "printed {} against {} spelled out",
@@ -4154,16 +4240,30 @@ mod blocks {
             spelled.len()
         );
 
-        // Two cells named after a print still mean what they meant.
+        // The cursor comes back, so a cell named before the text still means
+        // what it meant. `page` is declared last, which is what a text needs:
+        // room after it that nobody has named.
         assert_eq!(
-            expanded("@var a at 0\n@var b at 1\n@print \"x\"\n@to b\n+\n"),
-            format!("{}>+", expanded("@print \"x\"\n"))
+            expanded("@var a at 0\n@var page at 1\n@to page\n@text \"x\"\n@to a\n+\n"),
+            format!(">{}<+", expanded("@text \"x\"\n"))
+        );
+    }
+
+    /// A text runs over the cells after the cursor, and emptying one somebody
+    /// named is a wrong answer rather than an error -- so it is an error.
+    #[test]
+    fn text_refuses_to_run_over_a_named_cell() {
+        let error =
+            expand("@var out at 0\n@var flag at 3\n@to out\n@text \"Hello world\"\n").unwrap_err();
+        assert!(
+            matches!(&error, MacroError::TextOverAName { name, .. } if name == "flag"),
+            "{error:?}"
         );
     }
 
     #[test]
-    fn print_says_what_it_wanted() {
-        for source in ["@print\n", "@print Hello\n", "@print \"unclosed\n"] {
+    fn text_says_what_it_wanted() {
+        for source in ["@text\n", "@text Hello\n", "@text \"unclosed\n"] {
             let error = expand(source).unwrap_err();
             assert!(
                 matches!(error, MacroError::MalformedDirective { .. }),

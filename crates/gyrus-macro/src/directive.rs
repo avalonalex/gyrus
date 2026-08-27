@@ -22,7 +22,7 @@ pub(crate) enum Directive {
     Macro,
     Include,
     Repeat,
-    Print,
+    Text,
     Ifdef,
     Ifndef,
     Endif,
@@ -39,7 +39,7 @@ impl Directive {
         Directive::Macro,
         Directive::Include,
         Directive::Repeat,
-        Directive::Print,
+        Directive::Text,
         Directive::Ifdef,
         Directive::Ifndef,
         Directive::Endif,
@@ -56,7 +56,7 @@ impl Directive {
             Directive::Macro => "macro",
             Directive::Include => "include",
             Directive::Repeat => "repeat",
-            Directive::Print => "print",
+            Directive::Text => "text",
             Directive::Ifdef => "ifdef",
             Directive::Ifndef => "ifndef",
             Directive::Endif => "endif",
@@ -85,6 +85,14 @@ impl Directive {
     /// this loses the attribute rather than gaining a second copy.
     #[cfg(test)]
     pub(crate) fn emits(self) -> bool {
+        matches!(self, Directive::To | Directive::Text)
+    }
+
+    /// Whether what it emits is movement and nothing else. `@to` only ever
+    /// moves; `@text` emits whatever the shortest way to print its string
+    /// turns out to be, which is most of the alphabet.
+    #[cfg(test)]
+    pub(crate) fn emits_only_movement(self) -> bool {
         matches!(self, Directive::To)
     }
 

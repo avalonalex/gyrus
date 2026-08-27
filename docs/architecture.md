@@ -158,9 +158,9 @@ and `@to` (named cells, with the cursor tracked and the movement emitted),
 `@here` (assert a position without moving), `@macro` with parameters, and
 `@ifdef`/`@ifndef`/`@endif` (a branch not taken is never expanded, so it may
 hold names and brackets that would be errors in one that is, and a body's test
-is made against the scope it is expanded into), `@include`, `@repeat N { ... }`, and `@print "text"`.
+is made against the scope it is expanded into), `@include`, `@repeat N { ... }`, and `@text "text"`.
 
-**`@print` is the one directive that asks another crate to write the
+**`@text` is the one directive that asks another crate to write the
 BrainFuck.** `gyrus`'s `codegen` has always known the shortest way from one
 byte to the next — a table built by dynamic programming, including
 multiplication loops, at around ten instructions a character — and until now

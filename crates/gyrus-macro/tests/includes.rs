@@ -76,13 +76,7 @@ fn an_included_file_declares_and_does_not_emit() {
 
     let failure = expand_file(&main).unwrap_err();
     assert!(
-        matches!(
-            failure.error,
-            MacroError::IncludedFileEmits {
-                instruction: '+',
-                ..
-            }
-        ),
+        matches!(&failure.error, MacroError::IncludedFileEmits { what, .. } if what == "'+'"),
         "{:?}",
         failure.error
     );
