@@ -337,6 +337,24 @@ fn loops_and_branches_read_as_loops_and_branches() {
     assert_eq!(printed, "[*** - [***** \n====\n");
 }
 
+/// Numbers that can be below zero, which a cell cannot hold.
+///
+/// Addition has four cases once a value has a sign, and a fifth that only a
+/// sweep finds: two sizes that cancel used to leave a negative zero, which
+/// compared unequal to zero. Two hundred operations agree with Python; these
+/// nine are the ones a reader can check by eye.
+#[test]
+fn signed_values_add_and_subtract() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/signed.bfm");
+    let source = read("programs/macros/signed.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (_, printed) = run_expansion(&expansion, 5_000_000);
+    assert_eq!(printed, "+8 -8 +2 -2 +0 +2 -2 -5 +7 \n");
+    assert_origins_name_the_program(&expansion, &source);
+}
+
 /// The idioms nothing else in the corpus calls.
 ///
 /// `multiply`, `equal`, `less` and `swap` came out of the catalogue with the

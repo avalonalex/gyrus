@@ -1,0 +1,151 @@
+* Numbers that can be negative.
+*
+* A cell counts from zero upwards and has no room for a sign, so a signed
+* value here is *two* cells: `sign`, which is 1 when the value is negative and
+* 0 when it is not, and `size`, which is how far from zero it is. A program
+* says `@signed_add(x_sign, x_size, c_sign, c_size)` and never has to remember
+* which is which.
+*
+* Sign and size rather than the wrapping arithmetic a machine uses, for one
+* reason: multiplication. Multiplying two wrapped numbers means pulling the
+* sign back out of each of them first, which costs a comparison against 128
+* every time; multiplying these is multiplying the sizes and asking whether
+* the signs agree. Addition pays for that -- it has a case for signs that
+* agree and a case for signs that do not -- and addition is the cheaper thing
+* to make awkward.
+*
+* Zero is written with a positive sign, and every answer is put back that way
+* before it is handed over. Two places would otherwise produce a negative
+* zero: `@signed_negate`, which leaves zero alone rather than flipping it, and
+* `@signed_add`, whenever two sizes cancel and the first was negative. The
+* second is the one a sweep found -- `-1 + 1` came out as a zero that compared
+* unequal to zero.
+*
+* **This file owns cells 20 to 33**, the way `lib/fast.bfm` owns 0 to 19. The
+* alternative is a macro with fourteen parameters, most of them scratch, which
+* is not a library anybody would use. Two `at`s naming one cell are allowed on
+* purpose, so nothing will tell you if a program pins one of these; pin nothing
+* below 34 in a program that includes this file.
+
+@include "idioms.bfm"
+
+@var s_agree at 20
+@var s_smaller at 21
+@var s_keep at 22
+@var s_keep2 at 23
+@var s_count at 24
+@var s_step at 25
+@var s_passed at 26
+@var s_flag at 27
+@var s_other at 28
+@var s_scratch at 29
+@var s_spare at 30
+@var s_sign at 31
+@var s_size at 32
+@var s_tmp at 33
+
+* A signed value from a sign and a size written down.
+*
+*     sign, size = s, m
+@macro signed_put(sign, size, s, m) {
+    @put(sign, s)
+    @put(size, m)
+}
+
+* The same value the other way up. Zero has no other way up, so it is left as
+* it is -- otherwise nothing would compare equal to it.
+*
+*     if size:
+*         sign = 1 - sign
+@macro signed_negate(sign, size) {
+    @is_not_zero(size, s_flag, s_scratch, s_spare)
+    @to s_flag
+    [
+        @is_zero(sign, s_other, s_scratch, s_spare)
+        @clear(sign)
+        @to s_other
+        [
+            @put(sign, 1)
+            @clear(s_other)
+        ]
+        @clear(s_flag)
+    ]
+}
+
+* `a` gains `b`; `b` keeps its value.
+*
+*     if a_sign == b_sign:          # the same way: the sizes add
+*         a_size += b_size
+*     elif a_size < b_size:         # facing off, and b wins
+*         a_sign, a_size = b_sign, b_size - a_size
+*     else:                         # facing off, and a wins
+*         a_size -= b_size
+@macro signed_add(a_sign, a_size, b_sign, b_size) {
+    @clear(s_agree)
+    @copy(a_sign, s_agree, s_spare)
+    @equal(s_agree, b_sign, s_scratch, s_spare)
+
+    @when(s_agree, s_flag, s_scratch, s_spare) {
+        @copy(b_size, a_size, s_spare)
+    }
+
+    @unless(s_agree, s_flag, s_scratch, s_spare) {
+        @less(a_size, b_size, s_smaller, s_count, s_step, s_passed, s_flag, s_other, s_scratch, s_spare)
+
+        @when(s_smaller, s_flag, s_scratch, s_spare) {
+            * b is the larger, so the answer faces b's way and is b - a.
+            @clear(s_keep)
+            @copy(b_size, s_keep, s_spare)
+            @to a_size
+            [
+                -
+                @to s_keep
+                -
+                @to a_size
+            ]
+            @clear(a_size)
+            @move(s_keep, a_size)
+            @clear(a_sign)
+            @copy(b_sign, a_sign, s_spare)
+        }
+
+        @unless(s_smaller, s_flag, s_scratch, s_spare) {
+            * a is at least as large, so the answer keeps a's sign.
+            @clear(s_keep)
+            @copy(b_size, s_keep, s_spare)
+            @to s_keep
+            [
+                -
+                @to a_size
+                -
+                @to s_keep
+            ]
+        }
+    }
+    @clear(s_agree)
+
+    * Nothing is negative. Two sizes that cancel would otherwise leave the
+    * sign of whichever was written first.
+    @when_zero_clear_sign(a_sign, a_size)
+}
+
+* Zero, written the one way it is written here.
+@macro when_zero_clear_sign(sign, size) {
+    @is_zero(size, s_tmp, s_scratch, s_spare)
+    @to s_tmp
+    [
+        @clear(sign)
+        @clear(s_tmp)
+    ]
+}
+
+* `a` loses `b`; `b` keeps its value. Adding it the other way up, on a copy,
+* so that `b` is left as it was found.
+@macro signed_sub(a_sign, a_size, b_sign, b_size) {
+    @clear(s_sign)
+    @copy(b_sign, s_sign, s_spare)
+    @clear(s_size)
+    @copy(b_size, s_size, s_spare)
+    @signed_negate(s_sign, s_size)
+    @signed_add(a_sign, a_size, s_sign, s_size)
+}
