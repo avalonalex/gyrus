@@ -37,8 +37,9 @@ warnings you would otherwise get from a program that wraps cells (most of them).
 gyrus programs/macros/records.bfm
 ```
 
-A `.bfm` is macro source: named cells, named record fields, constants and
-macros, which the expander turns into ordinary BrainFuck before running it. It
+A `.bfm` is macro source: named cells, named record fields, constants, macros,
+conditionals and `@include`, which the expander turns into ordinary BrainFuck
+before running it. It
 behaves like any other program, with one difference that matters — a runtime
 error reports the line and column of the `.bfm`, not of the expansion nobody
 wrote.
@@ -55,8 +56,8 @@ than reading it as one — which would not fail, it would quietly be a different
 program.
 
 [The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
-describes what the language is; `programs/macros/` has nine programs written
-in it.
+describes what the language is; `programs/macros/` has ten programs written in
+it, and a library in `lib/` that one of them includes.
 
 ## Pick an execution mode
 

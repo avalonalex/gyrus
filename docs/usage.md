@@ -41,6 +41,12 @@ format is for — so a `.bfm` defaults to `--debug` rather than the optimized
 interpreter, the one engine that cannot name a source position. `--jit` and
 `--trace` work and keep the locations.
 
+A `.bfm` may `@include` another, resolved against the directory holding the
+file that wrote the path — so it does not matter where you run the command
+from, and a file named twice is read once. An included file declares and does
+not emit, nor move the cursor; put instructions in a `@macro` and invoke it
+where you want them.
+
 `gyrus-tool expand` produces the BrainFuck without running it; see
 [Tooling](tooling.md#macro-expansion).
 

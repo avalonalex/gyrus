@@ -70,22 +70,6 @@ impl Directive {
             .find(|d| crate::lex::matches(name, d.spelling()))
     }
 
-    /// Whether the expander implements it. The rest are refused by name
-    /// rather than called unknown, which would be a lie about why they failed.
-    pub(crate) fn implemented(self) -> bool {
-        self.declaration().is_some()
-            || matches!(
-                self,
-                Directive::To
-                    | Directive::Here
-                    | Directive::Stride
-                    | Directive::Macro
-                    | Directive::Ifdef
-                    | Directive::Ifndef
-                    | Directive::Endif
-            )
-    }
-
     /// Whether it can emit instructions nobody wrote literally. Only `@to`
     /// does today.
     ///
@@ -170,10 +154,9 @@ impl Declaration {
 pub(crate) fn understood() -> String {
     let names: Vec<String> = Directive::ALL
         .into_iter()
-        .filter(|d| d.implemented())
         .map(|d| format!("@{}", d.spelling()))
         .collect();
-    let (last, rest) = names.split_last().expect("some directive is implemented");
+    let (last, rest) = names.split_last().expect("the vocabulary is not empty");
     format!(
         "The expander understands {} and {last}, plus repeat counts like +{{N}}.",
         rest.join(", ")
@@ -195,18 +178,17 @@ mod tests {
         assert_eq!(Directive::from_spelling("wibble"), None);
     }
 
+    /// Every name in the vocabulary is in the sentence, because every one of
+    /// them is built. There is no "planned" half any more: `@include` was the
+    /// last one, and the arm that refused a directive by name went with it.
     #[test]
-    fn the_understood_sentence_names_what_is_implemented_and_nothing_else() {
+    fn the_understood_sentence_names_the_whole_vocabulary() {
         let sentence = understood();
         for directive in Directive::ALL {
-            let named = sentence.contains(&format!("@{}", directive.spelling()));
-            assert_eq!(
-                named,
-                directive.implemented(),
-                "@{} is {}named but {}implemented",
-                directive.spelling(),
-                if named { "" } else { "not " },
-                if directive.implemented() { "" } else { "not " }
+            assert!(
+                sentence.contains(&format!("@{}", directive.spelling())),
+                "@{} is missing from: {sentence}",
+                directive.spelling()
             );
         }
     }

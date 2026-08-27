@@ -1,0 +1,15 @@
+* A program that is only the program: the vocabulary comes from a library.
+*
+* `@include` reads another file's declarations here. The path is relative to
+* this file, so where the command is run from cannot change what it means, and
+* a file included twice is read once -- which is what lets two libraries share
+* a third without anybody writing a guard.
+
+@include "lib/ascii.bfm"
+
+@var out
+
+@to out
+@put('h')
+@put('i')
+@put(NL)

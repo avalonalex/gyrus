@@ -34,10 +34,10 @@ the development compiler.
   errors name the `.bfm` rather than the expansion. Written entirely against
   `gyrus`'s public API, as the debugger was. `@define`, `OP{N}`,
   `@var`/`@to`/`@here` with static cursor tracking, `@stride`/`@field` for
-  record-relative addressing, `@macro` with parameters, and
-  `@ifdef`/`@ifndef`/`@endif`. `gyrus` runs a `.bfm` and `gyrus-tool expand`
-  produces the BrainFuck; only `@include` is unbuilt. See
-  `docs/architecture.md`
+  record-relative addressing, `@macro` with parameters,
+  `@ifdef`/`@ifndef`/`@endif`, and `@include` (a library declares; it does not
+  emit). `gyrus` runs a `.bfm` and `gyrus-tool expand` produces the BrainFuck.
+  See `docs/architecture.md`
 - **gyrus-corpus** (`crates/gyrus-corpus/`): test support only — parses
   `programs/test_manifest.toml` so the tree-walker's corpus test and the JIT's
   read the same cases. Not a product crate; nothing depends on it outside
@@ -679,16 +679,24 @@ debug symbols, the string-to-BrainFuck compiler, the program generator, the
 **Not built**: a REPL and an AOT backend on the JIT's translator. Neither has
 code, or anything beyond the idea.
 
-**Being built**: the macro preprocessor (`gyrus-macro`). The scoped language is
-complete — `@define`, repeat counts, `@var`/`@to`/`@here` with cursor tracking,
-`@stride`/`@field` for arrays of records walked by scan loops, and `@macro`
-with parameters — and so is the source map, so a runtime error in a `.bfm`
-reports the line and column somebody wrote. Its oracle generator
-(`tests/oracle.rs`) is the second thing in the repository that proves
-correctness rather than agreement between engines. `gyrus` runs a `.bfm` and `gyrus-tool expand`
-produces the BrainFuck. Only `@include` is left unbuilt.
-`PRD/macro-preprocessor-design.md` holds what is still to be decided;
-`docs/architecture.md` describes what the crate does.
+**The macro preprocessor is finished** (`gyrus-macro`). The language is
+`@define`, repeat counts, `@var`/`@to`/`@here` with cursor tracking,
+`@stride`/`@field` for arrays of records walked by scan loops, `@macro` with
+parameters, `@ifdef`/`@ifndef`/`@endif`, and `@include` — and so is the source
+map, so a runtime error in a `.bfm` reports the line and column somebody wrote.
+Its oracle generator (`tests/oracle.rs`) is the second thing in the repository
+that proves correctness rather than agreement between engines. `gyrus` runs a
+`.bfm` and `gyrus-tool expand` produces the BrainFuck. Its PRD was deleted when
+it shipped, per the rule above; `docs/architecture.md` describes what the crate
+does.
+
+**One rule of that crate is worth knowing before reading it**: an `@include`d
+file *declares* — it does not emit, and does not move the cursor. The source map holds one position per
+emitted byte against one text, and a second file cannot be written in it — so
+an instruction from a library would otherwise report either a line of the file
+that included it or a line number belonging to a file the reader is not looking
+at. Refusing to emit is the third option, and it costs a library nothing,
+because a macro's bytes already name the invocation.
 
 **The hook system was the debugger's foundation**, and the claim that it needed
 no API change to support one held up — `gyrus-debug` and `gyrus-tutorial` are

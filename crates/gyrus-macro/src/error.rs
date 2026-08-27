@@ -57,6 +57,66 @@ impl std::fmt::Display for Wanted {
     }
 }
 
+/// A macro error, and the file its caret is drawn against.
+///
+/// Expansion reads more than one file, so an error's location is not always a
+/// position in the source the caller handed over; the text to render it
+/// against comes back with it rather than being assumed.
+#[derive(Debug)]
+pub struct MacroFailure {
+    pub error: MacroError,
+    /// Boxed, and behind accessors, for one reason: every expansion returns a
+    /// `Result` this is the error half of, and a `Result` is as big as its
+    /// larger side. The path and the text are wanted only when something has
+    /// already gone wrong, so they are one pointer here and an allocation
+    /// there.
+    context: Box<Context>,
+}
+
+#[derive(Debug)]
+struct Context {
+    file: Option<std::path::PathBuf>,
+    source: String,
+}
+
+impl MacroFailure {
+    pub(crate) fn new(error: MacroError, file: Option<std::path::PathBuf>, source: String) -> Self {
+        Self {
+            error,
+            context: Box::new(Context { file, source }),
+        }
+    }
+
+    /// The file the error is in, when that is not the one being expanded.
+    pub fn file(&self) -> Option<&std::path::Path> {
+        self.context.file.as_deref()
+    }
+
+    /// The text the caret is drawn against, which is [`Self::file`]'s when
+    /// there is one.
+    pub fn source(&self) -> &str {
+        &self.context.source
+    }
+
+    /// The message to print: the error against its own file's text, named
+    /// when it is not the file the caller asked about.
+    pub fn report(&self) -> String {
+        let rendered = self.error.format_with_source(self.source());
+        match self.file() {
+            Some(path) => format!("In {}:\n{rendered}", path.display()),
+            None => rendered,
+        }
+    }
+}
+
+impl std::fmt::Display for MacroFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+impl std::error::Error for MacroFailure {}
+
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum MacroError {
@@ -69,12 +129,6 @@ pub enum MacroError {
         /// Whether a later line defines it. Expansion is a single pass, so
         /// this is a common and otherwise baffling way to fail.
         defined_later: bool,
-    },
-
-    #[error("'@{name}' is not implemented yet at {location}")]
-    PlannedDirective {
-        name: String,
-        location: SourceLocation,
     },
 
     #[error("Unknown directive '@{name}' at {location}")]
@@ -184,6 +238,40 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    /// An `@include`d file emitting BrainFuck rather than declaring.
+    #[error(
+        "'{instruction}' at {location} emits BrainFuck, and an included file declares rather than emits"
+    )]
+    IncludedFileEmits {
+        instruction: char,
+        location: SourceLocation,
+    },
+
+    /// `@here` in an included file: the other way to move the cursor.
+    #[error(
+        "'@here' at {location} moves the cursor, and an included file declares rather than moves it"
+    )]
+    IncludedFileMovesTheCursor { location: SourceLocation },
+
+    /// `@include` in source that came as text rather than from a file.
+    #[error("'@include' at {location} has no file to resolve its path against")]
+    IncludeWithoutAFile { location: SourceLocation },
+
+    /// An `@include` naming something that cannot be read.
+    #[error("'@include' at {location} cannot read {}: {detail}", path.display())]
+    IncludeUnreadable {
+        path: std::path::PathBuf,
+        detail: String,
+        location: SourceLocation,
+    },
+
+    /// `@include` nested past [`INCLUDE_DEPTH_LIMIT`](crate::INCLUDE_DEPTH_LIMIT).
+    #[error("'@include' at {location} nests more than {limit} deep")]
+    IncludeTooDeep {
+        limit: usize,
+        location: SourceLocation,
+    },
+
     /// `@ifdef` or `@ifndef` on a parameter of the body it is written in.
     #[error("'{name}' at {location} is a parameter, so it is always defined")]
     ParameterAlwaysDefined {
@@ -265,7 +353,6 @@ impl MacroError {
     pub fn location(&self) -> SourceLocation {
         match self {
             MacroError::UndefinedSymbol { location, .. }
-            | MacroError::PlannedDirective { location, .. }
             | MacroError::UnknownDirective { location, .. }
             | MacroError::MalformedDirective { location, .. }
             | MacroError::Redefinition { location, .. }
@@ -283,6 +370,11 @@ impl MacroError {
             | MacroError::TooManyInvocations { location, .. }
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
+            | MacroError::IncludedFileEmits { location, .. }
+            | MacroError::IncludedFileMovesTheCursor { location }
+            | MacroError::IncludeWithoutAFile { location }
+            | MacroError::IncludeUnreadable { location, .. }
+            | MacroError::IncludeTooDeep { location, .. }
             | MacroError::ParameterAlwaysDefined { location, .. }
             | MacroError::UnmatchedEndif { location }
             | MacroError::UnclosedConditional { location, .. }
@@ -324,10 +416,6 @@ impl MacroError {
                     None => format!("Defined above this line: {}.", defined.join(", ")),
                 }
             }),
-            MacroError::PlannedDirective { name, .. } => Some(format!(
-                "@{name} is part of the design but not built yet. {}",
-                understood()
-            )),
             MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => {
                 Some(format!(
                     "{} A directive must start its line; an '@' anywhere else is \
@@ -428,6 +516,35 @@ impl MacroError {
                     .collect::<Vec<_>>()
                     .join(" -> ")
             )),
+            MacroError::IncludedFileEmits { .. } => Some(
+                "An included file is a place to declare things: `@define`, `@var`, `@field`, \
+                 `@stride`, `@macro`. Put the instructions in a `@macro` and invoke it where you \
+                 want them -- the bytes then name that invocation, which is a line of the program \
+                 somebody wrote, rather than a line of a file they may never open."
+                    .to_string(),
+            ),
+            MacroError::IncludedFileMovesTheCursor { .. } => Some(
+                "Where the cursor is belongs to the program, not to a library it reads: a `@here` \
+                 here would tell the includer the cursor had moved without moving it, and the \
+                 movement it emits next would be wrong. Put the `@here` beside the loop whose \
+                 landing place it is describing."
+                    .to_string(),
+            ),
+            MacroError::IncludeWithoutAFile { .. } => Some(
+                "A path is resolved against the file holding the `@include`, so source expanded \
+                 from text has nothing to resolve against. Expand a file instead."
+                    .to_string(),
+            ),
+            MacroError::IncludeUnreadable { .. } => Some(
+                "The path is relative to the file that wrote the `@include`, not to where the \
+                 command was run."
+                    .to_string(),
+            ),
+            MacroError::IncludeTooDeep { .. } => Some(
+                "A file already included is skipped rather than read again, so this is a chain \
+                 that long and not a cycle."
+                    .to_string(),
+            ),
             MacroError::ParameterAlwaysDefined { name, .. } => Some(format!(
                 "An invocation supplies every parameter, so `@ifdef {name}` is always taken and \
                  `@ifndef {name}` never is. To make a body vary, test a name from outside it: \
@@ -629,17 +746,6 @@ mod tests {
             .expect("the offending line");
         assert_eq!(line.chars().nth(3 + 6), Some('B'), "line was {line:?}");
         assert!(rendered.contains("Did you mean 'A'?"), "{rendered}");
-    }
-
-    #[test]
-    fn a_planned_directive_says_so_rather_than_calling_itself_unknown() {
-        let error = MacroError::PlannedDirective {
-            name: "include".to_string(),
-            location: SourceLocation::new(1, 1, 0),
-        };
-        let rendered = strip_ansi(&error.format_with_source("@include \"stdlib.bfm\"\n"));
-        assert!(rendered.contains("not implemented yet"), "{rendered}");
-        assert!(rendered.contains("@define"), "{rendered}");
     }
 
     #[test]

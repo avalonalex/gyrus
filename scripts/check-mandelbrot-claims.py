@@ -64,8 +64,8 @@ def main():
         for failure in failures:
             print(f"  {failure}", file=sys.stderr)
         print(
-            "\nThey appear in PRD/macro-preprocessor-design.md and "
-            "crates/gyrus-macro/src/expand.rs.",
+            "\nThey appear in crates/gyrus-macro/src/expand.rs and "
+            "docs/architecture.md.",
             file=sys.stderr,
         )
         return 1

@@ -18,7 +18,10 @@
 //! - how far a character literal *reaches*, and whether a newline ends one.
 //!   What is inside one is decoded elsewhere, by `expand`'s `character`, which
 //!   is a fifth reader this module does not yet cover;
-//! - whether a `{` opens something or is a repeat count.
+//! - whether a `{` opens something or is a repeat count;
+//! - how far a `"quoted path"` reaches. A path is prose to every reader but
+//!   the one that resolves it, and `@include "lib{1}.bfm"` in a branch that
+//!   is skipped must not open a brace on the way past.
 //!
 //! A comment is prose and holds no literals: a `'` inside one is an
 //! apostrophe. That is why [`comment`] does not consult [`literal`] while
@@ -158,6 +161,26 @@ pub(crate) fn comment(chars: &[char], from: usize, closing_brace_ends_it: bool) 
     }
 }
 
+/// Past a `".."` path beginning at `from`, and whether it was closed.
+///
+/// The same shape as [`literal`] with a different delimiter, and separate
+/// because the two mean different things: what is inside a `'x'` is decoded as
+/// a character, and what is inside a `"x"` is handed to the filesystem
+/// verbatim. A backslash is *not* an escape here for that reason -- a Windows
+/// path is full of them, and `"a\\b.bfm"` should name the file it looks like.
+pub(crate) fn quoted(chars: &[char], from: usize) -> (usize, bool) {
+    debug_assert_eq!(chars.get(from), Some(&'"'));
+    let mut at = from + 1;
+    while let Some(&c) = chars.get(at) {
+        match c {
+            '\n' => return (at, false),
+            '"' => return (at + 1, true),
+            _ => at += 1,
+        }
+    }
+    (at, false)
+}
+
 /// Past a character literal beginning at `from`, and whether it was closed.
 ///
 /// A literal never spans a line. Without that an unclosed quote swallows the
@@ -268,6 +291,7 @@ pub(crate) fn step(chars: &[char], at: usize, boundary: usize, in_body: bool) ->
         // Only where a value belongs. A directive's line is not skipped whole,
         // because `@macro inner { + }` carries braces that still count.
         '\'' if on_directive_line(chars, at, boundary) => Step::Past(literal(chars, at).0),
+        '"' if on_directive_line(chars, at, boundary) => Step::Past(quoted(chars, at).0),
         '{' if is_repeat_count(chars, at) => Step::Past(repeat_count(chars, at).1),
         '{' => Step::Open,
         '}' => Step::Close,
@@ -382,6 +406,34 @@ mod tests {
             assert!(matches(word, name), "{source}: {word:?}");
             assert_eq!(at, end, "{source}");
         }
+    }
+
+    #[test]
+    fn a_quoted_path_reaches_its_closing_quote_and_no_further() {
+        for (source, end, closed) in [
+            ("@include \"lib.bfm\"", 18, true),
+            // A brace inside a path is a character of a filename, and the
+            // reader that skips a branch must not take it for anything else.
+            ("@include \"lib{1}.bfm\"", 21, true),
+            // A backslash is a path separator, not an escape: the quote after
+            // it still closes.
+            ("@include \"a\\b.bfm\"", 18, true),
+            ("@include \"unclosed\n+", 18, false),
+        ] {
+            assert_eq!(quoted(&chars(source), 9), (end, closed), "{source:?}");
+        }
+    }
+
+    /// The whole reason it is here rather than in the expander: `step` is what
+    /// the two skipping walks share, and a `{` in a path would otherwise open
+    /// a body in a branch nobody is expanding.
+    #[test]
+    fn a_step_passes_over_a_quoted_path_on_a_directive_line() {
+        let line = chars("@include \"lib{1}.bfm\"\n+");
+        assert!(matches!(step(&line, 9, 0, false), Step::Past(21)));
+        // Off a directive line it is prose, and a `\"` means nothing.
+        let prose = chars("+ a \"quote\" in prose\n");
+        assert!(matches!(step(&prose, 4, 0, false), Step::Past(5)));
     }
 
     #[test]

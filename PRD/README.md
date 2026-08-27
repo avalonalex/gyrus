@@ -5,9 +5,9 @@ PRD is deleted rather than archived — the code and `docs/` describe what is
 built, and git history keeps the reasoning for anyone who wants it.
 
 That rule cost this directory about 6,000 lines of completed-milestone records
-in August 2026, another 1,300 when the TUI debugger and tutorial shipped, and
-200 more when breakpoint markers did. It is the rule that keeps this directory
-readable.
+in August 2026, another 1,300 when the TUI debugger and tutorial shipped, 200
+more when breakpoint markers did, and 1,200 when the macro preprocessor did. It
+is the rule that keeps this directory readable.
 
 It has a second effect worth naming: a shipped PRD is often *wrong* by the time
 the code exists — the breakpoint-marker design reached the opposite conclusion
@@ -16,9 +16,8 @@ design changed belongs in the commit that changed it.
 
 ## Active
 
-| Document | Status | Priority |
-|---|---|---|
-| [macro-preprocessor-design.md](macro-preprocessor-design.md) | First slice in progress: `gyrus-macro` expands `@define` and repeat counts, and runtime errors name the `.bfm` | **Medium — being built** |
+Nothing. The macro preprocessor was the last one, and it shipped -- what it
+does is in [`docs/architecture.md`](../docs/architecture.md) and in the code.
 
 ## Future
 

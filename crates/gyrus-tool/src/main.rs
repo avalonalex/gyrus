@@ -302,9 +302,10 @@ fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(
 
     // A macro error is rendered against the macro source, with a caret, the
     // way a parse error is. It is not a `BfError`, so it is reported and
-    // exited on here rather than returned.
-    let expansion = gyrus_macro::expand(&source).unwrap_or_else(|e| {
-        eprintln!("{}", e.format_with_source(&source));
+    // exited on here rather than returned. Expanded *at* the path because
+    // `@include` resolves against the directory holding the file.
+    let expansion = gyrus_macro::expand_at(&source, &file).unwrap_or_else(|failure| {
+        eprintln!("{}", failure.report());
         std::process::exit(1);
     });
     let brainfuck = expansion.brainfuck();

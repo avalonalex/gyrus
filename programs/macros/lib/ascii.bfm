@@ -1,0 +1,27 @@
+* Named characters, and the idioms that print them.
+*
+* An included file declares: names, and macros made of them. It cannot emit
+* BrainFuck, which is why there is not a single instruction below that is not
+* inside a `@macro` -- and why the instructions this file describes report the
+* line that invoked them rather than a line of a file nobody opened.
+
+@define NL 10
+@define SPACE 32
+
+* Empty the cell under the cursor. The idiomatic clear: `[+]` also works and
+* takes about 256 iterations to do it.
+@macro clear {
+    [-]
+}
+
+* Put a value in the cell under the cursor, whatever it held before.
+@macro set(value) {
+    @clear
+    +{value}
+}
+
+* Print one character, and leave the cell holding it.
+@macro put(letter) {
+    @set(letter)
+    .
+}
