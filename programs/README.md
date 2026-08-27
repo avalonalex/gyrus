@@ -96,7 +96,13 @@ file.
   less, swap. An idiom with no caller is a claim about BrainFuck that nothing
   checks, so this is their caller.
 
-All fourteen are load-bearing rather than illustrative:
+- **`primes.bfm`** - the primes below a hundred, by trial division, with the
+  pasted-in `@divmod` *inside the loop*. That it can be is the point: a scan
+  leaves the movement a loop emits meaningless, so until a body could be
+  measured by where it began and ended, an idiom like that one could only
+  appear in a straight line.
+
+All fifteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

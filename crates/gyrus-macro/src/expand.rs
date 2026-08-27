@@ -863,14 +863,30 @@ impl Scanner {
         };
         self.emit_run(c, 1, origin)?;
 
-        let moved = self.net - open.net_at_entry;
         let stride = self.stride.map(|(size, _)| size);
-        // `movement_certain` is the difference between what was emitted and
-        // what happens: a nested loop runs an unknown number of times, so only
-        // one that moves by whole records (or not at all) leaves the count
-        // meaningful.
-        let balanced = open.movement_certain && moved == 0;
-        let whole_records = open.movement_certain && stride.is_some_and(|size| moved % size == 0);
+        // How far the body moved the cursor, and whether that number means
+        // anything.
+        //
+        // Usually it is the emitted movement, and `movement_certain` is the
+        // difference between what was emitted and what happens: a nested loop
+        // runs an unknown number of times, so only one that moves by whole
+        // records (or not at all) leaves the count meaningful.
+        //
+        // But when the body both starts and ends at a *known* cell, the
+        // movement is the difference between them whatever happened in
+        // between -- that is what knowing a position means. This is the case a
+        // `@here` after a scan creates, and it is the only way to use one of
+        // the catalogue's pointer-walking idioms inside a loop: the snippet
+        // makes the emitted count meaningless, and the `@here` after it makes
+        // the count beside the point. A position is only ever unknown or
+        // trusted, so there is nothing weaker being relied on here than
+        // `@here` is already relied on for.
+        let (moved, certain) = match (open.entry_position, self.position) {
+            (Position::Known(entry), Position::Known(exit)) => (exit - entry, true),
+            _ => (self.net - open.net_at_entry, open.movement_certain),
+        };
+        let balanced = certain && moved == 0;
+        let whole_records = certain && stride.is_some_and(|size| moved % size == 0);
 
         // What this loop contributes to an enclosing body's count. Whole
         // records k times is still whole records; anything else is unknown,
@@ -1943,6 +1959,20 @@ impl Scanner {
         for open in &mut self.open_brackets {
             open.here_inside = true;
         }
+        // Saying where the cursor is, where the expander already knows, is
+        // either agreement or a mistake -- and it can tell which. Refusing the
+        // mistake is what lets the `]` above believe a position instead of
+        // counting movement: the claim can only be wrong where it cannot be
+        // checked, which is after something that lost the position.
+        if let (Target::Cell(cell), Position::Known(believed)) = (target, self.position)
+            && cell != believed
+        {
+            return Err(MacroError::HereContradictsCursor {
+                claimed: cell,
+                believed,
+                location,
+            });
+        }
         self.position = match target {
             Target::Cell(cell) => Position::Known(cell),
             // Which field of a record, not which cell of the tape -- which is
@@ -2756,15 +2786,45 @@ mod tests {
     }
 
     #[test]
-    fn here_does_not_switch_off_the_unbalanced_loop_check() {
-        // Balance is measured in movement, not in where the cursor is
-        // believed to be, so `@here` cannot talk the `]` out of noticing that
-        // the body really does move by one each time.
+    fn here_cannot_contradict_a_position_the_expander_knows() {
+        // The body really does move by one each time, and `@here` says it did
+        // not. The `]` used to catch that, by counting movement rather than
+        // believing a position; it is caught at the `@here` itself now, which
+        // names the disagreement rather than the loop two lines below it.
         let source = "@var a at 0\n@var b at 3\n+[\n>\n@here a\n@to b\n@to a\n]\n";
+        let error = expand(source).unwrap_err();
+        let MacroError::HereContradictsCursor {
+            claimed, believed, ..
+        } = error
+        else {
+            panic!("a body with net movement was accepted: {error:?}");
+        };
+        assert_eq!((claimed, believed), (0, 1));
+    }
+
+    /// The point of measuring balance by position: a loop that loses the
+    /// cursor and says where it landed is a loop whose movement is known
+    /// again, whatever it emitted on the way.
+    ///
+    /// This is what lets a pointer-walking idiom from the catalogue -- a
+    /// division, a comparison -- be used inside a loop at all, which is where
+    /// they are wanted. Before it, the scan poisoned the enclosing loop's
+    /// movement count for good and every `@to` after it was refused.
+    #[test]
+    fn a_scan_that_says_where_it_landed_leaves_the_loop_balanced() {
+        let source = "@var a at 0\n@var b at 3\n+[\n[>]\n@here a\n@to b\n@to a\n]\n";
+        assert_eq!(expanded(source), "+[[>]>>><<<]");
+    }
+
+    /// And re-anchoring somewhere other than where the body began is still a
+    /// body that moves, so a `@to` in it is still refused.
+    #[test]
+    fn a_body_that_lands_somewhere_else_is_still_unbalanced() {
+        let source = "@var a at 0\n@var b at 3\n+[\n[>]\n@here b\n@to a\n@to b\n]\n";
         let error = expand(source).unwrap_err();
         assert!(
             matches!(error, MacroError::MovingInsideUnbalancedLoop { .. }),
-            "a body with net movement was accepted: {error:?}"
+            "{error:?}"
         );
     }
 

@@ -21,22 +21,14 @@
 *   - `@here` says where the snippet leaves the cursor, because a `[>+>>]` is
 *     a scan and the expander cannot follow one.
 *
-* **What this cannot do yet, and it is the whole story.** A `@divmod` may not
-* appear inside a loop. The expander measures a loop's balance in the movement
-* it emitted, and it cannot measure a snippet whose loops run a number of
-* times nobody knows -- so every loop around one stops trusting its own total,
-* and a `@to` in that loop is refused. `@here` puts the *position* back, which
-* is what it is for, and does not put the *count* back, which is what the
-* balance is made of.
-*
-* Since a division almost always happens inside a loop, that is most of the
-* use. Closing it means reconciling the movement count with the position when
-* the position is known -- a change to the rule rather than a patch to it, and
-* one the expander has already considered once: `OpenLoop::net_at_entry`
-* records what happened when balance was measured in positions instead.
-*
-* What works today is a division at the top of a program, which is what
-* `programs/macros/divide.bfm` does and what pins the contract above.
+* **A `@divmod` may appear inside a loop**, which it may not always have been
+* able to. A snippet like this one makes the movement a loop emits stop
+* meaning anything, and the expander measures a loop's balance in movement --
+* so every loop around one used to be a loop it could no longer promise
+* anything about, and a `@to` inside it was refused. Since a division belongs
+* in a loop, that was most of the use. It now measures a body by where it
+* began and where it ended whenever both are known, which is exactly what the
+* `@here` below restores. `programs/macros/primes.bfm` is the loop.
 *
 * The workspace is pinned low, and a program including this file gets its own
 * cells above it, so the copies in and out are short. **Cells 0 to 19 belong to

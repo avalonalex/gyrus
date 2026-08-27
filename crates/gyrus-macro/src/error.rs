@@ -247,6 +247,16 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    /// `@here` naming a cell the cursor is known not to be at.
+    #[error(
+        "'@here' at {location} says the cursor is at cell {claimed}, and it is at cell {believed}"
+    )]
+    HereContradictsCursor {
+        claimed: i64,
+        believed: i64,
+        location: SourceLocation,
+    },
+
     /// `@here` in an included file: the other way to move the cursor.
     #[error(
         "'@here' at {location} moves the cursor, and an included file declares rather than moves it"
@@ -371,6 +381,7 @@ impl MacroError {
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
             | MacroError::IncludedFileEmits { location, .. }
+            | MacroError::HereContradictsCursor { location, .. }
             | MacroError::IncludedFileMovesTheCursor { location }
             | MacroError::IncludeWithoutAFile { location }
             | MacroError::IncludeUnreadable { location, .. }
@@ -523,6 +534,13 @@ impl MacroError {
                  somebody wrote, rather than a line of a file they may never open."
                     .to_string(),
             ),
+            MacroError::HereContradictsCursor { believed, .. } => Some(format!(
+                "`@here` is for saying where a scan landed, which is the one thing the expander \
+                 cannot work out. Here it can: the cursor is at cell {believed}, and every `>` \
+                 and `<` between there and this line was counted. Either the movement is wrong \
+                 or the name is; the expander cannot tell which, but it can tell that they \
+                 disagree."
+            )),
             MacroError::IncludedFileMovesTheCursor { .. } => Some(
                 "Where the cursor is belongs to the program, not to a library it reads: a `@here` \
                  here would tell the includer the cursor had moved without moving it, and the \

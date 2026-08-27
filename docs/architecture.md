@@ -215,7 +215,15 @@ map holds one position per byte.
 
 **Cursor tracking is measured in movement, not position.** A loop body that
 does not return the cursor leaves the position unknown rather than being
-refused, because `[>]` is ordinary BrainFuck.
+refused, because `[>]` is ordinary BrainFuck. The exception is a body that
+both begins and ends at a *known* cell: then the movement is the difference
+between them, whatever it emitted in between. That is what makes a scan
+followed by `@here` usable inside a loop — and so what makes the
+pointer-walking idioms in `programs/macros/lib/fast.bfm` usable at all, since
+a division belongs in a loop. The price is one new refusal: a `@here` naming a
+cell the expander already knows the cursor is *not* at is now an error rather
+than a claim to be caught two lines later, because the rule above believes a
+position and so the position has to be worth believing.
 
 **A record's stride is what a scan preserves.** With `@stride` declared, a loop
 whose body moves by a whole number of records loses the cursor's *cell* but

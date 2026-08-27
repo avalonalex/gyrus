@@ -56,7 +56,7 @@ than reading it as one — which would not fail, it would quietly be a different
 program.
 
 [The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
-describes what the language is; `programs/macros/` has fourteen programs
+describes what the language is; `programs/macros/` has fifteen programs
 written in it, and four libraries in `lib/`. Two are worth reading: `99bottles.bfm` is
 199 lines that print 11,354 bytes, byte for byte what the hand-written
 `programs/third-party/advanced/99beer.bf` prints; and `factor.bfm` finds the

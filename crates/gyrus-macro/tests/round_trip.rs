@@ -275,6 +275,30 @@ fn the_factors_of_13911_come_out_as_three_and_4637() {
     assert_origins_name_the_program(&expansion, &source);
 }
 
+/// A pasted-in idiom used the way one actually gets used: inside a loop.
+///
+/// The division here is the catalogue's, and the loop around it is what the
+/// balance rule had to learn to allow -- a scan leaves the emitted movement
+/// meaningless, so a body is measured by where it began and ended instead. The
+/// primes below a hundred are twenty-five and are not a fact about this
+/// program.
+#[test]
+fn the_primes_below_a_hundred_come_out() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/primes.bfm");
+    let source = read("programs/macros/primes.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let expected: String = (2..100)
+        .filter(|n| (2..*n).all(|d| n % d != 0))
+        .map(|n| format!("{n} "))
+        .collect();
+    assert_eq!(
+        run_optimized(&expansion, 100_000_000),
+        format!("{expected}\n")
+    );
+}
+
 /// The idioms nothing else in the corpus calls.
 ///
 /// `multiply`, `equal`, `less` and `swap` came out of the catalogue with the
