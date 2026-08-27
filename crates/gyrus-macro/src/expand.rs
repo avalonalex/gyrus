@@ -40,6 +40,9 @@
 //!   The `{` goes on the invocation's own line, because a directive owns the
 //!   rest of its line and nothing more -- an invocation with the brace on the
 //!   next line is an invocation with one argument missing, and is told so.
+//! - `@print "text"` -- the instructions that print it, from `gyrus`'s
+//!   codegen: about ten a character, where setting a cell from empty costs a
+//!   hundred. It empties the cells it walks over and puts the cursor back.
 //! - `@repeat N { ... }` -- the body, N times, counted when the program is
 //!   built. `OP{N}` repeats one instruction; nothing could repeat a line, and
 //!   no macro can, because expansion has no loop of its own.
@@ -880,6 +883,14 @@ impl Scanner {
                 location: origin,
             });
         }
+        self.bracket_at(c, origin)
+    }
+
+    /// The same, for a bracket that is not in the source: everything about a
+    /// loop except reading it. `@print` emits code nobody typed, and its
+    /// multiplication loops have to open and close on the same stack as the
+    /// ones somebody did type, or the balance rules would not see them.
+    fn bracket_at(&mut self, c: char, origin: SourceLocation) -> Result<(), MacroError> {
         if c == '[' {
             self.open_brackets.push(OpenLoop {
                 location: origin,
@@ -1142,6 +1153,7 @@ impl Scanner {
             Some(Directive::Endif) => self.endif(location),
             Some(Directive::Include) => self.include(location),
             Some(Directive::Repeat) => self.repeat(location),
+            Some(Directive::Print) => self.print(location),
             // Not a directive, so it may be a macro -- checked after the
             // directives, so no macro can shadow one, and a name that is
             // neither is reported as what it looks like.
@@ -1325,7 +1337,11 @@ impl Scanner {
     /// terminate instead of needing to be detected.
     fn include(&mut self, location: SourceLocation) -> Result<(), MacroError> {
         self.refuse_inside_a_macro(Directive::Include, location)?;
-        let named = self.quoted_operand(location)?;
+        let named = self.quoted_operand(
+            Directive::Include.spelling(),
+            "expected a quoted path, as in `@include \"lib.bfm\"`",
+            location,
+        )?;
         self.end_of_directive(Directive::Include)?;
 
         // Relative to the file that wrote the `@include`, not to the process's
@@ -1415,20 +1431,21 @@ impl Scanner {
     }
 
     /// The `"path"` an `@include` names.
-    fn quoted_operand(&mut self, location: SourceLocation) -> Result<String, MacroError> {
+    fn quoted_operand(
+        &mut self,
+        name: &str,
+        expected: &str,
+        location: SourceLocation,
+    ) -> Result<String, MacroError> {
         self.skip_blanks();
         let opens = self.at.offset;
         if self.peek() != Some('"') {
-            return Err(malformed(
-                Directive::Include.spelling(),
-                "expected a quoted path, as in `@include \"lib.bfm\"`".to_string(),
-                self.at,
-            ));
+            return Err(malformed(name, expected.to_string(), self.at));
         }
         let (end, closed) = lex::quoted(&self.chars, opens);
         if !closed {
             return Err(malformed(
-                Directive::Include.spelling(),
+                name,
                 "the path is never closed: a `\"` opens one and a `\"` ends it".to_string(),
                 location,
             ));
@@ -1436,11 +1453,7 @@ impl Scanner {
         let named: String = self.chars[opens + 1..end - 1].iter().collect();
         self.advance_on_line(end);
         if named.is_empty() {
-            return Err(malformed(
-                Directive::Include.spelling(),
-                "the path is empty".to_string(),
-                location,
-            ));
+            return Err(malformed(name, "the path is empty".to_string(), location));
         }
         Ok(named)
     }
@@ -1664,6 +1677,95 @@ impl Scanner {
         self.guard_depth(location)?;
 
         self.enter(name, def, arguments, location)
+    }
+
+    /// `@print "text"` -- the instructions that print it, and nothing else.
+    ///
+    /// Printing a string was the most expensive thing a `.bfm` could do.
+    /// `@say(out, 'B')` empties a cell and counts it up to 66, which is about
+    /// a hundred instructions a character; that is most of why the corpus's
+    /// `99bottles.bfm` is six and a half times the size of the program it
+    /// matches. `gyrus`'s `codegen` has done this properly all along -- a
+    /// table of the shortest way from any byte to any other, including
+    /// multiplication loops, at around ten instructions a character -- and
+    /// nothing connected the two.
+    ///
+    /// **What it costs the program is cells.** The generated code starts on
+    /// the cell under the cursor and walks right onto as many as it finds
+    /// cheaper, so those are emptied first and left holding whatever the
+    /// printing left in them. The cursor comes back to where it started,
+    /// which is the one thing a directive can promise here and the one thing
+    /// a program needs.
+    ///
+    /// `\n`, `\t` and `\\` mean what they mean everywhere. A `"` cannot
+    /// appear, because the rule that finds the end of the string is the one
+    /// `@include` uses on paths, where a backslash is a separator and not an
+    /// escape.
+    fn print(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        let text = self.quoted_operand(
+            Directive::Print.spelling(),
+            "expected quoted text, as in `@print \"Hello\"`",
+            location,
+        )?;
+        self.end_of_directive(Directive::Print)?;
+
+        let mut decoded = String::with_capacity(text.len());
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match (c, chars.clone().next()) {
+                ('\\', Some('n')) => {
+                    decoded.push('\n');
+                    chars.next();
+                }
+                ('\\', Some('t')) => {
+                    decoded.push('\t');
+                    chars.next();
+                }
+                ('\\', Some('\\')) => {
+                    decoded.push('\\');
+                    chars.next();
+                }
+                _ => decoded.push(c),
+            }
+        }
+
+        let code = gyrus::codegen::compile_string(&decoded);
+        // How far right it goes, and where it stops: both are known now, which
+        // is what lets the cursor be put back and the tracking stay honest.
+        let (mut at, mut reach) = (0i64, 0i64);
+        for c in code.chars() {
+            match c {
+                '>' => at += 1,
+                '<' => at -= 1,
+                _ => {}
+            }
+            reach = reach.max(at);
+        }
+
+        // Empty what it is about to use. The table assumes every cell it
+        // touches starts at zero, and a program that has been running does not
+        // owe it that.
+        let mut prologue = String::new();
+        for _ in 0..=reach {
+            prologue.push_str("[-]>");
+        }
+        prologue.push_str(&"<".repeat((reach + 1) as usize));
+
+        self.emit_generated(&prologue, location)?;
+        self.emit_generated(&code, location)?;
+        self.emit_generated(&"<".repeat(at.max(0) as usize), location)
+    }
+
+    /// Instructions the expander made rather than read, all reporting the
+    /// directive that made them.
+    fn emit_generated(&mut self, code: &str, origin: SourceLocation) -> Result<(), MacroError> {
+        for c in code.chars() {
+            match c {
+                '[' | ']' => self.bracket_at(c, origin)?,
+                _ => self.emit_run(c, 1, origin)?,
+            }
+        }
+        Ok(())
     }
 
     /// `@repeat N { ... }` -- the body, N times over.
@@ -4037,6 +4139,37 @@ mod blocks {
     fn a_repeated_body_names_its_own_lines() {
         super::tests::assert_origins_are_exact("@repeat 3 {\n+\n}\n");
         super::tests::assert_origins_are_exact("@define N 2\n@repeat N {\n+>\n}\n");
+    }
+
+    /// Printed text costs about a tenth of what setting a cell costs, and the
+    /// cursor comes back to where it started so a program can carry on.
+    #[test]
+    fn print_is_cheaper_than_setting_a_cell_at_a_time() {
+        let spelled = expanded("@var out\n@to out\n+{72}\n.\n[-]+{105}\n.\n");
+        let printed = expanded("@print \"Hi\"\n");
+        assert!(
+            printed.len() * 2 < spelled.len(),
+            "printed {} against {} spelled out",
+            printed.len(),
+            spelled.len()
+        );
+
+        // Two cells named after a print still mean what they meant.
+        assert_eq!(
+            expanded("@var a at 0\n@var b at 1\n@print \"x\"\n@to b\n+\n"),
+            format!("{}>+", expanded("@print \"x\"\n"))
+        );
+    }
+
+    #[test]
+    fn print_says_what_it_wanted() {
+        for source in ["@print\n", "@print Hello\n", "@print \"unclosed\n"] {
+            let error = expand(source).unwrap_err();
+            assert!(
+                matches!(error, MacroError::MalformedDirective { .. }),
+                "{source:?}: {error:?}"
+            );
+        }
     }
 
     #[test]

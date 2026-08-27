@@ -22,13 +22,14 @@ pub(crate) enum Directive {
     Macro,
     Include,
     Repeat,
+    Print,
     Ifdef,
     Ifndef,
     Endif,
 }
 
 impl Directive {
-    pub(crate) const ALL: [Directive; 12] = [
+    pub(crate) const ALL: [Directive; 13] = [
         Directive::Define,
         Directive::Var,
         Directive::To,
@@ -38,6 +39,7 @@ impl Directive {
         Directive::Macro,
         Directive::Include,
         Directive::Repeat,
+        Directive::Print,
         Directive::Ifdef,
         Directive::Ifndef,
         Directive::Endif,
@@ -54,6 +56,7 @@ impl Directive {
             Directive::Macro => "macro",
             Directive::Include => "include",
             Directive::Repeat => "repeat",
+            Directive::Print => "print",
             Directive::Ifdef => "ifdef",
             Directive::Ifndef => "ifndef",
             Directive::Endif => "endif",
