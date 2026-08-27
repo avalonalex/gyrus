@@ -116,7 +116,11 @@ with logic in it has some; only a reader can check that it is right.
   that does it in a loop. It is there to be what a faster one is checked
   against.
 
-All sixteen are load-bearing rather than illustrative:
+- **`blocks.bfm`** - `@while`, `@when` and `@unless` as ordinary macros, and
+  `@repeat` around a body. Every other program here writes its loops out,
+  because until a macro could take a *body* there was nothing else to do.
+
+All seventeen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

@@ -237,6 +237,52 @@
     @move(temp0, y)
 }
 
+* Run the body until the cell is empty. The loop BrainFuck has, with the
+* bookkeeping that makes it safe written once instead of at every use.
+*
+*     while cell:
+*         body
+*
+* The `@to cell` at the end of the body is the whole reason this is worth
+* naming: a loop must leave the cursor where it found it, and forgetting that
+* is the mistake every hand-written loop in this corpus had to avoid.
+@macro while(cell, body) {
+    @to cell
+    [
+        @body
+        @to cell
+    ]
+}
+
+* Run the body once if the cell holds anything, and not at all if it does not.
+*
+*     if cell:
+*         body
+*
+* BrainFuck has no `if`. This is the idiom that stands in for one: ask the
+* question into a flag, loop on the flag, and empty it so the loop runs once.
+@macro when(cell, flag, scratch, spare, body) {
+    @is_not_zero(cell, flag, scratch, spare)
+    @to flag
+    [
+        @body
+        @clear(flag)
+    ]
+}
+
+* And the other way round.
+*
+*     if not cell:
+*         body
+@macro unless(cell, flag, scratch, spare, body) {
+    @is_zero(cell, flag, scratch, spare)
+    @to flag
+    [
+        @body
+        @clear(flag)
+    ]
+}
+
 * Print one character, through a cell set aside for it.
 *
 *     cell = letter

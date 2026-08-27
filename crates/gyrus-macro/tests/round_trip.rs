@@ -320,6 +320,23 @@ fn two_cell_arithmetic_agrees_with_arithmetic() {
     assert_eq!(run_optimized(&expansion, 100_000_000), expected);
 }
 
+/// Loops and branches as macros, which is what a body-as-argument buys.
+///
+/// Every other program in the corpus writes its loops out, because a macro
+/// could take a cell and a count but not a body. `@while`, `@when` and
+/// `@unless` are ordinary macros now, and `@repeat` puts a count around a body
+/// rather than around one instruction.
+#[test]
+fn loops_and_branches_read_as_loops_and_branches() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/blocks.bfm");
+    let source = read("programs/macros/blocks.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (_, printed) = run_expansion(&expansion, 1_000_000);
+    assert_eq!(printed, "[*** - [***** \n====\n");
+}
+
 /// The idioms nothing else in the corpus calls.
 ///
 /// `multiply`, `equal`, `less` and `swap` came out of the catalogue with the

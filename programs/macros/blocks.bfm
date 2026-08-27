@@ -1,0 +1,66 @@
+* Loops and branches with names on them.
+*
+* Every other program here writes its loops out: `@to counter` `[` ... `]`,
+* with a `@to counter` at the end that must not be forgotten. A macro could
+* not stand in for that, because a macro could take a cell and a count but not
+* a *body*.
+*
+* It can now. `@while`, `@when` and `@unless` are ordinary macros in
+* `lib/idioms.bfm`, and the body goes after the invocation in braces -- the
+* same shape `@macro` itself uses to take one.
+*
+* What it does:
+*
+*     for n in (3, 0, 5):
+*         if n:
+*             print('[')
+*         if not n:
+*             print('-')
+*         while n:
+*             print('*')
+*             n -= 1
+*         print(' ')
+*
+* `@repeat` is the other half: a count settled when the program is built,
+* around a body rather than around one instruction. `+{3}` has always been
+* able to repeat a `+`; nothing could repeat a line.
+
+@include "lib/idioms.bfm"
+
+@var n
+@var flag
+@var scratch
+@var spare
+@var out
+
+* Stars if there are any, a dash if there are not.
+*
+* Both questions are asked before the loop, because the loop is what empties
+* the cell: asking afterwards would say every bar was empty, which is the
+* first thing this program got wrong.
+@macro bar(count) {
+    @put(n, count)
+    @when(n, flag, scratch, spare) {
+        @say(out, '[')
+    }
+    @unless(n, flag, scratch, spare) {
+        @say(out, '-')
+    }
+    @while(n) {
+        @say(out, '*')
+        @to n
+        -
+    }
+    @say(out, SPACE)
+}
+
+@bar(3)
+@bar(0)
+@bar(5)
+@newline(out)
+
+* A count that is settled before the program runs.
+@repeat 4 {
+    @say(out, '=')
+}
+@newline(out)
