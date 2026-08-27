@@ -113,6 +113,13 @@ file.
   `@repeat` around a body. Every other program here writes its loops out,
   because until a macro could take a *body* there was nothing else to do.
 
+- **`signed.bfm`** - numbers below zero, from **`lib/signed.bfm`**: a sign
+  cell and a size cell, because a cell counts upwards and has nowhere to put a
+  minus. Sign-and-size rather than the wrapping arithmetic a machine uses,
+  because multiplying two wrapped numbers means pulling the sign back out of
+  each first — a trade the library states plainly, including that the multiply
+  it is paying for is not written yet.
+
 **Every one of them with a loop in it says what the loop is for**, as a block
 of pseudocode in its comments. Naming cells makes a *line* legible without
 making the *program* legible -- `@to ones` `[` `-` says what is happening and
@@ -120,7 +127,7 @@ not why -- so each file carries what it would be in a language that has
 numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
 with logic in it has some; only a reader can check that it is right.
 
-All seventeen are load-bearing rather than illustrative:
+All eighteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

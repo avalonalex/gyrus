@@ -223,22 +223,27 @@ fn run_optimized(expansion: &gyrus_macro::Expansion, max_steps: u64) -> String {
 /// byte made inside a macro reports the *invocation*, so it lands on the line
 /// somebody wrote rather than in the definition it was written from.
 fn assert_origins_name_the_program(expansion: &gyrus_macro::Expansion, source: &str) {
-    let mut inside_a_body = false;
-    let inside: Vec<bool> = source
-        .lines()
-        .map(|line| {
-            let line = line.trim();
-            if line.starts_with("@macro") && !line.contains('}') {
-                inside_a_body = true;
-                false
-            } else if line == "}" {
-                inside_a_body = false;
-                false
-            } else {
-                inside_a_body
-            }
-        })
-        .collect();
+    // Brace depth, not a flag. A flag was right until a program nested a block
+    // inside a macro body -- `@when(...) { ... }` inside `@macro show` -- and
+    // then the inner `}` ended the body six lines early and exempted the rest
+    // of it from the assertion below. Comment lines are skipped because prose
+    // holds braces; a repeat count like `+{3}` is balanced on its own line and
+    // so cancels out.
+    let mut depth = 0usize;
+    let mut inside = Vec::new();
+    for line in source.lines() {
+        let text = line.trim();
+        let code = !text.starts_with('*');
+        let (opens, closes) = match code {
+            true => (text.matches('{').count(), text.matches('}').count()),
+            false => (0, 0),
+        };
+        let before = depth;
+        depth = (depth + opens).saturating_sub(closes);
+        // The line that opens a body is not in it, and nor is the one that
+        // closes the outermost one.
+        inside.push(before > 0 && !(closes > 0 && depth == 0));
+    }
 
     for offset in 0..expansion.brainfuck().len() {
         let origin = expansion.origin(offset).expect("every byte has an origin");
@@ -335,6 +340,103 @@ fn loops_and_branches_read_as_loops_and_branches() {
 
     let (_, printed) = run_expansion(&expansion, 1_000_000);
     assert_eq!(printed, "[*** - [***** \n====\n");
+}
+
+/// Every sign and size against Python's answer, rather than nine of them.
+///
+/// The nine in `signed.bfm` are what a reader can check by eye, and they are
+/// not a test of the thing that went wrong: the negative zero needs the *first*
+/// operand negative, and every hand-picked case had it positive. Deleting the
+/// fix left that program's output byte for byte the same. A sweep does not
+/// pick, which is the whole of its value here.
+///
+/// The source is built here rather than committed, because two hundred
+/// invocations of a macro is a test and not a program. It is expanded *at*
+/// `programs/macros/`, which is all a path is for: somewhere to resolve
+/// `@include` against.
+#[test]
+fn signed_arithmetic_agrees_with_arithmetic() {
+    // Five sizes and both signs on each side, twice over: 200 operations.
+    // Wider than that and the sweep itself passes the expansion limit, which
+    // is the honest bound on how much a single program can check.
+    let sizes = [0u8, 1, 3, 7, 12];
+    let mut cases = Vec::new();
+    let mut source = String::from(
+        "@include \"lib/signed.bfm\"\n@var a_sign\n@var a_size\n@var b_sign\n@var b_size\n         @macro show {\n@to a_sign\n.\n@to a_size\n.\n}\n",
+    );
+    for &op in &["add", "sub"] {
+        for a_neg in [0u8, 1] {
+            for &a in &sizes {
+                for b_neg in [0u8, 1] {
+                    for &b in &sizes {
+                        source.push_str(&format!(
+                            "@signed_put(a_sign, a_size, {a_neg}, {a})\n                             @signed_put(b_sign, b_size, {b_neg}, {b})\n                             @signed_{op}(a_sign, a_size, b_sign, b_size)\n@show\n"
+                        ));
+                        let (x, y) = (signed(a_neg, a), signed(b_neg, b));
+                        cases.push(if op == "add" { x + y } else { x - y });
+                    }
+                }
+            }
+        }
+    }
+
+    let path = gyrus_corpus::workspace_root().join("programs/macros/signed.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+    let printed = run_optimized(&expansion, 200_000_000);
+    let got: Vec<u8> = printed.bytes().collect();
+    assert_eq!(got.len(), cases.len() * 2, "one sign and one size per case");
+
+    for (i, want) in cases.iter().enumerate() {
+        let (sign, size) = (got[2 * i], got[2 * i + 1]);
+        assert_eq!(
+            (sign, size),
+            (u8::from(*want < 0), want.unsigned_abs() as u8),
+            "case {i}: wanted {want}, got sign {sign} size {size}"
+        );
+    }
+}
+
+/// Doubling: the operands are the same two cells.
+///
+/// `@signed_add(x, x)` spun for ever before the library worked from a copy of
+/// its second operand, because `@copy` moves a cell into another one and back,
+/// and with one cell for both ends the count never comes down. A sweep cannot
+/// find this -- it uses two different values by construction -- so it is its
+/// own test.
+#[test]
+fn a_signed_value_can_be_added_to_itself() {
+    let source = "@include \"lib/signed.bfm\"\n@var a_sign\n@var a_size\n                  @signed_put(a_sign, a_size, 1, 21)\n                  @signed_add(a_sign, a_size, a_sign, a_size)\n                  @to a_sign\n.\n@to a_size\n.\n";
+    let path = gyrus_corpus::workspace_root().join("programs/macros/signed.bfm");
+    let expansion = gyrus_macro::expand_at(source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    assert_eq!(run_optimized(&expansion, 1_000_000).as_bytes(), [1, 42]);
+}
+
+fn signed(negative: u8, size: u8) -> i32 {
+    if negative == 1 {
+        -(size as i32)
+    } else {
+        size as i32
+    }
+}
+
+/// Numbers that can be below zero, which a cell cannot hold.
+///
+/// Addition has four cases once a value has a sign, and a fifth where they
+/// cancel. The sweep above is what checks them all; these nine are the ones a
+/// reader can check by eye.
+#[test]
+fn signed_values_add_and_subtract() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/signed.bfm");
+    let source = read("programs/macros/signed.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (_, printed) = run_expansion(&expansion, 5_000_000);
+    assert_eq!(printed, "+8 -8 +2 -2 +0 +2 -2 -5 +7 \n");
+    assert_origins_name_the_program(&expansion, &source);
 }
 
 /// The idioms nothing else in the corpus calls.
