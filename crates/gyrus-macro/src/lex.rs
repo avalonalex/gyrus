@@ -1,10 +1,12 @@
 //! The lexical rules of `.bfm`, in one place.
 //!
-//! Three things read this language, and they are not the same reader: the
+//! Four things read this language, and they are not the same reader: the
 //! expander walks it with a [`SourceLocation`](gyrus::SourceLocation) it
 //! advances a character at a time; `skip_body` walks to a macro body's closing
-//! brace without interpreting anything on the way; and the "defined below this
-//! line" hint walks ahead of the cursor over text the expander has not reached.
+//! brace without interpreting anything on the way; the "defined below this
+//! line" hint walks ahead of the cursor over text the expander has not
+//! reached; and `skip_branch` walks a conditional's untaken branch to its
+//! `@endif` without expanding a character of it.
 //!
 //! What they must agree about is small and was written out three times, with
 //! four differences between the copies:
@@ -22,7 +24,8 @@
 //! apostrophe. That is why [`comment`] does not consult [`literal`] while
 //! every other rule here does.
 //!
-//! Each of those has cost a bug.
+//! Each of those has cost a bug. The fourth reader arrived after this module
+//! did and was written as a caller, which is the whole point of it.
 //!
 //! They are free functions rather than a cursor type because every rule here
 //! is *context-parameterised, not stateful*: `comment` needs to know whether a
@@ -84,16 +87,39 @@ pub(crate) fn on_directive_line(chars: &[char], at: usize, boundary: usize) -> b
 
 /// The directive name at `at`, and where it ends.
 ///
-/// `chars[at]` is the `@`. Shared because three readers want it: the expander
-/// dispatching a directive, the lookahead asking whether a line declares a
-/// name, and the skip over a false conditional counting the ones that nest.
-pub(crate) fn spelling(chars: &[char], at: usize) -> (String, usize) {
-    let name: String = chars[at + 1..]
-        .iter()
-        .take_while(|c| is_identifier_char(**c))
-        .collect();
-    let end = at + 1 + name.chars().count();
-    (name, end)
+/// `chars[at]` is the `@`. Shared by the two readers that want a name without
+/// a cursor to carry: the lookahead asking whether a line declares something,
+/// and the skip over a false conditional counting the ones that nest. The
+/// expander reads the same name through its own `identifier`, which spells the
+/// rule over the scanner's position instead -- what the two share, and what
+/// this module is for, is which *characters* those are.
+///
+/// A slice rather than a `String`: the skip asks this of every line-start `@`
+/// in a branch it is throwing away, and does it again on every invocation of
+/// the body that branch is in.
+pub(crate) fn spelling(chars: &[char], at: usize) -> (&[char], usize) {
+    let start = at + 1;
+    let mut end = start;
+    if chars.get(start).copied().is_some_and(is_identifier_start) {
+        while chars.get(end).copied().is_some_and(is_identifier_char) {
+            end += 1;
+        }
+    }
+    (&chars[start..end], end)
+}
+
+/// Whether a name read by [`spelling`] is `text`.
+pub(crate) fn matches(name: &[char], text: &str) -> bool {
+    name.iter().copied().eq(text.chars())
+}
+
+/// A character an identifier may begin with.
+///
+/// Narrower than the rest, and separate for that reason: `@3` is not a
+/// directive, and a name could not start with a digit anywhere a number may be
+/// written in its place.
+pub(crate) fn is_identifier_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_'
 }
 
 /// A character an identifier may contain after its first.
@@ -343,9 +369,19 @@ mod tests {
 
     #[test]
     fn a_spelling_stops_where_the_name_does() {
-        assert_eq!(spelling(&chars("@ifdef X"), 0), ("ifdef".to_string(), 6));
-        assert_eq!(spelling(&chars("@end_if"), 0), ("end_if".to_string(), 7));
-        assert_eq!(spelling(&chars("@"), 0), (String::new(), 1));
+        for (source, name, end) in [
+            ("@ifdef X", "ifdef", 6),
+            ("@end_if", "end_if", 7),
+            ("@", "", 1),
+            // The scanner's own reader refuses a leading digit, and these two
+            // are one rule or they are a bug waiting to be written.
+            ("@3endif", "", 1),
+        ] {
+            let text = chars(source);
+            let (word, at) = spelling(&text, 0);
+            assert!(matches(word, name), "{source}: {word:?}");
+            assert_eq!(at, end, "{source}");
+        }
     }
 
     #[test]

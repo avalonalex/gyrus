@@ -193,9 +193,12 @@ fn the_conditional_example_compiles_its_tracing_in_and_out() {
         .unwrap_or_else(|e| panic!("{}", e.format_with_source(&without)));
 
     // Shorter, not merely quieter: the marks left no instructions behind.
-    assert!(
-        expansion.brainfuck().len() < with_trace.len(),
-        "turning tracing off did not shrink the program"
+    // The two numbers are the ones `programs/README.md` quotes, asserted here
+    // so the file cannot drift away from the claim made about it.
+    assert_eq!(
+        (with_trace.len(), expansion.brainfuck().len()),
+        (322, 222),
+        "the instruction counts in programs/README.md are stale"
     );
 
     let (instructions, expanded) = parse_with_debug(expansion.brainfuck()).expect("parses");

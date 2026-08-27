@@ -58,7 +58,8 @@ file.
 
 - **`conditional.bfm`** - tracing compiled in or out with `@ifdef`. Removing
   one line takes the marks out of the BrainFuck rather than skipping them at
-  run time: 323 instructions become 223.
+  run time: 322 instructions become 222. Both numbers are asserted by
+  `the_conditional_example_compiles_its_tracing_in_and_out`.
 
 All nine are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:

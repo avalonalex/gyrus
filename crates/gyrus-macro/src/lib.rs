@@ -49,6 +49,7 @@
 //!     @to marker            * a directive starts its line, here as anywhere
 //!     >{9}
 //! ]
+//! @here counter            * and back to an absolute cell when it is over
 //!
 //! @macro bump(by) {        * a body, expanded in place wherever it is used
 //!     @to letter
@@ -61,6 +62,10 @@
 //!     .
 //! @endif
 //! ```
+//!
+//! That block expands; `the_documented_example_expands` reads it out of this
+//! file and runs it, because a front page nobody executes is a front page that
+//! drifts.
 //!
 //! Naming cells is the part that earns the feature. Manual pointer arithmetic
 //! is what makes hand-written BrainFuck unmaintainable past a few dozen cells,
@@ -165,3 +170,33 @@ impl ProgramError {
 pub use error::{Kind, MacroError, Wanted};
 pub use expand::{REPEAT_LIMIT, expand};
 pub use source_map::Expansion;
+
+#[cfg(test)]
+mod tests {
+    /// The tour of the language at the top of this file, expanded.
+    ///
+    /// Read out of the source rather than repeated here: a copy would be
+    /// checked and the documentation would not. It had drifted -- `@here`
+    /// inside a record left the cursor record-relative, so the `@to` two lines
+    /// below it could not resolve, and the crate's own front page was a
+    /// program the crate rejects.
+    #[test]
+    fn the_documented_example_expands() {
+        let source = include_str!("lib.rs");
+        let start = source
+            .find("//! ## What it understands today")
+            .expect("the section is still there");
+        let block: String = source[start..]
+            .lines()
+            .skip_while(|line| !line.starts_with("//! ```"))
+            .skip(1)
+            .take_while(|line| !line.starts_with("//! ```"))
+            .map(|line| format!("{}\n", line.strip_prefix("//! ").unwrap_or("")))
+            .collect();
+        assert!(block.contains("@macro bump"), "the block was not found");
+
+        if let Err(error) = crate::expand(&block) {
+            panic!("{}", error.format_with_source(&block));
+        }
+    }
+}

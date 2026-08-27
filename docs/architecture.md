@@ -157,7 +157,8 @@ It understands `@define` (named constants), `OP{N}` (repeat counts), `@var`
 and `@to` (named cells, with the cursor tracked and the movement emitted),
 `@here` (assert a position without moving), `@macro` with parameters, and
 `@ifdef`/`@ifndef`/`@endif` (a branch not taken is never expanded, so it may
-hold names and brackets that would be errors in one that is). A `@var` without
+hold names and brackets that would be errors in one that is, and a body's test
+is made against the scope it is expanded into). A `@var` without
 a cell has one chosen, and anywhere a number may be written so may an ASCII
 character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all 65. A
 directive must start its line and

@@ -184,6 +184,13 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    /// `@ifdef` or `@ifndef` on a parameter of the body it is written in.
+    #[error("'{name}' at {location} is a parameter, so it is always defined")]
+    ParameterAlwaysDefined {
+        name: String,
+        location: SourceLocation,
+    },
+
     #[error("'@endif' at {location} closes a conditional that was never opened")]
     UnmatchedEndif { location: SourceLocation },
 
@@ -276,6 +283,7 @@ impl MacroError {
             | MacroError::TooManyInvocations { location, .. }
             | MacroError::ArgumentCount { location, .. }
             | MacroError::CircularMacro { location, .. }
+            | MacroError::ParameterAlwaysDefined { location, .. }
             | MacroError::UnmatchedEndif { location }
             | MacroError::UnclosedConditional { location, .. }
             | MacroError::DeclarationInsideMacro { location, .. }
@@ -419,6 +427,12 @@ impl MacroError {
                     .map(|n| format!("@{n}"))
                     .collect::<Vec<_>>()
                     .join(" -> ")
+            )),
+            MacroError::ParameterAlwaysDefined { name, .. } => Some(format!(
+                "An invocation supplies every parameter, so `@ifdef {name}` is always taken and \
+                 `@ifndef {name}` never is. To make a body vary, test a name from outside it: \
+                 the test is made where the body is expanded, so two invocations of one macro \
+                 can answer it differently."
             )),
             MacroError::UnmatchedEndif { .. } => Some(
                 "Every `@endif` closes an `@ifdef` or an `@ifndef`. This one has none above it \
