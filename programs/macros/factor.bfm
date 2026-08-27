@@ -231,51 +231,15 @@
 * Whether the quotient in the working register came out below the divisor.
 *
 * Anything with a high half is at least 256, and no divisor here reaches that,
-* so only the low halves are ever compared -- by counting one down against the
-* other and watching which runs out first.
+* so only the low halves are ever compared. The comparison itself is `@less`
+* from the idiom library -- it was written out here first, which is how it
+* ended up in the library.
 @macro quotient_is_smaller {
     @clear(smaller)
     @is_zero(x_hi, zero, scratch, spare)
     @to zero
     [
-        @clear(step)
-        @copy(v, step, spare)
-        @clear(passed)
-        @clear(count)
-        @copy(x_lo, count, spare)
-
-        @to count
-        [
-            @is_zero(step, flag, scratch, spare)
-            @to flag
-            [
-                @put(passed, 1)
-                @clear(flag)
-            ]
-            @is_not_zero(step, flag, scratch, spare)
-            @to flag
-            [
-                @to step
-                -
-                @clear(flag)
-            ]
-            @to count
-            -
-        ]
-
-        * The quotient ran out first, and the divisor still had somewhere to
-        * go: that is what smaller means.
-        @is_zero(passed, flag, scratch, spare)
-        @to flag
-        [
-            @is_not_zero(step, other, scratch, spare)
-            @to other
-            [
-                @put(smaller, 1)
-                @clear(other)
-            ]
-            @clear(flag)
-        ]
+        @less(x_lo, v, smaller, count, step, passed, flag, other, scratch, spare)
         @clear(zero)
     ]
 }
@@ -319,6 +283,19 @@
         [
             @to v
             +
+            @clear(other)
+        ]
+
+        * A divisor is one cell, so the next one after 255 is zero -- and
+        * dividing by zero takes nothing away for ever. Any number this
+        * program can hold is either prime by now or has a factor below 256,
+        * since two factors above 255 multiply past 65535, so stopping here
+        * is not giving up. The wrap is read off the cell rather than
+        * compared against 255, which is the only comparison free here.
+        @is_zero(v, other, scratch, spare)
+        @to other
+        [
+            @clear(running)
             @clear(other)
         ]
         @to smaller

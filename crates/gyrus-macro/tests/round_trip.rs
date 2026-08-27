@@ -12,8 +12,8 @@
 //! corpus-directory test counts `.bf` files, and this directory holds none.
 
 use gyrus::{
-    CellModel, ExecutionConfigBuilder, interpret_optimized_with_io, interpret_with_io,
-    io::StringIo, minify, optimize_with_cell_model, parse, parse_with_debug,
+    ExecutionConfigBuilder, interpret_optimized_with_io, interpret_with_io, io::StringIo, minify,
+    optimize_with_cell_model, parse, parse_with_debug,
 };
 
 fn read(relative: &str) -> String {
@@ -190,26 +190,68 @@ fn the_compare_example_transcribes_a_catalogued_idiom() {
 
 /// The same, on the optimized interpreter.
 ///
-/// For the one program here that does enough work to care which engine runs
-/// it: 8.6 million steps, which the tree-walker takes forty seconds over and
-/// this finishes in fifty milliseconds. The expansion is ordinary BrainFuck,
-/// so every engine is entitled to run it -- and that they agree is what the
-/// differential suite in `gyrus` is for, not this one.
+/// For the programs that do enough work to care which engine runs them.
+/// `factor.bfm` is 1.73 billion steps on the tree-walker, which takes it forty
+/// seconds; the optimizer fuses those into 8.6 million and finishes in fifty
+/// milliseconds. Two engines, two counts -- the same work.
+///
+/// The expansion is ordinary BrainFuck, so every engine is entitled to run it,
+/// and that they agree is what the differential suite in `gyrus` is for rather
+/// than this one. What is skipped here is `remap`, which the tests using
+/// `run_expansion` cover.
 fn run_optimized(expansion: &gyrus_macro::Expansion, max_steps: u64) -> String {
     let instructions = parse(expansion.brainfuck()).expect("parses");
-    let optimized = optimize_with_cell_model(&instructions, CellModel::default());
+    // From the config that is about to run it, not from the default. The
+    // optimized interpreter refuses a program built for a different cell model
+    // outright, and every other caller in the workspace passes it this way.
+    let config = ExecutionConfigBuilder::new()
+        .with_memory_size(30_000)
+        .with_max_steps(max_steps)
+        .build();
+    let optimized = optimize_with_cell_model(&instructions, *config.cell_model());
     let (mut input, mut output) = (StringIo::empty(), StringIo::empty());
-    interpret_optimized_with_io(
-        &optimized,
-        ExecutionConfigBuilder::new()
-            .with_memory_size(30_000)
-            .with_max_steps(max_steps)
-            .build(),
-        &mut input,
-        &mut output,
-    )
-    .expect("runs");
+    interpret_optimized_with_io(&optimized, config, &mut input, &mut output).expect("runs");
     output.output_string()
+}
+
+/// Every emitted byte names a line of the program, and never a line inside a
+/// macro body.
+///
+/// The bound alone -- "no line number past the end of the file" -- is what
+/// these tests asserted first, and it passes if all eleven thousand bytes
+/// claim line one. This is the claim the origin policy actually makes: a
+/// byte made inside a macro reports the *invocation*, so it lands on the line
+/// somebody wrote rather than in the definition it was written from.
+fn assert_origins_name_the_program(expansion: &gyrus_macro::Expansion, source: &str) {
+    let mut inside_a_body = false;
+    let inside: Vec<bool> = source
+        .lines()
+        .map(|line| {
+            let line = line.trim();
+            if line.starts_with("@macro") && !line.contains('}') {
+                inside_a_body = true;
+                false
+            } else if line == "}" {
+                inside_a_body = false;
+                false
+            } else {
+                inside_a_body
+            }
+        })
+        .collect();
+
+    for offset in 0..expansion.brainfuck().len() {
+        let origin = expansion.origin(offset).expect("every byte has an origin");
+        let line = origin.line;
+        assert!(
+            line >= 1 && line <= inside.len(),
+            "byte {offset} names line {line}"
+        );
+        assert!(
+            !inside[line - 1],
+            "byte {offset} names line {line}, which is inside a macro body"
+        );
+    }
 }
 
 /// Arithmetic on numbers too big for a cell, which is what a factoring program
@@ -229,16 +271,26 @@ fn the_factors_of_13911_come_out_as_three_and_4637() {
     assert_eq!(run_optimized(&expansion, 50_000_000), "13911: 3 4637\n");
 
     // Thirty thousand instructions, every one of them still pointing at a line
-    // of the two hundred somebody wrote.
-    let lines = source.lines().count();
-    for offset in 0..expansion.brainfuck().len() {
-        let origin = expansion.origin(offset).expect("every byte has an origin");
-        assert!(
-            origin.line <= lines,
-            "byte {offset} names line {}",
-            origin.line
-        );
-    }
+    // somebody wrote rather than at the macro it came out of.
+    assert_origins_name_the_program(&expansion, &source);
+}
+
+/// The idioms nothing else in the corpus calls.
+///
+/// `multiply`, `equal`, `less` and `swap` came out of the catalogue with the
+/// division and had no caller, which in this repository is the same as having
+/// no check: they were correct when they were written and nothing would have
+/// said otherwise afterwards.
+#[test]
+fn the_idiom_library_does_what_it_says() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/library.bfm");
+    let source = read("programs/macros/library.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    // 3*3 with y intact; equal then unequal; less, greater, equal; a swap.
+    let (_, printed) = run_expansion(&expansion, 1_000_000);
+    assert_eq!(printed, "93 10 100 71\n");
 }
 
 /// The catalogue's own division, pasted in whole.
@@ -279,21 +331,14 @@ fn ninety_nine_bottles_prints_what_the_program_it_was_written_from_prints() {
     let expansion = gyrus_macro::expand_at(&source, &path)
         .unwrap_or_else(|failure| panic!("{}", failure.report()));
 
-    let (brainfuck, printed) = run_expansion(&expansion, 20_000_000);
-    assert_eq!(printed, read("benchmarks/expected/99beer.txt"));
+    assert_eq!(
+        run_optimized(&expansion, 20_000_000),
+        read("benchmarks/expected/99beer.txt")
+    );
 
-    // Every byte of eleven thousand still names a line of the file somebody
-    // wrote. A macro's bytes name the invocation, so the lines they name are
-    // the eleven in the verse rather than the ones inside `@say`.
-    let lines = source.lines().count();
-    for offset in 0..brainfuck.len() {
-        let origin = expansion.origin(offset).expect("every byte has an origin");
-        assert!(
-            origin.line <= lines,
-            "byte {offset} names line {}",
-            origin.line
-        );
-    }
+    // Every byte of eleven thousand names the verse, not the insides of
+    // `@say`: a macro's bytes report the invocation.
+    assert_origins_name_the_program(&expansion, &source);
 }
 
 /// A program whose vocabulary comes from another file.
@@ -315,14 +360,7 @@ fn the_include_example_takes_its_vocabulary_from_a_library() {
     // macros and two names, and the instructions are the ones this file asked
     // for. That is what makes the source map still hold.
     assert!(brainfuck.chars().all(|c| "+-<>.,[]".contains(c)));
-    for offset in 0..brainfuck.len() {
-        let origin = expansion.origin(offset).expect("every byte has an origin");
-        assert!(
-            expansion.source().lines().count() >= origin.line,
-            "byte {offset} names line {} of a file with fewer",
-            origin.line
-        );
-    }
+    assert_origins_name_the_program(&expansion, &source);
 }
 
 /// Conditional compilation, and what it means for it to be *compilation*.

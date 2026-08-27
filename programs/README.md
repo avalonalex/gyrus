@@ -79,8 +79,8 @@ file.
   number does not fit in a cell, so every value here is a pair of cells and
   the arithmetic is **`lib/wide.bfm`** -- a library, not a language feature,
   which is the interesting part: working in numbers wider than a cell was
-  written down as something the expander would have to grow. 200 lines expand
-  to 30,320 instructions. Run it with `--jit`: it is the first program here
+  written down as something the expander would have to grow. 332 lines expand
+  to 30,629 instructions. Run it with `--jit`: it is the first program here
   that does enough work to care which engine runs it, at 0.05 seconds
   optimized against 40 on the tree-walker.
 
@@ -92,7 +92,11 @@ file.
   not do. About a third the cost of the same division built from named idioms
   -- and it cannot yet be used inside a loop, which that file explains.
 
-All thirteen are load-bearing rather than illustrative:
+- **`library.bfm`** - the four idioms nothing else calls: multiply, equal,
+  less, swap. An idiom with no caller is a claim about BrainFuck that nothing
+  checks, so this is their caller.
+
+All fourteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

@@ -171,8 +171,8 @@ crate's module documentation:
 **Numbers wider than a cell are a library, not a language.** The design
 recorded multi-cell variables as something the expander would have to grow, on
 the assumption that a `size` on a declaration was the only way to get them.
-`programs/macros/lib/wide.bfm` is sixty lines and does it without one, because
-a macro parameter can name a cell: `@wide_dec(n_hi, n_lo, flag, held)` says
+`programs/macros/lib/wide.bfm` does it without one, in a hundred lines of which
+two thirds are prose, because a macro parameter can name a cell: `@wide_dec(n_hi, n_lo, flag, held)` says
 which four, and the carry is the same "empty a cell into a loop" idiom every
 other branch in BrainFuck is. `programs/macros/factor.bfm` factors 13911 with
 it.

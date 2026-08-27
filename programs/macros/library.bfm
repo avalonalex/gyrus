@@ -1,0 +1,66 @@
+* The idiom library, run rather than read.
+*
+* Everything `lib/idioms.bfm` offers gets used somewhere in `programs/macros/`
+* except the four below, which arrived with the catalogue and had no caller.
+* An idiom nobody runs is a claim about BrainFuck that nothing checks, so this
+* program is their caller: it works each one on numbers whose answer can be
+* read off the line.
+
+@include "lib/idioms.bfm"
+
+@var x
+@var y
+@var result
+@var t0
+@var t1
+@var count
+@var step
+@var passed
+@var flag
+@var other
+@var scratch
+@var spare
+@var out
+
+* 3 times 3, which is the largest product a single digit can show.
+@put(x, 3)
+@put(y, 3)
+@multiply(x, y, t0, t1)
+@show_digit(x)
+@show_digit(y)
+@say(out, SPACE)
+
+* Equal, then not.
+@put(x, 6)
+@put(y, 6)
+@equal(x, y, t0, t1)
+@show_digit(x)
+@put(x, 6)
+@put(y, 5)
+@equal(x, y, t0, t1)
+@show_digit(x)
+@say(out, SPACE)
+
+* Less, greater, and the same -- the third being the one a comparison written
+* with a subtraction usually gets wrong.
+@put(x, 2)
+@put(y, 8)
+@less(x, y, result, count, step, passed, flag, other, scratch, spare)
+@show_digit(result)
+@put(x, 8)
+@put(y, 2)
+@less(x, y, result, count, step, passed, flag, other, scratch, spare)
+@show_digit(result)
+@put(x, 4)
+@put(y, 4)
+@less(x, y, result, count, step, passed, flag, other, scratch, spare)
+@show_digit(result)
+@say(out, SPACE)
+
+* And a swap, which has to move both ways at once.
+@put(x, 1)
+@put(y, 7)
+@swap(x, y, t0)
+@show_digit(x)
+@show_digit(y)
+@newline(out)

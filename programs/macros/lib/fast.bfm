@@ -39,10 +39,14 @@
 * `programs/macros/divide.bfm` does and what pins the contract above.
 *
 * The workspace is pinned low, and a program including this file gets its own
-* cells above it, so the copies in and out are short. **Cells 0 to 13 belong to
-* this file**; a program that pins one of them for itself will be told so.
+* cells above it, so the copies in and out are short. **Cells 0 to 19 belong to
+* this file, and nothing will tell you if you take one.** A cell chosen by the
+* expander is never one that was pinned, so `@var mine` is safe; two `at`s
+* naming the same cell are allowed on purpose, so `@var mine at 6` silently
+* becomes another name for `fast_n` and every division after it returns
+* nonsense. Pin nothing below 20 in a program that includes this file.
 *
-* Six of those fourteen are in front of the workspace and hold nothing. A
+* Six of those cells are in front of the workspace and hold nothing. A
 * snippet that walks a pointer walks it both ways: this one steps three cells
 * to the left of where it started, transiently, and dividing by one is what
 * found that out -- as `Attempted to access cell -3`, which is at least the
@@ -76,6 +80,7 @@
 @var fast_spare at 16
 @var fast_safe at 17
 @var fast_one at 18
+@var fast_none at 19
 
 * `quotient` and `remainder` are filled in from `n` divided by `d`. Neither `n`
 * nor `d` is disturbed.
@@ -108,20 +113,17 @@
     * because what it does with them is not an error but a wrong answer.
     @clear(fast_safe)
     @copy(d, fast_safe, fast_temp)
-    @clear(fast_flag)
-    @is_zero(d, fast_other, fast_temp, fast_spare)
-    @to fast_other
-    [
-        @put(fast_flag, 1)
-        @clear(fast_other)
-    ]
+
+    * Both awkward divisors are recognised once and remembered, because each
+    * is wanted twice: here, to keep the snippet away from them, and below, to
+    * put its answer right.
+    @is_zero(d, fast_none, fast_temp, fast_spare)
     @put(fast_one, 1)
     @equal(fast_one, d, fast_temp, fast_spare)
-    @to fast_one
-    [
-        @put(fast_flag, 1)
-        @clear(fast_one)
-    ]
+
+    @clear(fast_flag)
+    @copy(fast_none, fast_flag, fast_spare)
+    @copy(fast_one, fast_flag, fast_spare)
     @to fast_flag
     [
         @put(fast_safe, 2)
@@ -150,18 +152,15 @@
     @move(fast_rem, remainder)
 
     * Nothing goes into anything: no times, with all of it left over.
-    @is_zero(d, fast_other, fast_temp, fast_spare)
-    @to fast_other
+    @to fast_none
     [
         @clear(quotient)
         @clear(remainder)
         @copy(n, remainder, fast_spare)
-        @clear(fast_other)
+        @clear(fast_none)
     ]
 
     * One goes into anything exactly as many times as the thing is.
-    @put(fast_one, 1)
-    @equal(fast_one, d, fast_temp, fast_spare)
     @to fast_one
     [
         @clear(quotient)
