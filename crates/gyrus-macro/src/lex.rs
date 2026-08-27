@@ -10,19 +10,27 @@
 //! four differences between the copies:
 //!
 //! - where a `*` comment ends: one stopped at the end of the line, and one
-//!   also at a body's closing brace;
+//!   also at a body's closing brace -- see [`comment`];
 //! - that the third reader did not know comments existed at all, so a `{` in
 //!   prose silently switched the hint off for the rest of the file;
-//! - how far a character literal reaches, and whether a newline ends one;
+//! - how far a character literal *reaches*, and whether a newline ends one.
+//!   What is inside one is decoded elsewhere, by `expand`'s `character`, which
+//!   is a fifth reader this module does not yet cover;
 //! - whether a `{` opens something or is a repeat count.
 //!
 //! A comment is prose and holds no literals: a `'` inside one is an
 //! apostrophe. That is why [`comment`] does not consult [`literal`] while
 //! every other rule here does.
 //!
-//! Each of those has cost a bug. They are free functions over `(chars,
-//! offset)` rather than methods because the three callers do not share a
-//! cursor -- only the text.
+//! Each of those has cost a bug.
+//!
+//! They are free functions rather than a cursor type because every rule here
+//! is *context-parameterised, not stateful*: `comment` needs to know whether a
+//! body is being read, and the two line predicates need the offset the current
+//! scan began at. Those come from the expander's frame stack, not from the
+//! text, so a `Lexer` owning an offset would still be handed them on every
+//! call -- a wrapper rather than an abstraction. [`step`] is where the state
+//! that *is* shared, the brace depth, gets its one derivation.
 
 /// Instructions a repeat count may follow. Brackets are deliberately absent:
 /// `[{3}` would mean three loop openings, which is not a thing anyone means.
@@ -35,11 +43,24 @@ pub(crate) const REPEATABLE: [char; 6] = ['+', '-', '<', '>', '.', ','];
 /// A directive must start its line, and the start of a body counts as one, or
 /// a one-line `@macro reset { @clear }` reads its own invocation as prose.
 pub(crate) fn at_line_start(chars: &[char], from: usize, boundary: usize) -> bool {
-    chars[boundary.min(from)..from]
+    chars[line_start(chars, from, boundary)..from]
         .iter()
-        .rev()
-        .take_while(|&&c| c != '\n')
-        .all(|&c| c == ' ' || c == '\t')
+        .all(|&c| is_blank(c))
+}
+
+/// A space or a tab: the whitespace that may precede something and still leave
+/// it first on its line.
+fn is_blank(c: char) -> bool {
+    c == ' ' || c == '\t'
+}
+
+/// Where the line containing `from` begins, or `boundary` if that is later.
+fn line_start(chars: &[char], from: usize, boundary: usize) -> usize {
+    let floor = boundary.min(from);
+    chars[floor..from]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(floor, |newline| floor + newline + 1)
 }
 
 /// Whether `at` sits on a line whose first non-blank character is `@`.
@@ -55,13 +76,9 @@ pub(crate) fn at_line_start(chars: &[char], from: usize, boundary: usize) -> boo
 /// directive's whole line instead is no good either -- `@macro inner { + }`
 /// carries braces that must still be counted.
 pub(crate) fn on_directive_line(chars: &[char], at: usize, boundary: usize) -> bool {
-    let start = chars[boundary.min(at)..at]
+    chars[line_start(chars, at, boundary)..]
         .iter()
-        .rposition(|&c| c == '\n')
-        .map_or(boundary.min(at), |newline| boundary.min(at) + newline + 1);
-    chars[start..]
-        .iter()
-        .find(|&&c| c != ' ' && c != '\t')
+        .find(|&&c| !is_blank(c))
         .is_some_and(|&c| c == '@')
 }
 
@@ -79,25 +96,21 @@ pub(crate) fn on_directive_line(chars: &[char], at: usize, boundary: usize) -> b
 /// expander and the body reader agree about every comment that is not this
 /// one deliberate case.
 pub(crate) fn comment(chars: &[char], from: usize, closing_brace_ends_it: bool) -> usize {
-    let mut at = from;
-    while let Some(&c) = chars.get(at) {
-        if c == '\n' {
-            break;
-        }
-        if closing_brace_ends_it && c == '}' && ends_the_line(chars, at + 1) {
-            break;
-        }
-        at += 1;
-    }
-    at
-}
-
-/// Whether only blanks separate `from` from the end of its line.
-fn ends_the_line(chars: &[char], from: usize) -> bool {
-    chars[from.min(chars.len())..]
+    let end = chars[from..]
         .iter()
-        .take_while(|&&c| c != '\n')
-        .all(|&c| c == ' ' || c == '\t')
+        .position(|&c| c == '\n')
+        .map_or(chars.len(), |newline| from + newline);
+    if !closing_brace_ends_it {
+        return end;
+    }
+    // Decided once for the comment rather than once per character: the rule
+    // is about the *last* thing on the line, so finding that is the whole
+    // question. Asking it of every character made a long comment inside a
+    // macro body -- re-read on every invocation -- measurably slower.
+    match chars[from..end].iter().rposition(|&c| !is_blank(c)) {
+        Some(last) if chars[from + last] == '}' => from + last,
+        _ => end,
+    }
 }
 
 /// Past a character literal beginning at `from`, and whether it was closed.
@@ -129,12 +142,13 @@ pub(crate) fn is_repeat_count(chars: &[char], at: usize) -> bool {
         && chars.get(at - 1).is_some_and(|c| REPEATABLE.contains(c))
 }
 
-/// How a `{...}` repeat count ended.
+/// How a value ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CountEnd {
-    /// At its `}`, which is the only way it should end.
-    Brace,
-    /// At a newline or the end of the file: the `}` was forgotten.
+pub(crate) enum ValueEnd {
+    /// At the delimiter it was looking for, which is the only way it should
+    /// end.
+    Delimiter,
+    /// At a newline or the end of the file: the delimiter was forgotten.
     Unclosed,
     /// Inside a character literal that was never closed. Told apart from
     /// `Unclosed` because "no closing quote" and "no closing '}'" send the
@@ -142,28 +156,78 @@ pub(crate) enum CountEnd {
     OpenLiteral,
 }
 
-/// Past a `{...}` repeat count beginning at `from`, and how it ended.
+/// Past a value beginning at `from`: everything up to the first character
+/// `ends` accepts that is not inside a character literal.
 ///
-/// The body may hold a character literal, and that literal may hold the brace
-/// that would otherwise end the count: `+{'}'}` is the obvious thing to write.
-pub(crate) fn repeat_count(chars: &[char], from: usize) -> (usize, CountEnd) {
-    debug_assert_eq!(chars.get(from), Some(&'{'));
-    let mut at = from + 1;
+/// Both places a value appears -- a repeat count and a directive's operands --
+/// read one this way, so a literal is opaque to both. `+{'}'}` is the obvious
+/// thing to write, and so is `@print(',')`.
+pub(crate) fn value(chars: &[char], from: usize, ends: impl Fn(char) -> bool) -> (usize, ValueEnd) {
+    let mut at = from;
     while let Some(&c) = chars.get(at) {
-        match c {
-            '\n' => return (at, CountEnd::Unclosed),
-            '}' => return (at + 1, CountEnd::Brace),
-            '\'' => {
-                let (end, closed) = literal(chars, at);
-                if !closed {
-                    return (end, CountEnd::OpenLiteral);
-                }
-                at = end;
-            }
-            _ => at += 1,
+        if c == '\n' {
+            return (at, ValueEnd::Unclosed);
         }
+        if ends(c) {
+            return (at, ValueEnd::Delimiter);
+        }
+        if c == '\'' {
+            let (end, closed) = literal(chars, at);
+            if !closed {
+                return (end, ValueEnd::OpenLiteral);
+            }
+            at = end;
+            continue;
+        }
+        at += 1;
     }
-    (at, CountEnd::Unclosed)
+    (at, ValueEnd::Unclosed)
+}
+
+/// A `{...}` repeat count at `from`: where its text stops, where the count
+/// itself stops, and how it ended.
+///
+/// Two offsets because the caller wants the text and the walkers want to be
+/// past the brace. Returning only the second made the one caller that needs
+/// the first subtract one, guarded by a match on the variant, in another file.
+pub(crate) fn repeat_count(chars: &[char], from: usize) -> (usize, usize, ValueEnd) {
+    debug_assert_eq!(chars.get(from), Some(&'{'));
+    let (text_end, ending) = value(chars, from + 1, |c| c == '}');
+    match ending {
+        ValueEnd::Delimiter => (text_end, text_end + 1, ending),
+        _ => (text_end, text_end, ending),
+    }
+}
+
+/// What the character at `at` is, and where it ends.
+///
+/// The two walks over this language -- one finding a macro body's closing
+/// brace, one looking ahead for a declaration -- classify characters
+/// identically and differ only in what they do with a brace and when they
+/// stop. Extracting the rules and leaving the classification in both is the
+/// halfway point where the shared code stops looking duplicated while the
+/// decisions still are: that copy diverged twice, the second time inside the
+/// commit that extracted the rules.
+pub(crate) enum Step {
+    /// Past the construct at `at`; the depth is unchanged.
+    Past(usize),
+    /// A `{` that opens a macro body.
+    Open,
+    /// A `}` that closes one.
+    Close,
+}
+
+pub(crate) fn step(chars: &[char], at: usize, boundary: usize, in_body: bool) -> Step {
+    match chars[at] {
+        '*' => Step::Past(comment(chars, at, in_body)),
+        // Only where a value belongs. A directive's line is not skipped whole,
+        // because `@macro inner { + }` carries braces that still count.
+        '\'' if on_directive_line(chars, at, boundary) => Step::Past(literal(chars, at).0),
+        '{' if is_repeat_count(chars, at) => Step::Past(repeat_count(chars, at).1),
+        '{' => Step::Open,
+        '}' => Step::Close,
+        _ => Step::Past(at + 1),
+    }
 }
 
 #[cfg(test)]
@@ -225,17 +289,36 @@ mod tests {
 
     #[test]
     fn a_count_holds_a_literal_that_holds_its_own_brace() {
-        assert_eq!(repeat_count(&chars("{'}'}"), 0), (5, CountEnd::Brace));
-        assert_eq!(repeat_count(&chars("{65}"), 0), (4, CountEnd::Brace));
+        // Text end, then past the brace.
+        assert_eq!(
+            repeat_count(&chars("{'}'}"), 0),
+            (4, 5, ValueEnd::Delimiter)
+        );
+        assert_eq!(repeat_count(&chars("{65}"), 0), (3, 4, ValueEnd::Delimiter));
         assert_eq!(
             repeat_count(&chars("{65\nmore"), 0),
-            (3, CountEnd::Unclosed)
+            (3, 3, ValueEnd::Unclosed)
         );
-        // Told apart, because the two send the reader to different ends of
-        // the same line.
+        // Told apart, because the two send the reader to different ends of the
+        // same line.
         assert_eq!(
             repeat_count(&chars("{'a}\nmore"), 0),
-            (4, CountEnd::OpenLiteral)
+            (4, 4, ValueEnd::OpenLiteral)
+        );
+    }
+
+    #[test]
+    fn a_value_stops_at_its_delimiter_and_not_inside_a_literal() {
+        // The same reader the count uses, which is the point of it.
+        let comma = chars("','),rest");
+        assert_eq!(
+            value(&comma, 0, |c| c == ',' || c == ')'),
+            (3, ValueEnd::Delimiter)
+        );
+        let spaced = chars("' ' more");
+        assert_eq!(
+            value(&spaced, 0, char::is_whitespace),
+            (3, ValueEnd::Delimiter)
         );
     }
 
