@@ -20,5 +20,7 @@ jit = ["dep:gyrus-jit"]
 
 [dependencies]
 gyrus.workspace = true
+# `.bfm` input: expanded here so that a macro program runs like any other.
+gyrus-macro.workspace = true
 gyrus-jit = { workspace = true, optional = true }
 clap.workspace = true

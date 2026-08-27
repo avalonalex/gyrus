@@ -29,6 +29,21 @@ cargo run -p gyrus-cli -- <path-to-bf-file>
 ./target/release/gyrus <path-to-bf-file>
 ```
 
+### Running a Macro Program
+
+```bash
+./target/release/gyrus <path-to-bfm-file>
+```
+
+A `.bfm` is expanded to BrainFuck and then run. Runtime errors report the line
+and column of the macro source rather than of the expansion, which is what the
+format is for — so a `.bfm` defaults to `--debug` rather than the optimized
+interpreter, the one engine that cannot name a source position. `--jit` and
+`--trace` work and keep the locations.
+
+`gyrus-tool expand` produces the BrainFuck without running it; see
+[Tooling](tooling.md#macro-expansion).
+
 ### Examples
 
 #### Running BrainFuck Programs

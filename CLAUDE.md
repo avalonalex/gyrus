@@ -158,14 +158,18 @@ re-exports and crate docs.
 **CLI** (`crates/gyrus-cli/src/main.rs`) — execution only
    - Flow: read file → parse → optimize (unless `--debug`) → interpret, or
      JIT-compile and run (`--jit`) → (stats)
+   - Accepts `.bfm` macro source as well as `.bf`: expanded first, with its
+     debug symbols rewritten so errors name the macro source. A `.bfm` defaults
+     to `--debug` rather than the optimized interpreter, which is the one
+     engine that cannot name a source position
    - Flags: `--verbose`, `--quiet`, `--debug`, `--trace`, `--jit`, `--max-steps`,
      `--timeout`, `--memory-size`, `--memory-model`, `--cell-model`,
      `--unbounded-initial`, `--unbounded-max`, `--eof-behavior`
    - Configuration via `ExecutionConfig` (builder pattern)
 
 **Tool** (`crates/gyrus-tool/src/main.rs`) — development workflows
-   - Subcommands: `minify`, `validate`, `debug-info`, `view`, `generate`,
-     `compile`, `optimize`
+   - Subcommands: `expand`, `minify`, `validate`, `debug-info`, `view`,
+     `generate`, `compile`, `optimize`
    - **Note**: minify and validate are subcommands here, NOT flags on `gyrus`.
      `gyrus --minify` and `gyrus --validate` do not exist.
    - **Runtime warnings**: Only shown with `--verbose` flag (cell wrapping is common in BF programs)
@@ -680,8 +684,8 @@ complete — `@define`, repeat counts, `@var`/`@to`/`@here` with cursor tracking
 with parameters — and so is the source map, so a runtime error in a `.bfm`
 reports the line and column somebody wrote. Its oracle generator
 (`tests/oracle.rs`) is the second thing in the repository that proves
-correctness rather than agreement between engines. `@include`, the
-conditionals, and the CLI wiring are not there yet.
+correctness rather than agreement between engines. `gyrus` runs a `.bfm` and `gyrus-tool expand`
+produces the BrainFuck. `@include` and the conditionals are not there yet.
 `PRD/macro-preprocessor-design.md` holds what is still to be decided;
 `docs/architecture.md` describes what the crate does.
 

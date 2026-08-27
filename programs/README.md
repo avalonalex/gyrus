@@ -60,7 +60,8 @@ All eight are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash
-cargo run -p gyrus-macro --example expand_and_run -- programs/macros/scan.bfm
+gyrus programs/macros/scan.bfm              # expand and run
+gyrus-tool expand programs/macros/scan.bfm  # just the BrainFuck
 ```
 
 There is no `gyrus`-side way to run these yet; they go through the library.

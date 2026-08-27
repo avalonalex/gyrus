@@ -9,6 +9,7 @@ use gyrus::{
     io::{StdInput, StdOutput},
     optimize_with_cell_model, parse, parse_with_debug,
 };
+use gyrus::{DebugInfo, Instruction};
 use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
@@ -80,6 +81,97 @@ struct Cli {
     jit: bool,
 }
 
+/// Which engine runs the program.
+///
+/// Resolved once, from the flags and the file's extension, because the default
+/// depends on both. A `.bfm` runs on an engine that can name a source
+/// position: it exists so that errors point back at macro source, and the
+/// optimized interpreter is the one engine that cannot do that. There is
+/// deliberately no flag to ask for it -- `--jit` is faster anyway and keeps
+/// the locations.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Optimized,
+    Debug,
+    Trace,
+    Jit,
+}
+
+impl Mode {
+    fn name(self) -> &'static str {
+        match self {
+            Mode::Optimized => "Optimized",
+            Mode::Debug => "Debug (standard + symbols)",
+            Mode::Trace => "Trace (profiling + debug)",
+            Mode::Jit => "JIT (Cranelift)",
+        }
+    }
+
+    /// Whether to parse with debug symbols. Everything but the optimized
+    /// interpreter uses them: the JIT maps every failure site to its
+    /// instruction, so they buy located errors at no run-time cost.
+    fn wants_symbols(self) -> bool {
+        self != Mode::Optimized
+    }
+}
+
+/// A program ready to run.
+struct Program {
+    instructions: Vec<Instruction>,
+    debug_info: Option<DebugInfo>,
+    /// The text a located error should be rendered against. For a `.bfm` that
+    /// is the macro source, not the expansion nobody wrote.
+    source: String,
+}
+
+/// Read a file and turn it into something runnable.
+///
+/// A `.bfm` is expanded first, and its debug symbols are rewritten to name the
+/// macro source -- which is the whole point of the format, and the reason it
+/// never runs on the engine that discards them.
+fn load(path: &std::path::Path, mode: Mode) -> Result<Program, BfError> {
+    let text = fs::read_to_string(path).map_err(|source| BfError::FileError {
+        path: path.to_path_buf(),
+        source,
+        hint: format!(
+            "Make sure the file exists and you have permission to read it. \
+             Current path: {}",
+            path.display()
+        ),
+    })?;
+
+    if !is_macro_source(path) {
+        // MultipleBracketErrors carries every error and formats them all, so
+        // it needs no special case here.
+        let (instructions, debug_info) = match mode.wants_symbols() {
+            true => parse_with_debug(&text).map(|(i, d)| (i, Some(d)))?,
+            false => (parse(&text)?, None),
+        };
+        return Ok(Program {
+            instructions,
+            debug_info,
+            source: text,
+        });
+    }
+
+    let expansion = gyrus_macro::expand(&text).unwrap_or_else(|e| {
+        eprintln!("{}", e.format_with_source(&text));
+        std::process::exit(1);
+    });
+    let (instructions, expanded) = parse_with_debug(expansion.brainfuck())?;
+    Ok(Program {
+        instructions,
+        // Rewritten to name the `.bfm`. Always, because a `.bfm` never runs on
+        // the mode that would throw them away.
+        debug_info: Some(expansion.remap(&expanded)),
+        source: text,
+    })
+}
+
+fn is_macro_source(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "bfm")
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("{}", e.format_detailed());
@@ -104,43 +196,31 @@ where
 fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
-    // Determine execution mode
-    // Default: Optimized interpreter (fast, no tracking)
-    // --debug: Standard interpreter with debug symbols
-    // --trace: Standard interpreter with debug symbols + profiling
     #[cfg(feature = "jit")]
-    let use_jit = cli.jit;
+    let asked_for_jit = cli.jit;
     #[cfg(not(feature = "jit"))]
-    let use_jit = false;
-    let use_optimized = !cli.debug && !cli.trace && !use_jit;
-    let enable_profiling = cli.trace;
+    let asked_for_jit = false;
 
-    // Read the source file
-    let source = fs::read_to_string(&cli.file).map_err(|source| BfError::FileError {
-        path: cli.file.clone(),
-        source,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. \
-             Current path: {}",
-            cli.file.display()
-        ),
-    })?;
-
-    // Parse the program
-    // - Optimized mode: parse without debug symbols (fast)
-    // - Debug/trace mode: parse with debug symbols for source tracking
-    // - JIT: with debug symbols too. The JIT maps every failure site to its
-    //   instruction, so the symbols buy located errors at no run-time cost.
-    let (instructions, debug_info) = if cli.debug || cli.trace || use_jit {
-        // Debug mode: parse with debug symbols for source location tracking
-        // MultipleBracketErrors now carries every error and formats them all,
-        // so it needs no special case here.
-        let (instructions, debug_info) = parse_with_debug(&source)?;
-        (instructions, Some(debug_info))
+    let mode = if cli.trace {
+        Mode::Trace
+    } else if asked_for_jit {
+        Mode::Jit
+    } else if cli.debug || is_macro_source(&cli.file) {
+        Mode::Debug
     } else {
-        // Fast mode (default): parse without debug symbols
-        (parse(&source)?, None)
+        Mode::Optimized
     };
+    let (use_optimized, use_jit, enable_profiling) = (
+        mode == Mode::Optimized,
+        mode == Mode::Jit,
+        mode == Mode::Trace,
+    );
+
+    let Program {
+        instructions,
+        debug_info,
+        source,
+    } = load(&cli.file, mode)?;
 
     // Parse cell model
     let cell_model = parse_or_exit(
@@ -230,18 +310,7 @@ fn run() -> Result<(), BfError> {
 
     if cli.verbose && !cli.quiet {
         eprintln!("Configuration:");
-        eprintln!(
-            "  Execution mode: {}",
-            if use_optimized {
-                "Optimized (default)"
-            } else if use_jit {
-                "JIT (Cranelift)"
-            } else if enable_profiling {
-                "Trace (profiling + debug)"
-            } else {
-                "Debug (standard + symbols)"
-            }
-        );
+        eprintln!("  Execution mode: {}", mode.name());
         eprintln!("  Memory model: {}", config.memory_model());
         eprintln!("  Cell model: {}", config.cell_model());
         eprintln!(

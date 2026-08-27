@@ -24,6 +24,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Expand a macro program (.bfm) into BrainFuck
+    Expand {
+        /// Macro source file to expand
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Output file (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Show what the expansion cost
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     /// Minify BF program (strip comments and whitespace)
     Minify {
         /// BrainFuck source file to minify
@@ -169,6 +184,11 @@ fn run() -> Result<(), BfError> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Expand {
+            file,
+            output,
+            verbose,
+        } => run_expand(file, output, verbose),
         Commands::Minify {
             file,
             output,
@@ -218,6 +238,65 @@ fn run() -> Result<(), BfError> {
             cell_model,
         } => run_optimize(file, theme, plain, &cell_model),
     }
+}
+/// Expand a macro program into BrainFuck.
+///
+/// The counterpart to running one: `gyrus prog.bfm` expands and executes in a
+/// step, and this is the step on its own -- for reading what a macro produced,
+/// for feeding the result to something that only knows BrainFuck, and for
+/// checking that a `.bfm` expands at all, since anything wrong with it is
+/// reported here rather than at run time.
+fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {
+    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
+        path: file.clone(),
+        source: source_err,
+        hint: "Make sure the file exists and you have permission to read it.".to_string(),
+    })?;
+
+    // A macro error is rendered against the macro source, with a caret, the
+    // way a parse error is. It is not a `BfError`, so it is reported and
+    // exited on here rather than returned.
+    let expansion = gyrus_macro::expand(&source).unwrap_or_else(|e| {
+        eprintln!("{}", e.format_with_source(&source));
+        std::process::exit(1);
+    });
+    let brainfuck = expansion.brainfuck();
+
+    if verbose {
+        // Instructions written against instructions emitted, not bytes
+        // against instructions: a `.bfm` is mostly prose and declarations, so
+        // comparing its size to the output says more about how well it is
+        // commented than about what the macros did. What they did is expand
+        // the instructions somebody typed into more of them.
+        let written = source.chars().filter(|c| "+-<>[],.".contains(*c)).count();
+        let emitted = brainfuck.len();
+        eprintln!("Expanded {}", file.display());
+        eprintln!("  Macro source:        {} bytes", source.len());
+        eprintln!("  Instructions written: {written}");
+        eprintln!("  Instructions emitted: {emitted}");
+        if written > 0 {
+            eprintln!(
+                "  Expansion:            {:.1}x",
+                emitted as f64 / written as f64
+            );
+        }
+        eprintln!();
+    }
+
+    match output {
+        Some(path) => {
+            fs::write(&path, format!("{brainfuck}\n")).map_err(|source| BfError::FileError {
+                path: path.clone(),
+                source,
+                hint: "Check that the directory exists and is writable.".to_string(),
+            })?;
+            if verbose {
+                eprintln!("Written to {}", path.display());
+            }
+        }
+        None => println!("{brainfuck}"),
+    }
+    Ok(())
 }
 
 fn run_minify(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {

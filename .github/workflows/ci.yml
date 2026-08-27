@@ -42,6 +42,14 @@ jobs:
         # test cannot catch the CLI failing to wire it up.
         test "$(./target/release/gyrus --jit programs/basic/hello_world.bf)" = "Hello World!"
         ./target/release/gyrus-tool minify programs/basic/hello_world.bf > /dev/null
+        # Macro source is a second input format reached only through the CLI:
+        # expanded, its debug symbols rewritten, and then run. A unit test
+        # cannot catch that wiring being wrong either.
+        test "$(./target/release/gyrus programs/macros/arithmetic.bfm)" = "Hi"
+        test "$(./target/release/gyrus --jit programs/macros/records.bfm)" = "A1B2C3"
+        # And expanding by hand gives a .bf that runs the same.
+        ./target/release/gyrus-tool expand programs/macros/compare.bfm -o /tmp/compare.bf
+        test "$(./target/release/gyrus /tmp/compare.bf)" = "10110"
 
   # Reads rust-version from Cargo.toml and installs that toolchain itself, so
   # there is no version restated here to fall out of sync with the manifest.
