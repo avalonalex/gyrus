@@ -14,5 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 gyrus.workspace = true
+# Only to refuse macro source: the debugger steps through BrainFuck, and a
+# `.bfm` read as BrainFuck is a different program that would step confidently.
+gyrus-macro.workspace = true
 gyrus-tui.workspace = true
 clap.workspace = true

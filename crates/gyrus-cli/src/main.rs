@@ -10,6 +10,7 @@ use gyrus::{
     optimize_with_cell_model, parse, parse_with_debug,
 };
 use gyrus::{DebugInfo, Instruction};
+use gyrus_macro::ProgramError;
 use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
@@ -121,27 +122,6 @@ impl Mode {
     }
 }
 
-/// Why a program could not be loaded or run.
-///
-/// A macro error is not a `BfError` and never will be -- `gyrus` knows nothing
-/// about macros -- but a loader whose signature promises to return its
-/// failures must not exit from inside itself instead. This is the two of them
-/// in one type, so `?` works and `main` does the reporting.
-enum Failure {
-    Bf(BfError),
-    Macro {
-        error: gyrus_macro::MacroError,
-        /// The macro source, which is what its caret is drawn against.
-        source: String,
-    },
-}
-
-impl From<BfError> for Failure {
-    fn from(error: BfError) -> Self {
-        Failure::Bf(error)
-    }
-}
-
 /// A program ready to run.
 struct Program {
     instructions: Vec<Instruction>,
@@ -151,13 +131,9 @@ struct Program {
     source: String,
 }
 
-/// Read a file and turn it into something runnable.
-///
-/// A `.bfm` is expanded first, and its debug symbols are rewritten to name the
-/// macro source -- which is the whole point of the format, and the reason it
-/// never runs on the engine that discards them.
-fn load(path: &std::path::Path, mode: Mode, expanding: bool) -> Result<Program, Failure> {
-    let text = fs::read_to_string(path).map_err(|source| BfError::FileError {
+/// Read a file, or say why not.
+fn read_source(path: &std::path::Path) -> Result<String, BfError> {
+    fs::read_to_string(path).map_err(|source| BfError::FileError {
         path: path.to_path_buf(),
         source,
         hint: format!(
@@ -165,71 +141,48 @@ fn load(path: &std::path::Path, mode: Mode, expanding: bool) -> Result<Program, 
              Current path: {}",
             path.display()
         ),
-    })?;
+    })
+}
 
-    if !expanding {
-        // MultipleBracketErrors carries every error and formats them all, so
-        // it needs no special case here.
-        let (instructions, debug_info) = match mode.wants_symbols() {
-            true => parse_with_debug(&text).map(|(i, d)| (i, Some(d)))?,
-            false => (parse(&text)?, None),
-        };
-        return Ok(Program {
-            instructions,
-            debug_info,
-            source: text,
-        });
-    }
+/// A BrainFuck file, with debug symbols if the engine will use them.
+fn load_bf(path: &std::path::Path, symbols: bool) -> Result<Program, ProgramError> {
+    let source = read_source(path)?;
+    // MultipleBracketErrors carries every error and formats them all, so it
+    // needs no special case here.
+    let (instructions, debug_info) = match symbols {
+        true => parse_with_debug(&source).map(|(i, d)| (i, Some(d)))?,
+        false => (parse(&source)?, None),
+    };
+    Ok(Program {
+        instructions,
+        debug_info,
+        source,
+    })
+}
 
-    // Symbols are unconditional here, and the mode is the reason: a macro
-    // program only ever runs on an engine that keeps them. Asserting it ties
-    // the two together, since the guarantee itself lives in `run`'s mode
-    // resolution, in another function.
-    debug_assert!(
-        mode.wants_symbols(),
-        "a macro program was about to run on an engine that discards its symbols"
-    );
-
-    let expansion = gyrus_macro::expand(&text).map_err(|error| Failure::Macro {
+/// A macro file: expanded, then parsed with its symbols rewritten to name the
+/// `.bfm` rather than the expansion nobody wrote.
+///
+/// Symbols unconditionally, because the mode resolution guarantees a macro
+/// program never reaches an engine that discards them -- expressed there as a
+/// match arm rather than here as an assertion about another function.
+fn load_macro(path: &std::path::Path) -> Result<Program, ProgramError> {
+    let source = read_source(path)?;
+    let expansion = gyrus_macro::expand(&source).map_err(|error| ProgramError::Macro {
         error,
-        source: text.clone(),
+        source: source.clone(),
     })?;
     let (instructions, expanded) = parse_with_debug(expansion.brainfuck())?;
     Ok(Program {
         instructions,
-        // Rewritten to name the `.bfm`.
         debug_info: Some(expansion.remap(&expanded)),
-        source: text,
+        source,
     })
-}
-
-/// Whether to expand this file rather than parse it as BrainFuck.
-///
-/// The comparison is case-insensitive because getting it wrong is silent: a
-/// `.BFM` read as BrainFuck is not an error, it is a *different program* --
-/// every directive becomes a comment and `+{200}` collapses to one `+` -- so
-/// it prints nothing and exits zero. On a case-insensitive filesystem that
-/// made one file behave two ways depending on how its name was typed.
-///
-/// `--macro` is for the cases a name cannot answer at all: a temporary file,
-/// a process substitution, anything not called `.bfm`.
-fn is_macro_source(path: &std::path::Path, forced: bool) -> bool {
-    forced
-        || path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("bfm"))
 }
 
 fn main() {
     if let Err(failure) = run() {
-        match failure {
-            Failure::Bf(e) => eprintln!("{}", e.format_detailed()),
-            // Rendered against the macro source, with a caret, the way a parse
-            // error is.
-            Failure::Macro { error, source } => {
-                eprintln!("{}", error.format_with_source(&source))
-            }
-        }
+        eprintln!("{}", failure.report());
         std::process::exit(1);
     }
 }
@@ -248,7 +201,7 @@ where
     })
 }
 
-fn run() -> Result<(), Failure> {
+fn run() -> Result<(), ProgramError> {
     let cli = Cli::parse();
 
     #[cfg(feature = "jit")]
@@ -256,22 +209,33 @@ fn run() -> Result<(), Failure> {
     #[cfg(not(feature = "jit"))]
     let asked_for_jit = false;
 
-    let expanding = is_macro_source(&cli.file, cli.r#macro);
-    let mode = if cli.trace {
+    let requested = if cli.trace {
         Mode::Trace
     } else if asked_for_jit {
         Mode::Jit
-    } else if cli.debug || expanding {
+    } else if cli.debug {
         Mode::Debug
     } else {
         Mode::Optimized
+    };
+    // What was asked for, then what the format requires. A macro program only
+    // ever runs on an engine that can name a source position, and stating that
+    // as one arm is what keeps it true: as an ordering of `else if`s it held
+    // only because two other branches happened to be tested first.
+    let expanding = cli.r#macro || gyrus_macro::is_macro_path(&cli.file);
+    let mode = match (expanding, requested) {
+        (true, engine) if !engine.wants_symbols() => Mode::Debug,
+        (_, engine) => engine,
     };
 
     let Program {
         instructions,
         debug_info,
         source,
-    } = load(&cli.file, mode, expanding)?;
+    } = match expanding {
+        true => load_macro(&cli.file)?,
+        false => load_bf(&cli.file, mode.wants_symbols())?,
+    };
 
     // Parse cell model
     let cell_model = parse_or_exit(
@@ -398,49 +362,51 @@ fn run() -> Result<(), Failure> {
         None
     };
 
-    let stats = if mode == Mode::Optimized {
-        // OPTIMIZED MODE (default): Fast execution, no tracking
-        let optimized = optimized.as_ref().expect("built above");
-        match interpret_optimized_with_io(optimized, config, &mut input, &mut output) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error: {}", e.format_detailed());
-                eprintln!(
-                    "\nHint: Use --jit or --debug for source location tracking and better error messages"
-                );
-                std::process::exit(1);
-            }
-        }
-    } else if mode == Mode::Jit {
-        #[cfg(feature = "jit")]
-        {
+    let stats = match mode {
+        Mode::Optimized => {
+            // OPTIMIZED MODE (default): Fast execution, no tracking
             let optimized = optimized.as_ref().expect("built above");
-            // Counting costs; --verbose is the only thing that reads the counts.
-            let statistics = if cli.verbose {
-                gyrus_jit::Statistics::Full
-            } else {
-                gyrus_jit::Statistics::Cheap
-            };
-            match gyrus_jit::run_with(
-                optimized,
-                &config,
-                &mut input,
-                &mut output,
-                debug_info.as_ref(),
-                statistics,
-            ) {
+            match interpret_optimized_with_io(optimized, config, &mut input, &mut output) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("{}", e.format_with_source(&source));
+                    eprintln!("Error: {}", e.format_detailed());
+                    eprintln!(
+                        "\nHint: Use --jit or --debug for source location tracking and better error messages"
+                    );
                     std::process::exit(1);
                 }
             }
         }
-        #[cfg(not(feature = "jit"))]
-        unreachable!("--jit is not a flag without the jit feature")
-    } else {
-        // DEBUG/TRACE MODE: Standard interpreter with debug symbols
-        match interpret_with_io(
+        Mode::Jit => {
+            #[cfg(feature = "jit")]
+            {
+                let optimized = optimized.as_ref().expect("built above");
+                // Counting costs; --verbose is the only thing that reads the counts.
+                let statistics = if cli.verbose {
+                    gyrus_jit::Statistics::Full
+                } else {
+                    gyrus_jit::Statistics::Cheap
+                };
+                match gyrus_jit::run_with(
+                    optimized,
+                    &config,
+                    &mut input,
+                    &mut output,
+                    debug_info.as_ref(),
+                    statistics,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{}", e.format_with_source(&source));
+                        std::process::exit(1);
+                    }
+                }
+            }
+            #[cfg(not(feature = "jit"))]
+            unreachable!("--jit is not a flag without the jit feature")
+        }
+        // The tree-walker, with or without the profiler attached to it.
+        Mode::Debug | Mode::Trace => match interpret_with_io(
             &instructions,
             config,
             &mut input,
@@ -452,7 +418,7 @@ fn run() -> Result<(), Failure> {
                 eprintln!("{}", e.format_with_source(&source));
                 std::process::exit(1);
             }
-        }
+        },
     };
 
     // Display runtime warnings only in verbose mode (cell wrapping is common in BF)

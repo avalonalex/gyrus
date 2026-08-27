@@ -50,6 +50,10 @@ jobs:
         # And expanding by hand gives a .bf that runs the same.
         ./target/release/gyrus-tool expand programs/macros/compare.bfm -o /tmp/compare.bf
         test "$(./target/release/gyrus /tmp/compare.bf)" = "10110"
+        # Every other tool takes BrainFuck and must refuse macro source: doing
+        # it silently is not an error, it is a different program.
+        ! ./target/release/gyrus-tool minify programs/macros/records.bfm 2>/dev/null
+        ! ./target/release/gyrus-debug programs/macros/records.bfm 2>/dev/null
 
   # Reads rust-version from Cargo.toml and installs that toolchain itself, so
   # there is no version restated here to fall out of sync with the manifest.

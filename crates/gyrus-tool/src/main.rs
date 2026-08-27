@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use gyrus::{
@@ -9,7 +10,7 @@ use gyrus::{
     random::{
         IdiomaticConfig, RandomProgramConfig, generate_idiomatic_program, generate_random_program,
     },
-    syntax::{ColorTheme, SyntaxHighlighter},
+    syntax::{CharClass, ColorTheme, SyntaxHighlighter, classify_line},
     validate_with_cell_model,
 };
 
@@ -254,12 +255,12 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
     }
 }
 
-/// Read a source file, or say why not.
+/// Read a file, or say why not.
 ///
-/// The same six lines were written at each subcommand that reads one, and had
-/// already drifted: the newest copy carried a different hint from its
-/// neighbours, so the error text varied by subcommand for no reason.
-fn read_source(file: &std::path::Path) -> Result<String, BfError> {
+/// The same six lines were written at each subcommand that reads one. They had
+/// not drifted, which is luck rather than design: six copies of a user-facing
+/// hint is six places for the next edit to reach five of.
+fn read_file(file: &std::path::Path) -> Result<String, BfError> {
     fs::read_to_string(file).map_err(|source| BfError::FileError {
         path: file.to_path_buf(),
         source,
@@ -271,15 +272,33 @@ fn read_source(file: &std::path::Path) -> Result<String, BfError> {
     })
 }
 
+/// Read a *BrainFuck* source file: [`read_file`], and macro source refused.
+///
+/// Every subcommand but `expand` parses BrainFuck, and a `.bfm` parsed as
+/// BrainFuck is not an error -- it is a different program, so `validate`
+/// reported no warnings and `minify` produced twenty-four bytes bearing no
+/// relation to the file. Saying so is the whole fix.
+fn read_source(file: &std::path::Path) -> Result<String, BfError> {
+    if gyrus_macro::is_macro_path(file) {
+        return Err(BfError::ConfigurationError {
+            message: format!(
+                "{} is macro source. Expand it first -- `gyrus-tool expand {}` -- or run it \
+                 directly with `gyrus`.",
+                file.display(),
+                file.display()
+            ),
+        });
+    }
+    read_file(file)
+}
+
 /// Expand a macro program into BrainFuck.
 ///
-/// The counterpart to running one: `gyrus prog.bfm` expands and executes in a
-/// step, and this is the step on its own -- for reading what a macro produced,
-/// for feeding the result to something that only knows BrainFuck, and for
-/// checking that a `.bfm` expands at all, since anything wrong with it is
-/// reported here rather than at run time.
+/// The counterpart to running one, and the only subcommand here that takes
+/// macro source rather than refusing it. What it is *for* is in
+/// `docs/tooling.md`; what is worth knowing in the code is below.
 fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {
-    let source = read_source(&file)?;
+    let source = read_file(&file)?;
 
     // A macro error is rendered against the macro source, with a caret, the
     // way a parse error is. It is not a `BfError`, so it is reported and
@@ -297,15 +316,18 @@ fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(
         // commented than about what the macros did. What they did is expand
         // the instructions somebody typed into more of them.
         //
-        // Only the code part of each line. Counting the whole file counted
-        // every sentence-ending '.' and every ',' in the prose as an
-        // instruction, which reported hello_world.bfm as a 0.9x expansion --
-        // impossible, since every written instruction emits at least itself.
-        let written: usize = source
+        // Through the library's own classifier rather than a fourth spelling
+        // of what counts as code. `CharClass` exists because that rule had
+        // three encodings once, and its doc comment says two too many; a
+        // `*`-comment rule and an instruction alphabet written out here would
+        // have been the fourth, in the one place getting it wrong is
+        // invisible -- which is how this counted every sentence-ending '.' in
+        // the prose and reported hello_world.bfm as a 0.9x expansion.
+        let written = source
             .lines()
-            .map(|line| line.split('*').next().unwrap_or(""))
-            .map(|code| code.chars().filter(|c| "+-<>[],.".contains(*c)).count())
-            .sum();
+            .flat_map(classify_line)
+            .filter(|class| !matches!(class, CharClass::Comment | CharClass::Whitespace))
+            .count();
         let emitted = brainfuck.len();
         eprintln!("Expanded {}", file.display());
         eprintln!("  Macro source:        {} bytes", source.len());
@@ -320,58 +342,48 @@ fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(
         eprintln!();
     }
 
-    match output {
-        Some(path) => {
-            // Refused rather than done: the source was read into memory, so
-            // this would succeed and replace the only copy of a hand-written
-            // program with generated BrainFuck. `-o prog.bf` is one character
-            // away.
-            if same_file(&file, &path) {
-                return Err(BfError::ConfigurationError {
-                    message: format!(
-                        "{} is the macro source; expanding over it would destroy it",
-                        path.display()
-                    ),
-                });
-            }
-            // `FileError` says "Failed to read source file", which this is
-            // not. Writing the newline separately rather than through a
-            // `format!` also spares a second copy of an expansion that is the
-            // one thing this tool is meant to make large.
-            let mut out = fs::File::create(&path).map_err(|source| BfError::IoError {
-                operation: format!("creating {}", path.display()),
-                instruction_index: None,
-                source,
-            })?;
-            let write = |out: &mut fs::File| -> std::io::Result<()> {
-                use std::io::Write;
-                out.write_all(brainfuck.as_bytes())?;
-                out.write_all(b"\n")
-            };
-            write(&mut out).map_err(|source| BfError::IoError {
-                operation: format!("writing {}", path.display()),
-                instruction_index: None,
-                source,
-            })?;
-            if verbose {
-                eprintln!("Written to {}", path.display());
-            }
+    let Some(path) = output else {
+        println!("{brainfuck}");
+        return Ok(());
+    };
+
+    // Refused rather than done: the source was read into memory, so this would
+    // succeed and replace the only copy of a hand-written program with
+    // generated BrainFuck. `-o prog.bf` is one character away.
+    if same_file(&file, &path) {
+        return Err(BfError::ConfigurationError {
+            message: format!(
+                "{} is the macro source; expanding over it would destroy it",
+                path.display()
+            ),
+        });
+    }
+
+    // `FileError` says "Failed to read source file", which this is not.
+    // Writing the newline separately rather than through a `format!` also
+    // spares a second copy of an expansion that is the one thing this tool is
+    // meant to make large.
+    let failed = |operation: String| {
+        move |source| BfError::IoError {
+            operation,
+            instruction_index: None,
+            source,
         }
-        None => println!("{brainfuck}"),
+    };
+    let mut out =
+        fs::File::create(&path).map_err(failed(format!("creating {}", path.display())))?;
+    out.write_all(brainfuck.as_bytes())
+        .and_then(|()| out.write_all(b"\n"))
+        .map_err(failed(format!("writing {}", path.display())))?;
+    if verbose {
+        eprintln!("Written to {}", path.display());
     }
     Ok(())
 }
 
 fn run_minify(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {
     // Read source file
-    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
-        path: file.clone(),
-        source: source_err,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. Current path: {}",
-            file.display()
-        ),
-    })?;
+    let source = read_source(&file)?;
 
     // Parse the program
     let (instructions, _debug_info) = parse_with_debug(&source)?;
@@ -426,14 +438,7 @@ fn run_validate(
     _verbose: bool,
 ) -> Result<(), BfError> {
     // Read source file
-    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
-        path: file.clone(),
-        source: source_err,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. Current path: {}",
-            file.display()
-        ),
-    })?;
+    let source = read_source(&file)?;
 
     // Parse the program
     let (instructions, debug_info) = parse_with_debug(&source)?;
@@ -475,14 +480,7 @@ fn run_validate(
 
 fn run_debug_info(file: PathBuf, format: String, show_source: bool) -> Result<(), BfError> {
     // Read source file
-    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
-        path: file.clone(),
-        source: source_err,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. Current path: {}",
-            file.display()
-        ),
-    })?;
+    let source = read_source(&file)?;
 
     // Parse the program with debug symbols
     let (_instructions, debug_info) = parse_with_debug(&source)?;
@@ -506,14 +504,7 @@ fn run_debug_info(file: PathBuf, format: String, show_source: bool) -> Result<()
 
 fn run_view(file: PathBuf, line_numbers: bool, theme: String, plain: bool) -> Result<(), BfError> {
     // Read source file
-    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
-        path: file.clone(),
-        source: source_err,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. Current path: {}",
-            file.display()
-        ),
-    })?;
+    let source = read_source(&file)?;
 
     // Select theme
     let color_theme = match theme.to_lowercase().as_str() {
@@ -759,14 +750,7 @@ fn run_optimize(
     });
 
     // Read source file
-    let source = fs::read_to_string(&file).map_err(|source_err| BfError::FileError {
-        path: file.clone(),
-        source: source_err,
-        hint: format!(
-            "Make sure the file exists and you have permission to read it. Current path: {}",
-            file.display()
-        ),
-    })?;
+    let source = read_source(&file)?;
 
     // Parse the program
     let instructions = parse(&source)?;

@@ -50,6 +50,10 @@ gyrus-tool expand programs/macros/records.bfm
 gyrus-tool expand prog.bfm -o prog.bf     # and then treat it as any other .bf
 ```
 
+Everything else in `gyrus-tool` takes BrainFuck, and refuses a `.bfm` rather
+than reading it as one — which would not fail, it would quietly be a different
+program.
+
 [The macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
 describes what the language is; `programs/macros/` has eight programs written
 in it.
@@ -69,12 +73,10 @@ All four produce the same output and the same errors. That is held by a
 differential test suite rather than by intention — see
 [Testing](testing.md#differential-testing-is-the-backbone).
 
-**A `.bfm` defaults to `--debug` instead.** It exists so that errors point back
-at macro source, and the optimized interpreter is the one engine that cannot
-name a source position. There is deliberately no flag to ask for it: `--jit` is
-faster anyway and keeps the locations. If you want to measure the optimized
-interpreter on a macro program, expand it first and run the `.bf` — which is
-the honest thing to measure in any case.
+**A `.bfm` defaults to `--debug` instead**, because it exists so that errors
+point back at macro source and the optimized interpreter is the one engine that
+cannot name a source position. [Usage](usage.md#running-a-macro-program) has
+the rest.
 
 [Execution models](execution-models.md#the-jit) has the JIT's details.
 

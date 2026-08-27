@@ -24,6 +24,11 @@ handing the result to something that only understands BrainFuck, and for
 checking that a `.bfm` expands at all, since anything wrong with it is reported
 here rather than at run time.
 
+Every other subcommand here takes BrainFuck and refuses a `.bfm`. Reading one
+as BrainFuck is not an error — every directive becomes a comment — so
+`validate` would report no warnings and `minify` would emit a program bearing
+no relation to the file.
+
 Errors are rendered against the macro source with a caret, the way a parse
 error is:
 
