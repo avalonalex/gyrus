@@ -25,7 +25,11 @@
 //! - `OP{N}` -- repeat `OP` N times, where `OP` is one of `+ - < > . ,` and `N`
 //!   is a number or a defined name. `+{0}` is nothing, which is legal.
 //! - `*` to end of line, and any character that is not a BrainFuck instruction:
-//!   comments, dropped from the expansion.
+//!   comments, dropped from the expansion. Inside a macro body a comment also
+//!   ends at a `}` that closes it *and ends the line*, so that a one-line
+//!   `@macro clear { [-] * clears it }` works while `* the } cell` in a
+//!   sentence stays prose. That is the one place two readers of this language
+//!   are meant to differ, and [`crate::lex`] is where both of them get it.
 //!
 //! Wherever a number may be written, so may a character or a hexadecimal
 //! number: `'A'`, `'\n'` and `0x41` are all 65. They go through one
@@ -139,6 +143,7 @@ use gyrus::SourceLocation;
 
 use crate::directive::{Declaration, Directive};
 use crate::error::{Kind, MacroError, Wanted};
+use crate::lex::{self, REPEATABLE};
 use crate::source_map::Expansion;
 
 /// The most instructions one repeat count may emit.
@@ -174,10 +179,6 @@ pub const MACRO_DEPTH_LIMIT: usize = 64;
 /// all. Thirty levels is an hour. The budget has to count the work, not just
 /// the result.
 pub const INVOCATION_LIMIT: u64 = 100_000;
-
-/// Instructions a repeat count may follow. Brackets are deliberately absent:
-/// `[{3}` would mean three loop openings, which is not a thing anyone means.
-const REPEATABLE: [char; 6] = ['+', '-', '<', '>', '.', ','];
 
 /// Expand `.bfm` source into BrainFuck, keeping the origin of every byte.
 pub fn expand(source: &str) -> Result<Expansion, MacroError> {
@@ -425,10 +426,12 @@ impl Scanner {
         self.chars.get(self.at.offset).copied()
     }
 
-    /// Whether the character before the cursor is a backslash, for deciding
-    /// whether a quote closes a literal.
-    fn previous_is_backslash(&self) -> bool {
-        self.at.offset > 0 && self.chars[self.at.offset - 1] == '\\'
+    /// Advance to `offset`, one character at a time so the line and column
+    /// keep up. The lexical rules measure spans; this walks them.
+    fn advance_to(&mut self, offset: usize) {
+        while self.at.offset < offset && self.peek().is_some() {
+            self.bump();
+        }
     }
 
     /// Whether only blanks precede the cursor on its line.
@@ -447,12 +450,7 @@ impl Scanner {
     }
 
     fn at_line_start(&self) -> bool {
-        let boundary = self.boundary();
-        self.chars[boundary.min(self.at.offset)..self.at.offset]
-            .iter()
-            .rev()
-            .take_while(|&&c| c != '\n')
-            .all(|&c| c == ' ' || c == '\t')
+        lex::at_line_start(&self.chars, self.at.offset, self.boundary())
     }
 
     fn bump(&mut self) {
@@ -505,27 +503,25 @@ impl Scanner {
     /// the delimiter that reader would otherwise stop at, and each of them the
     /// obvious thing to write.
     fn token(&mut self, ends: impl Fn(char) -> bool) -> Token {
-        let mut text = String::new();
-        let mut quoted = false;
-        let mut escaped = false;
+        let start = self.at.offset;
+        let mut quote_open = false;
         while let Some(c) = self.peek() {
-            // A newline ends a token whatever the quoting, so an unclosed
-            // quote cannot swallow the rest of the file looking for its pair
-            // and then blame a line far below the one it is on.
-            if c == '\n' || (!quoted && ends(c)) {
+            // A newline ends a token whatever the quoting, which is the rule
+            // `lex::literal` enforces from the other side.
+            if c == '\n' || ends(c) {
                 break;
             }
-            match c {
-                '\\' if quoted => escaped = !escaped,
-                '\'' if !escaped => quoted = !quoted,
-                _ => escaped = false,
+            if c == '\'' {
+                let (end, closed) = lex::literal(&self.chars, self.at.offset);
+                self.advance_to(end);
+                quote_open = !closed;
+                continue;
             }
-            text.push(c);
             self.bump();
         }
         Token {
-            text,
-            quote_open: quoted,
+            text: self.chars[start..self.at.offset].iter().collect(),
+            quote_open,
         }
     }
 
@@ -820,23 +816,39 @@ impl Scanner {
     /// yet" is a poor thing to read directly above a rendering of the
     /// definition two lines down.
     fn defined_later(&self, name: &str) -> bool {
-        let rest: String = self.chars[self.at.offset.min(self.chars.len())..]
-            .iter()
-            .collect();
-        // Only declarations that could actually take effect. One inside a
-        // macro body is refused outright, so advertising it would send the
-        // reader to move their code below a definition that will never run.
-        //
-        // A plain loop rather than `.any()` over a closure mutating its own
-        // capture: the depth has to be read before the line updates it, and
-        // stating that as an order of statements is clearer than as a value
-        // computed at the top of a closure and returned at the bottom.
+        // Walked with the same rules the expander uses rather than scanned
+        // line by line, which did not know comments existed: a `{` in prose
+        // opened a body that never closed, and every declaration below it
+        // stopped being advertised.
+        let mut at = self.at.offset.min(self.chars.len());
         let mut depth = 0usize;
-        for line in rest.lines() {
-            if depth == 0 && declares(line.trim_start(), name) {
+        while let Some(&c) = self.chars.get(at) {
+            // Only a declaration that could take effect. One inside a macro
+            // body is refused outright, so advertising it would send the
+            // reader to move their code below something that never runs.
+            if depth == 0
+                && c == '@'
+                && lex::at_line_start(&self.chars, at, 0)
+                && declares(&self.chars, at, name)
+            {
                 return true;
             }
-            depth = brace_depth_after(line, depth);
+            at = match c {
+                '*' => lex::comment(&self.chars, at, false),
+                '\'' => lex::literal(&self.chars, at).0,
+                '{' if lex::is_repeat_count(&self.chars, at) => {
+                    lex::repeat_count(&self.chars, at).0
+                }
+                '{' => {
+                    depth += 1;
+                    at + 1
+                }
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    at + 1
+                }
+                _ => at + 1,
+            };
         }
         false
     }
@@ -1055,15 +1067,6 @@ impl Scanner {
     /// body. Getting either wrong would end the body in the wrong place.
     fn skip_body(&mut self, name: &str, location: SourceLocation) -> Result<usize, MacroError> {
         let mut depth = 1usize;
-        // A character literal is opaque here, as it is to every other reader:
-        // `@n('}')` in a body had its quoted brace counted, which closed the
-        // body three lines early.
-        let mut quoted = false;
-        // Set once per character at the foot of the loop, rather than at the
-        // end of each arm: `*`, `{` and `}` are not repeatable, so all five
-        // assignments were the same expression about the character that
-        // entered the arm.
-        let mut after_instruction = false;
         loop {
             let Some(c) = self.peek() else {
                 return Err(malformed(
@@ -1072,62 +1075,31 @@ impl Scanner {
                     location,
                 ));
             };
-            if quoted {
-                // Only the closing quote matters; `\'` inside one does not
-                // close it.
-                if c == '\'' && !self.previous_is_backslash() {
-                    quoted = false;
-                }
-                self.bump();
-                continue;
-            }
-            match c {
-                '\'' => {
-                    quoted = true;
-                    self.bump();
-                    after_instruction = false;
-                    continue;
-                }
-                '*' => {
-                    // To the end of the line, or to the brace that closes the
-                    // body, whichever comes first. Otherwise a one-line
-                    // `@macro clear { [-] * clears it }` -- the natural thing
-                    // to write, and the shape the docs use -- reports its own
-                    // body as never closed.
-                    while self
-                        .peek()
-                        .is_some_and(|c| c != '\n' && !(c == '}' && depth == 1))
-                    {
-                        self.bump();
-                    }
-                }
-                '{' if after_instruction => {
-                    // A repeat count, not a nested brace -- and read with the
-                    // scanner's own reader, so that `+{'}'}` inside a body
-                    // ends where it ends everywhere else. Skipping to the
-                    // first `}` stopped inside the literal and then took the
-                    // literal's own closing quote for the body's end.
-                    self.bump();
-                    self.token(|c| c == '}');
-                    if self.peek() == Some('}') {
-                        self.bump();
-                    }
+            let at = self.at.offset;
+            // Every one of these was written out here once, and every one of
+            // them drifted from the expander's version. The body is read the
+            // way the body will be read.
+            let next = match c {
+                '*' => lex::comment(&self.chars, at, depth == 1),
+                '\'' => lex::literal(&self.chars, at).0,
+                '{' if lex::is_repeat_count(&self.chars, at) => {
+                    lex::repeat_count(&self.chars, at).0
                 }
                 '{' => {
                     depth += 1;
-                    self.bump();
+                    at + 1
                 }
                 '}' => {
                     depth -= 1;
-                    let end = self.at.offset;
-                    self.bump();
                     if depth == 0 {
-                        return Ok(end);
+                        self.bump();
+                        return Ok(at);
                     }
+                    at + 1
                 }
-                _ => self.bump(),
-            }
-            after_instruction = REPEATABLE.contains(&c);
+                _ => at + 1,
+            };
+            self.advance_to(next);
         }
     }
 
@@ -1736,39 +1708,29 @@ fn malformed(directive: &str, detail: String, location: SourceLocation) -> Macro
     }
 }
 
-/// Whether a line declares `name`, for the "defined below" hint.
-fn declares(trimmed: &str, name: &str) -> bool {
-    Directive::ALL
-        .into_iter()
-        .filter(|d| d.declaration().is_some())
-        .filter_map(|d| trimmed.strip_prefix(&format!("@{}", d.spelling())))
-        .any(|tail| {
-            tail.trim_start()
-                .strip_prefix(name)
-                .is_some_and(|after| !after.starts_with(is_identifier_char))
-        })
-}
-
-/// Brace depth after a line, for the same hint. Crude but sufficient for one:
-/// a repeat count's brace sits against an instruction, and a body's does not.
-fn brace_depth_after(line: &str, mut depth: usize) -> usize {
-    let (mut previous, mut quoted) = (' ', false);
-    for c in line.chars() {
-        // A brace inside a character literal is data. Without this
-        // `@define OPEN '{'` -- legal source now -- opens a body that never
-        // closes, and every declaration below it stops being advertised.
-        if c == '\'' && previous != '\\' {
-            quoted = !quoted;
-        } else if !quoted {
-            match c {
-                '{' if !REPEATABLE.contains(&previous) => depth += 1,
-                '}' if depth > 0 => depth -= 1,
-                _ => {}
-            }
-        }
-        previous = c;
+/// Whether the directive at `at` declares `name`, for the "defined below" hint.
+fn declares(chars: &[char], at: usize, name: &str) -> bool {
+    let spelling: String = chars[at + 1..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    if Directive::from_spelling(&spelling)
+        .and_then(Directive::declaration)
+        .is_none()
+    {
+        return false;
     }
-    depth
+
+    let mut i = at + 1 + spelling.chars().count();
+    while chars.get(i).is_some_and(|c| *c == ' ' || *c == '\t') {
+        i += 1;
+    }
+    name.chars()
+        .enumerate()
+        .all(|(k, c)| chars.get(i + k) == Some(&c))
+        && !chars
+            .get(i + name.chars().count())
+            .is_some_and(|c| is_identifier_char(*c))
 }
 
 fn is_identifier_char(c: char) -> bool {
@@ -2517,8 +2479,9 @@ mod macro_tests {
             expanded("@macro clear { [-] * clears it }\n@clear\n"),
             "[-]"
         );
-        // Which is to say the comment ends at that brace. Anything after it
-        // is still on the @macro line, and a directive owns its line.
+        // A brace that ends the line is the one closing the body, so the
+        // comment ends there and `brace` is left on the @macro line -- which
+        // a directive owns.
         let error = expand("@macro two { ++ * a } brace\n@two\n").unwrap_err();
         assert!(
             matches!(error, MacroError::MalformedDirective { .. }),
@@ -3123,5 +3086,87 @@ mod relative_addressing {
         super::tests::assert_origins_are_exact(&format!(
             "{RECORD}@here marker\n[\n@to one\n.\n@to marker\n>{{3}}\n]\n"
         ));
+    }
+}
+
+#[cfg(test)]
+mod one_lexer {
+    use super::tests::expanded;
+    use super::*;
+
+    /// Constructs whose lexical extent is not obvious, and which each of the
+    /// three readers of this language got wrong at least once.
+    const AWKWARD: [(&str, &str); 6] = [
+        ("a quoted brace", "+{'}'}"),
+        ("a quoted quote", "+{'\\''}"),
+        ("a brace in prose", "+ * a { brace\n"),
+        ("a close brace in prose", "+ * a } brace\n"),
+        ("a quote in prose", "+ * it's prose\n"),
+        ("an unrepeated brace count", "+{3}"),
+    ];
+
+    /// The same construct, read in the three places that read this language.
+    ///
+    /// Each of these was a separate reader with its own idea of where a
+    /// comment ends, how far a literal reaches, and whether a `{` is a repeat
+    /// count -- and each difference between them cost a bug. One input set
+    /// through all three is the test that would have caught every one.
+    #[test]
+    fn the_three_readers_agree_about_every_awkward_construct() {
+        for (what, construct) in AWKWARD {
+            // 1. At the top level, where the expander reads it.
+            let plain = format!("{construct}\n");
+            let direct = expand(&plain)
+                .unwrap_or_else(|e| panic!("{what} at the top level: {e}"))
+                .brainfuck()
+                .to_string();
+
+            // 2. Inside a macro body, where `skip_body` has to find the end.
+            let wrapped = format!("@macro body {{\n{construct}\n}}\n@body\n");
+            let through_macro = expand(&wrapped)
+                .unwrap_or_else(|e| panic!("{what} inside a macro body: {e}"))
+                .brainfuck()
+                .to_string();
+            assert_eq!(
+                direct, through_macro,
+                "{what} expands differently inside a macro body"
+            );
+
+            // 3. Before a declaration, where the "defined below" hint walks
+            //    ahead of the cursor looking for one.
+            let ahead = format!("+{{LATER}}\n{construct}\n@define LATER 3\n");
+            let error = expand(&ahead).unwrap_err();
+            let hint = error.hint().unwrap_or_default();
+            assert!(
+                hint.contains("defined below this line"),
+                "{what} hid the declaration after it from the hint: {hint}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_brace_in_prose_no_longer_swallows_the_rest_of_the_file() {
+        // The reader behind the hint did not know comments existed, so this
+        // `{` opened a body that never closed and every declaration below it
+        // stopped being advertised.
+        let source = "+{LATER}\n* a { brace in prose\n@define LATER 3\n";
+        let hint = expand(source).unwrap_err().hint().unwrap_or_default();
+        assert!(hint.contains("defined below this line"), "{hint}");
+    }
+
+    #[test]
+    fn a_body_and_the_expander_end_a_comment_in_the_same_place() {
+        // The one place the two readers differ on purpose, and only for a
+        // brace that ends its line: a one-line `@macro clear { [-] * clears
+        // it }` works, while a `}` in a sentence stays prose. Stated as a
+        // test rather than left as a difference nobody wrote down.
+        assert_eq!(
+            expanded("@macro clear {\n[-] * clears it\n}\n@clear\n"),
+            "[-]"
+        );
+        assert_eq!(
+            expanded("@macro clear { [-] * clears it }\n@clear\n"),
+            "[-]"
+        );
     }
 }

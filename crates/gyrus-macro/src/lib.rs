@@ -101,6 +101,7 @@
 mod directive;
 mod error;
 mod expand;
+mod lex;
 mod source_map;
 
 use std::path::Path;
