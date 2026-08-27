@@ -18,7 +18,8 @@ gyrus-tool expand prog.bfm -o prog.bf      # to a file
 gyrus-tool expand prog.bfm --verbose       # and what it cost
 ```
 
-Turns `.bfm` macro source into BrainFuck. `gyrus prog.bfm` expands and runs in
+Turns `.bfm` macro source into BrainFuck, following `@include` from the
+directory holding each file that writes one. `gyrus prog.bfm` expands and runs in
 one step; this is the step on its own — for reading what a macro produced, for
 handing the result to something that only understands BrainFuck, and for
 checking that a `.bfm` expands at all, since anything wrong with it is reported

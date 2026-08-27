@@ -167,16 +167,15 @@ fn load_bf(path: &std::path::Path, symbols: bool) -> Result<Program, ProgramErro
 /// program never reaches an engine that discards them -- expressed there as a
 /// match arm rather than here as an assertion about another function.
 fn load_macro(path: &std::path::Path) -> Result<Program, ProgramError> {
-    let source = read_source(path)?;
-    let expansion = gyrus_macro::expand(&source).map_err(|error| ProgramError::Macro {
-        error,
-        source: source.clone(),
-    })?;
+    // `expand_file` rather than reading the text first: `@include` resolves
+    // against the directory holding the file, so the expander has to know
+    // which file it is expanding.
+    let expansion = gyrus_macro::expand_file(path)?;
     let (instructions, expanded) = parse_with_debug(expansion.brainfuck())?;
     Ok(Program {
         instructions,
         debug_info: Some(expansion.remap(&expanded)),
-        source,
+        source: expansion.source().to_string(),
     })
 }
 

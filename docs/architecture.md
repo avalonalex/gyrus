@@ -158,15 +158,27 @@ and `@to` (named cells, with the cursor tracked and the movement emitted),
 `@here` (assert a position without moving), `@macro` with parameters, and
 `@ifdef`/`@ifndef`/`@endif` (a branch not taken is never expanded, so it may
 hold names and brackets that would be errors in one that is, and a body's test
-is made against the scope it is expanded into). A `@var` without
+is made against the scope it is expanded into), and `@include`. A `@var` without
 a cell has one chosen, and anywhere a number may be written so may an ASCII
 character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all 65. A
 directive must start its line and
 owns the rest of it; `{` and `}` are reserved everywhere, `@` only at the start
 of a line, so BrainFuck's free-form prose comments survive.
 
-Two things are worth knowing about the design, both documented in full in the
+Three things are worth knowing about the design, all documented in full in the
 crate's module documentation:
+
+**An included file declares; it does not emit.** `@include "lib.bfm"` reads
+another file's `@define`s, `@var`s and `@macro`s, resolved relative to the file
+that wrote the path, and reads a file named twice only once — so two libraries
+can share a third and a cycle terminates instead of needing to be detected. It
+may not emit BrainFuck, and that is what the map below rests on: one position
+per emitted byte, against one text, is not a thing a second file can be written
+in. An instruction from a library would have to report either a line of the
+file that included it or a line number belonging to a file the reader is not
+looking at, and both are what this crate exists to prevent. Refusing costs a
+library nothing, because a macro's bytes already name the invocation rather
+than the definition.
 
 **Located errors need no change to `gyrus`.** `Expansion::remap` rewrites
 `parse_with_debug`'s `DebugInfo` using only public API. What it cannot carry is

@@ -173,8 +173,12 @@ interpreters, with source locations, three and a half times faster on
 mandelbrot -- and slower on programs that finish before it has finished
 compiling. See [execution models](docs/execution-models.md#the-jit).
 
-**Planned**: a REPL, an AOT build on the JIT's translator, and a macro
-preprocessor. Only the last has a design; it lives in [`PRD/`](PRD/).
+There is also a macro preprocessor: `.bfm` source with named cells, macros,
+conditionals and `@include`, expanded to ordinary BrainFuck with a map back, so
+a runtime error names the line somebody wrote. `gyrus program.bfm` runs one.
+
+**Planned**: a REPL, and an AOT build on the JIT's translator. Neither has a
+design yet.
 
 ## Development
 

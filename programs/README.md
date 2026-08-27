@@ -61,7 +61,12 @@ file.
   run time: 322 instructions become 222. Both numbers are asserted by
   `the_conditional_example_compiles_its_tracing_in_and_out`.
 
-All nine are load-bearing rather than illustrative:
+- **`include.bfm`** - a program that is only the program: its vocabulary comes
+  from **`lib/ascii.bfm`**, which declares three macros and two named
+  characters and emits nothing. An included file cannot emit, which is what
+  keeps every byte's origin inside the file being expanded.
+
+All ten are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

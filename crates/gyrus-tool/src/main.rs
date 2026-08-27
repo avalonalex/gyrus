@@ -298,15 +298,15 @@ fn read_source(file: &std::path::Path) -> Result<String, BfError> {
 /// macro source rather than refusing it. What it is *for* is in
 /// `docs/tooling.md`; what is worth knowing in the code is below.
 fn run_expand(file: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), BfError> {
-    let source = read_file(&file)?;
-
     // A macro error is rendered against the macro source, with a caret, the
     // way a parse error is. It is not a `BfError`, so it is reported and
-    // exited on here rather than returned.
-    let expansion = gyrus_macro::expand(&source).unwrap_or_else(|e| {
-        eprintln!("{}", e.format_with_source(&source));
+    // exited on here rather than returned. Through `expand_file` because
+    // `@include` resolves against the directory holding the file.
+    let expansion = gyrus_macro::expand_file(&file).unwrap_or_else(|failure| {
+        eprintln!("{}", failure.report());
         std::process::exit(1);
     });
+    let source = expansion.source().to_string();
     let brainfuck = expansion.brainfuck();
 
     if verbose {

@@ -59,7 +59,12 @@ fn run(relative: &str, max_steps: u64) -> (String, String) {
 fn run_source(bfm: &str, max_steps: u64) -> (String, String) {
     let expansion =
         gyrus_macro::expand(bfm).unwrap_or_else(|e| panic!("{}", e.format_with_source(bfm)));
+    run_expansion(&expansion, max_steps)
+}
 
+/// The same, for an expansion already in hand: `@include` needs a file, so the
+/// program that has one is expanded before it gets here.
+fn run_expansion(expansion: &gyrus_macro::Expansion, max_steps: u64) -> (String, String) {
     let (instructions, expanded) = parse_with_debug(expansion.brainfuck()).expect("parses");
     let debug_info = expansion.remap(&expanded);
 
@@ -180,6 +185,34 @@ fn the_records_example_walks_an_array_by_field_name() {
 fn the_compare_example_transcribes_a_catalogued_idiom() {
     let (_, printed) = run("programs/macros/compare.bfm", 1_000_000);
     assert_eq!(printed, "10110");
+}
+
+/// A program whose vocabulary comes from another file.
+///
+/// Through `expand_file` rather than `run_source`, because the path in the
+/// `@include` resolves against the file holding it -- which is the behaviour
+/// under test as much as the output is.
+#[test]
+fn the_include_example_takes_its_vocabulary_from_a_library() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/include.bfm");
+    let expansion =
+        gyrus_macro::expand_file(&path).unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (brainfuck, printed) = run_expansion(&expansion, 100_000);
+    assert_eq!(printed, "hi\n");
+
+    // Nothing of the library survives as *text*: what it contributed is three
+    // macros and two names, and the instructions are the ones this file asked
+    // for. That is what makes the source map still hold.
+    assert!(brainfuck.chars().all(|c| "+-<>.,[]".contains(c)));
+    for offset in 0..brainfuck.len() {
+        let origin = expansion.origin(offset).expect("every byte has an origin");
+        assert!(
+            expansion.source().lines().count() >= origin.line,
+            "byte {offset} names line {} of a file with fewer",
+            origin.line
+        );
+    }
 }
 
 /// Conditional compilation, and what it means for it to be *compilation*.

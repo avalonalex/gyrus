@@ -65,7 +65,23 @@
 //!
 //! That block expands; `the_documented_example_expands` reads it out of this
 //! file and runs it, because a front page nobody executes is a front page that
-//! drifts.
+//! drifts. It is missing one directive, and for a reason worth stating:
+//!
+//! ```text
+//! @include "lib/ascii.bfm"   * another file's declarations, read here
+//! ```
+//!
+//! `@include` needs a file to resolve its path against, so it works through
+//! [`expand_file`] and not [`expand`] -- which is also why it cannot appear in
+//! a block expanded from text.
+//!
+//! An included file **declares**: `@define`, `@var`, `@field`, `@stride`,
+//! `@macro`. It may not emit BrainFuck. The map below holds one position per
+//! emitted byte against one text, and a second file cannot be written in it,
+//! so an instruction from a library could only report a line of the file that
+//! included it or a line number belonging to a file the reader is not looking
+//! at. Refusing to emit is the third option, and it costs a library nothing: a
+//! macro is how you ship instructions, and its bytes name the invocation.
 //!
 //! Naming cells is the part that earns the feature. Manual pointer arithmetic
 //! is what makes hand-written BrainFuck unmaintainable past a few dozen cells,
@@ -78,9 +94,8 @@
 //! checked. `@here` is the only construct here that can silently produce a
 //! wrong program.
 //!
-//! `@include` is designed but not built; it is rejected by name rather than
-//! treated as a comment, so a `.bfm` written today cannot change meaning when
-//! it arrives.
+//! The vocabulary is closed: every directive named above is built, so there is
+//! nothing left that a `.bfm` written today could come to mean differently.
 //!
 //! ## Example
 //!
@@ -143,16 +158,19 @@ pub fn is_macro_path(path: &Path) -> bool {
 #[derive(Debug)]
 pub enum ProgramError {
     Bf(gyrus::BfError),
-    /// A macro error, with the source its caret is drawn against.
-    Macro {
-        error: MacroError,
-        source: String,
-    },
+    /// A macro error, with the file and text its caret is drawn against.
+    Macro(MacroFailure),
 }
 
 impl From<gyrus::BfError> for ProgramError {
     fn from(error: gyrus::BfError) -> Self {
         ProgramError::Bf(error)
+    }
+}
+
+impl From<MacroFailure> for ProgramError {
+    fn from(failure: MacroFailure) -> Self {
+        ProgramError::Macro(failure)
     }
 }
 
@@ -162,13 +180,13 @@ impl ProgramError {
     pub fn report(&self) -> String {
         match self {
             ProgramError::Bf(error) => error.format_detailed(),
-            ProgramError::Macro { error, source } => error.format_with_source(source),
+            ProgramError::Macro(failure) => failure.report(),
         }
     }
 }
 
-pub use error::{Kind, MacroError, Wanted};
-pub use expand::{REPEAT_LIMIT, expand};
+pub use error::{Kind, MacroError, MacroFailure, Wanted};
+pub use expand::{INCLUDE_DEPTH_LIMIT, REPEAT_LIMIT, expand, expand_file};
 pub use source_map::Expansion;
 
 #[cfg(test)]

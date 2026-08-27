@@ -24,6 +24,11 @@
 //!   names and brackets that would be errors in one that is. The test is made
 //!   where it is reached rather than where it is written, so a body decides it
 //!   against the caller's scope, once per invocation.
+//! - `@include "lib.bfm"` -- another file's declarations, read here. The path
+//!   is relative to the file that wrote it, a file named twice is read once,
+//!   and an included file *declares*: it may not emit BrainFuck. That last is
+//!   the rule the source map rests on rather than a restriction left over from
+//!   one; [`Scanner::include`] says why.
 //! - `@macro NAME(a, b) { ... }`, invoked as `@NAME(1, 2)` -- a body expanded
 //!   in place. An argument is evaluated in the caller's scope and bound to the
 //!   parameter, so a number, a constant and a cell all pass the same way.
@@ -53,8 +58,8 @@
 //! no bundled program has either in its prose -- and it buys the error for the
 //! likeliest typo of all, a space between an instruction and its count.
 //!
-//! Between them, a `.bfm` written today cannot change meaning when `@include`
-//! arrives.
+//! The vocabulary is now closed: every name in it is built, so there is no
+//! directive left that a `.bfm` could mean something different by later.
 //!
 //! # Macros are expanded in place
 //!
@@ -140,12 +145,13 @@
 //! position they can act on and one they cannot.
 
 use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gyrus::SourceLocation;
 
 use crate::directive::{Declaration, Directive};
-use crate::error::{Kind, MacroError, Wanted};
+use crate::error::{Kind, MacroError, MacroFailure, Wanted};
 use crate::lex::{self, REPEATABLE, Step, ValueEnd, is_identifier_char};
 use crate::source_map::Expansion;
 
@@ -185,7 +191,32 @@ pub const INVOCATION_LIMIT: u64 = 100_000;
 
 /// Expand `.bfm` source into BrainFuck, keeping the origin of every byte.
 pub fn expand(source: &str) -> Result<Expansion, MacroError> {
-    Scanner::new(source).run()
+    Scanner::new(source).run().map_err(|failure| failure.error)
+}
+
+/// Expand a `.bfm` file, resolving `@include` against the directory holding
+/// it.
+///
+/// The file-reading half of [`expand`], and the only entry point where
+/// `@include` can work: a path is relative to the file that wrote it, so
+/// source handed over as text has nothing to resolve against.
+///
+/// The failure carries the text its caret is drawn against, which is not
+/// always the file passed in -- an error inside an included file names that
+/// file and renders its lines.
+pub fn expand_file(path: &Path) -> Result<Expansion, MacroFailure> {
+    let source = std::fs::read_to_string(path).map_err(|source| {
+        MacroFailure::new(
+            MacroError::IncludeUnreadable {
+                path: path.to_path_buf(),
+                detail: source.to_string(),
+                location: SourceLocation::start(),
+            },
+            None,
+            String::new(),
+        )
+    })?;
+    Scanner::rooted(&source, Some(path.to_path_buf())).run()
 }
 
 /// A macro definition: its parameters, and the span its body occupies.
@@ -266,6 +297,39 @@ enum Position {
 }
 
 /// One macro invocation being expanded.
+/// How deep `@include` may nest.
+///
+/// Small on purpose. A chain this long is a mistake rather than a design, and
+/// the scan recurses, so the alternative to a limit is a stack overflow.
+pub const INCLUDE_DEPTH_LIMIT: usize = 32;
+
+/// One file's text, and the span of the shared buffer holding it.
+///
+/// Included files are *appended* to that buffer rather than scanned in a
+/// nested pass, because a macro body is a span of it: `MacroDef` holds
+/// offsets, so a macro defined in an included file has to live in the same
+/// buffer as one defined beside its invocation, or `invoke` would need to know
+/// which text it is reading. Appending means it does not.
+///
+/// A location therefore carries a *global* offset and a *file-local* line and
+/// column, which is what lets an error name `lib.bfm` line 3 while the offset
+/// still indexes one buffer.
+struct SourceFile {
+    /// Where it was read from, or `None` for source handed over as text.
+    ///
+    /// Canonical, because this is also the file's *identity*: including it
+    /// twice by two different relative paths is one file, and has to be.
+    path: Option<PathBuf>,
+    /// The path as the `@include` wrote it, joined to the directory it was
+    /// written in. What a message should say -- `lib/text.bfm` is the file the
+    /// reader has open, and the canonical form is the same file spelled in a
+    /// way they did not choose.
+    named: Option<PathBuf>,
+    text: String,
+    start: usize,
+    end: usize,
+}
+
 struct Invocation {
     name: String,
     /// What was invoked, so a parameter resolves by position.
@@ -333,6 +397,12 @@ struct OpenLoop {
 struct Scanner {
     source: String,
     chars: Vec<char>,
+    /// The root file, then every file included so far, in buffer order. Never
+    /// empty: the source being expanded is the first entry.
+    files: Vec<SourceFile>,
+    /// How many `@include` scans are in flight. An included file declares and
+    /// does not emit, so this is also "is emitting an error right now".
+    including: usize,
     at: SourceLocation,
     symbols: HashMap<String, (Symbol, SourceLocation)>,
     /// One entry per macro invocation in flight, innermost last.
@@ -377,9 +447,25 @@ struct Scanner {
 
 impl Scanner {
     fn new(source: &str) -> Self {
+        Self::rooted(source, None)
+    }
+
+    /// The same, for source read from a file: `@include` resolves against the
+    /// directory holding it, so a library names its neighbours the way the
+    /// file that includes them does.
+    fn rooted(source: &str, path: Option<PathBuf>) -> Self {
+        let chars: Vec<char> = source.chars().collect();
         Self {
             source: source.to_string(),
-            chars: source.chars().collect(),
+            files: vec![SourceFile {
+                named: path.clone(),
+                path,
+                text: source.to_string(),
+                start: 0,
+                end: chars.len(),
+            }],
+            including: 0,
+            chars,
             at: SourceLocation::start(),
             symbols: HashMap::new(),
             frames: Vec::new(),
@@ -398,8 +484,29 @@ impl Scanner {
         }
     }
 
-    fn run(mut self) -> Result<Expansion, MacroError> {
-        self.scan_until(self.chars.len())?;
+    /// Expand the root file, and say which file an error points into.
+    ///
+    /// The two halves are separate because the answer to "which file" needs
+    /// the scanner, and `?` would have dropped it.
+    fn run(mut self) -> Result<Expansion, MacroFailure> {
+        match self.expand_root() {
+            Ok(expansion) => Ok(expansion),
+            Err(error) => {
+                let file = self.file_at(error.location().offset);
+                Err(MacroFailure::new(
+                    error,
+                    // Named only when it is not the file the caller handed
+                    // over: saying that one back to them adds nothing.
+                    file.start.gt(&0).then(|| file.named.clone()).flatten(),
+                    file.text.clone(),
+                ))
+            }
+        }
+    }
+
+    fn expand_root(&mut self) -> Result<Expansion, MacroError> {
+        let root_end = self.files[0].end;
+        self.scan_until(root_end)?;
 
         if let Some(open) = self.open_brackets.first() {
             return Err(MacroError::UnmatchedOpenBracket {
@@ -410,7 +517,21 @@ impl Scanner {
             return Err(unclosed(directive, location));
         }
 
-        Ok(Expansion::new(self.source, self.out, self.origins))
+        // The map holds one position per emitted byte against one text, and
+        // `include` is what keeps every position inside it. Checked rather
+        // than trusted, because the failure is a caret pointing confidently at
+        // the wrong line -- and only when a file was included, so a program
+        // without one pays nothing.
+        assert!(
+            self.files.len() == 1 || self.origins.iter().all(|origin| origin.offset <= root_end),
+            "an included file emitted, so the source map names a file it cannot show"
+        );
+
+        Ok(Expansion::new(
+            std::mem::take(&mut self.source),
+            std::mem::take(&mut self.out),
+            std::mem::take(&mut self.origins),
+        ))
     }
 
     /// Where the current scan stops: the end of the macro body being
@@ -420,7 +541,25 @@ impl Scanner {
     fn scan_end(&self) -> usize {
         self.frames
             .last()
-            .map_or(self.chars.len(), |frame| frame.def.body_end)
+            .map_or_else(|| self.file().end, |frame| frame.def.body_end)
+    }
+
+    /// The file the cursor is in.
+    ///
+    /// Derived rather than tracked: the spans are disjoint and in order, so
+    /// the offset says which file it is, and there is no field to keep in step
+    /// with the cursor. Asked once per skip and once per hint, never per
+    /// character.
+    fn file(&self) -> &SourceFile {
+        self.file_at(self.at.offset)
+    }
+
+    fn file_at(&self, offset: usize) -> &SourceFile {
+        self.files
+            .iter()
+            .rev()
+            .find(|file| offset >= file.start)
+            .unwrap_or(&self.files[0])
     }
 
     /// The conditionals of the scope being expanded: the innermost macro
@@ -506,10 +645,14 @@ impl Scanner {
         self.at.offset = offset;
     }
 
-    /// The offset the current scan began at: zero, or the innermost body's
-    /// first character.
+    /// The offset the current scan began at: the innermost body's first
+    /// character, or the current file's. Both are line starts as far as a
+    /// directive is concerned, which is why an `@include`d file may open with
+    /// one even though the character before it is another file's last.
     fn boundary(&self) -> usize {
-        self.frames.last().map_or(0, |frame| frame.boundary)
+        self.frames
+            .last()
+            .map_or_else(|| self.file().start, |frame| frame.boundary)
     }
 
     /// Whether a macro body is being expanded.
@@ -642,6 +785,16 @@ impl Scanner {
     /// the movement accounting cannot be applied to some emitters and not
     /// others.
     fn emit_run(&mut self, c: char, count: u64, origin: SourceLocation) -> Result<(), MacroError> {
+        // The one place output is produced, so the one place the rule has to
+        // be stated: an included file declares and does not emit. Checked
+        // before the override below, so the error names the instruction rather
+        // than whatever invoked the macro holding it.
+        if self.including > 0 {
+            return Err(MacroError::IncludedFileEmits {
+                instruction: c,
+                location: origin,
+            });
+        }
         // Bytes made inside a macro say they came from the invocation, not
         // from the definition. The map holds one position per byte and a
         // macro gives a byte two, so this is a choice: the invocation is the
@@ -858,7 +1011,11 @@ impl Scanner {
         // with a brace and when it stops. Scanning line by line instead did
         // not know comments existed: a `{` in prose opened a body that never
         // closed, and every declaration below it stopped being advertised.
-        let mut at = self.at.offset.min(self.chars.len());
+        // Bounded by the file rather than by the buffer: everything after
+        // this file's text is another file, appended by an `@include`, and
+        // "defined below this line" is advice about *this* one.
+        let end = self.file().end;
+        let mut at = self.at.offset.min(end);
         let mut depth = 0usize;
         // Nor one inside a conditional, in either direction. Whether that
         // branch is taken depends on what is defined where it is reached,
@@ -866,7 +1023,7 @@ impl Scanner {
         // a line that may never be expanded" is worse advice than none. A hint
         // is optional; a wrong one is not a lesser version of a right one.
         let mut conditionals = 0usize;
-        while at < self.chars.len() {
+        while at < end {
             // Only a declaration that could take effect. One inside a macro
             // body is refused outright, so advertising it would send the
             // reader to move their code below something that never runs.
@@ -924,7 +1081,7 @@ impl Scanner {
                 self.conditional(directive, location)
             }
             Some(Directive::Endif) => self.endif(location),
-            Some(_) => Err(MacroError::PlannedDirective { name, location }),
+            Some(Directive::Include) => self.include(location),
             // Not a directive, so it may be a macro -- checked after the
             // directives, so no macro can shadow one, and a name that is
             // neither is reported as what it looks like.
@@ -1090,6 +1247,124 @@ impl Scanner {
             }
         }
         Err(unclosed(directive, location))
+    }
+
+    /// `@include "lib.bfm"` -- read another file's declarations here.
+    ///
+    /// An included file *declares*: `@define`, `@var`, `@field`, `@stride` and
+    /// `@macro`. It may not emit BrainFuck, and that is the rule the whole
+    /// design rests on rather than a restriction left over from one.
+    ///
+    /// The map holds one position per emitted byte, against one text, and a
+    /// second file cannot be written in it -- so either an instruction from a
+    /// library reports a line of the file that included it, or it reports a
+    /// line number belonging to a file the reader is not looking at. Both are
+    /// the thing this crate exists to prevent. Refusing to emit is the third
+    /// option, and it costs a library nothing: a macro is how you ship
+    /// instructions, and its bytes name the invocation, which is a line of the
+    /// program somebody wrote.
+    ///
+    /// A file is included once. Including it again is not an error and not a
+    /// second copy -- it is nothing, which is what makes a diamond work
+    /// without every library carrying a guard, and what makes a cycle
+    /// terminate instead of needing to be detected.
+    fn include(&mut self, location: SourceLocation) -> Result<(), MacroError> {
+        self.refuse_inside_a_macro(Directive::Include, location)?;
+        let named = self.quoted_operand(location)?;
+        self.end_of_directive(Directive::Include)?;
+
+        // Relative to the file that wrote the `@include`, not to the process's
+        // working directory: a library names its neighbours the way the file
+        // beside it does, so where a program is run from cannot change what it
+        // means.
+        let Some(directory) = self
+            .file()
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+        else {
+            return Err(MacroError::IncludeWithoutAFile { location });
+        };
+        let named_path = directory.join(&named);
+        let path = named_path
+            .canonicalize()
+            .map_err(|source| MacroError::IncludeUnreadable {
+                path: named_path.clone(),
+                detail: source.to_string(),
+                location,
+            })?;
+        if self
+            .files
+            .iter()
+            .any(|file| file.path.as_deref() == Some(&*path))
+        {
+            return Ok(());
+        }
+        if self.including >= INCLUDE_DEPTH_LIMIT {
+            return Err(MacroError::IncludeTooDeep {
+                limit: INCLUDE_DEPTH_LIMIT,
+                location,
+            });
+        }
+        let text =
+            std::fs::read_to_string(&path).map_err(|source| MacroError::IncludeUnreadable {
+                path: named_path.clone(),
+                detail: source.to_string(),
+                location,
+            })?;
+
+        let start = self.chars.len();
+        self.chars.extend(text.chars());
+        let end = self.chars.len();
+        self.files.push(SourceFile {
+            path: Some(path),
+            named: Some(named_path),
+            text,
+            start,
+            end,
+        });
+
+        // Line one, column one, of a buffer position far from the start: the
+        // offset is where the text is, and the line and column are where the
+        // reader will look for it.
+        let resume = std::mem::replace(&mut self.at, SourceLocation::new(1, 1, start));
+        self.including += 1;
+        let result = self.scan_until(end);
+        self.including -= 1;
+        self.at = resume;
+        result
+    }
+
+    /// The `"path"` an `@include` names.
+    fn quoted_operand(&mut self, location: SourceLocation) -> Result<String, MacroError> {
+        self.skip_blanks();
+        let opens = self.at.offset;
+        if self.peek() != Some('"') {
+            return Err(malformed(
+                Directive::Include.spelling(),
+                "expected a quoted path, as in `@include \"lib.bfm\"`".to_string(),
+                self.at,
+            ));
+        }
+        let (end, closed) = lex::quoted(&self.chars, opens);
+        if !closed {
+            return Err(malformed(
+                Directive::Include.spelling(),
+                "the path is never closed: a `\"` opens one and a `\"` ends it".to_string(),
+                location,
+            ));
+        }
+        let named: String = self.chars[opens + 1..end - 1].iter().collect();
+        self.advance_on_line(end);
+        if named.is_empty() {
+            return Err(malformed(
+                Directive::Include.spelling(),
+                "the path is empty".to_string(),
+                location,
+            ));
+        }
+        Ok(named)
     }
 
     /// `@macro NAME { body }` or `@macro NAME(a, b) { body }`.
@@ -2164,22 +2439,22 @@ mod tests {
         assert_eq!(location.line, 2);
     }
 
+    /// Every name the vocabulary knows is dispatched to something. There is
+    /// no "planned" arm left to fall into: a directive that reached one would
+    /// be reported as unknown, which is the one answer that would be a lie.
     #[test]
-    fn a_planned_directive_is_refused_rather_than_ignored() {
-        // `@include` is the last one left; every other directive the
-        // vocabulary knows is built.
-        let error = expand("@include \"lib.bfm\"").unwrap_err();
-        assert!(
-            matches!(error, MacroError::PlannedDirective { .. }),
-            "{error:?}"
-        );
-        assert!(
-            Directive::ALL
-                .into_iter()
-                .filter(|d| !d.implemented())
-                .eq([Directive::Include]),
-            "the planned list has changed; this test names what is in it"
-        );
+    fn every_directive_in_the_vocabulary_is_built() {
+        for directive in Directive::ALL {
+            let source = format!("@{}\n", directive.spelling());
+            match expand(&source) {
+                Ok(_) => {}
+                Err(error) => assert!(
+                    !matches!(error, MacroError::UnknownDirective { .. }),
+                    "@{} is in the vocabulary and reached nothing: {error:?}",
+                    directive.spelling()
+                ),
+            }
+        }
     }
 
     #[test]
