@@ -286,7 +286,7 @@ gyrus-tutorial --list
 gyrus-tutorial --lesson 3
 ```
 
-Thirteen lessons from `+` to the halting problem. Every run of your program is
+Nineteen lessons from `+` to the halting problem. Every run of your program is
 recorded, so you can step *backwards* through a loop — which is the thing that
 makes `[->+<]` legible. [The tutorial](tutorial.md) has the key list.
 

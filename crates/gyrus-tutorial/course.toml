@@ -298,6 +298,172 @@ gyrus recognises both. The optimizer calls them SeekRight and SeekLeft and does 
 Building a string is the same idea run backwards: fill a run of cells with character codes, then walk it printing as you go.'''
 
 [[lesson]]
+title = "Adding, and keeping the number"
+cells = 16
+starter = "+++>+++++>[-]<[<+>>+<-]>[<+>-]"
+answer = "+++>+++++>[-]<[<+>>+<-]>[<+>-]"
+shows_ending = "finished"
+shows_cells = [[0, 8], [1, 5]]
+hints = ["There is nothing to get right here. ctrl-n moves on."]
+task = '''
+Nothing to solve. Step through it and watch cell 1 empty and then refill.'''
+body = '''
+Lesson 3 moved a number with [>+<-], and moving is not adding: what you moved is gone. Real addition has to leave the other number where it found it.
+
+Here is the usual answer, written the way BrainFuck algorithms are usually written down — with names where the moves would be:
+
+  temp[-]
+  y[x+temp+y-]
+  temp[y+temp-]
+
+The middle line is the one to read: while y is not zero, add one to x, add one to temp, take one from y. It empties y into two places at once. The last line pours temp back, and y is where it started.
+
+That is the shape of nearly every BrainFuck algorithm there is. There are no registers, so the only way to read a value is to destroy it, and the only way to keep it is to destroy it into two places and build it back.
+
+Subtraction is the same algorithm with one character changed:
+
+  y[x-temp+y-]
+
+Below, x is cell 0, y is cell 1, and temp is cell 2, so the names have become moves. Run it and step through.'''
+
+[[lesson]]
+title = "Multiplying two numbers"
+cells = 16
+starter = "++++++>+++++++>[-]>[-]<<<[>>>+<<<-]>>>[<<[<+>>+<-]>[<+>-]>-]"
+answer = "++++++>+++++++>[-]>[-]<<<[>>>+<<<-]>>>[<<[<+>>+<-]>[<+>-]>-]"
+shows_ending = "finished"
+shows_cells = [[0, 42], [1, 7]]
+hints = ["There is nothing to get right here. ctrl-n moves on."]
+task = '''
+Nothing to solve. Notice that neither number is written in the program.'''
+body = '''
+Lesson 5 multiplied by writing the multiplier into the program: ++++++[>+++++++<-] has the seven spelled out in pluses. That is fine when you know the number while you are typing. It is no use at all when both numbers are on the tape and you know neither.
+
+Multiplication is repeated addition, so the answer is the addition you just read, run x times:
+
+  temp0[-] temp1[-]
+  x[temp1+x-]
+  temp1[
+    y[x+temp0+y-]
+    temp0[y+temp0-]
+  temp1-]
+
+x is emptied into temp1 first, because the loop that counts x down is also the loop that has to survive x being overwritten with the answer. Then each turn adds y to x and puts y back.
+
+Below, x is cell 0 and y is cell 1, holding 6 and 7. Neither number appears in the program — change the pluses and the same code multiplies whatever you leave there.'''
+
+[[lesson]]
+title = "Division, and the remainder with it"
+cells = 16
+starter = "+++++++++++++++++>>+++++<<[->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]"
+answer = "+++++++++++++++++>>+++++<<[->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]"
+shows_ending = "finished"
+shows_cells = [[1, 17], [2, 3], [3, 2], [4, 3]]
+hints = ["There is nothing to get right here. ctrl-n moves on."]
+task = '''
+Nothing to solve. Then change the five to a one and run it again.'''
+body = '''
+Division is where the trick runs out. There is no repeated-subtraction loop that stops in the right place without also telling you how far it got, so the good algorithms compute the quotient and the remainder together and let you keep whichever you wanted:
+
+  n 0 d
+  [->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]
+  0 n d-n%d n%d n/d
+
+Below, n is 17 in cell 0 and d is 5 in cell 2. When it stops, cell 3 holds the remainder 2 and cell 4 holds the quotient 3 — and cell 1 holds 17 again, because this version puts n back.
+
+Do not try to read this one the way you read the last two. Nobody derives it at the keyboard; it is a known result, and knowing where to look it up is the actual skill. What is worth seeing is that it fits on one line.
+
+It has a hole: it does not work when d is 0 or 1. Cut the five pluses after the two > moves down to one, so d is 1, and run it. You do not get a wrong answer — you get an error, because a cell that should have stopped the walk is not zero and the pointer leaves the tape. gyrus checks every access against the end of the tape, which is why this is a message rather than a silently wrong number somewhere else in memory.'''
+
+[[lesson]]
+title = "Printing a number"
+cells = 16
+starter = "++++++++++++++++++++++++++++++++++++++++++>>++++++++++<<[->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]>>[-]>>>++++++++++<[->-[>+>>]>[+[-<+>]>+>>]<<<<<]>[-]>>[>++++++[-<++++++++>]<.<<+>+>[-]]<[<[->-<]++++++[->++++++++<]>.[-]]<<++++++[-<++++++++>]<.[-]<<[-<+>]<"
+answer = "++++++++++++++++++++++++++++++++++++++++++>>++++++++++<<[->+>-[>+>>]>[+[-<+>]>+>>]<<<<<<]>>[-]>>>++++++++++<[->-[>+>>]>[+[-<+>]>+>>]<<<<<]>[-]>>[>++++++[-<++++++++>]<.<<+>+>[-]]<[<[->-<]++++++[->++++++++<]>.[-]]<<++++++[-<++++++++>]<.[-]<<[-<+>]<"
+shows_ending = "finished"
+shows_cells = [[0, 42]]
+shows_output = "42"
+hints = ["There is nothing to get right here. ctrl-n moves on."]
+task = '''
+Nothing to solve. Change the count of pluses at the front and run it again.'''
+body = '''
+. prints a byte, not a number. Cell 0 holding 42 prints * — the character whose code is 42 — and there is no instruction that prints "42".
+
+Printing a number means finding its digits, and finding a digit means dividing by ten. So this is the previous lesson, twice: once to split off the hundreds, once to split what is left into tens and units, and 48 added to each digit to turn it into the character for it.
+
+The program below is 42 pluses and then that. It prints 42.
+
+This is the longest thing in the course and it is worth sitting with, because it is the moment the ceiling stops being theoretical. A language with eight instructions and no numbers printed a number. Everything a computer does that looks like more than this is the same trick at a scale nobody would type by hand.
+
+Attribution matters here: this one is itchyny's, from Stack Overflow, by way of the esolangs wiki. Nobody writes it from scratch either.'''
+
+[[lesson]]
+title = "Placing the cells yourself"
+cells = 16
+starter = "+++++++++>++++"
+answer = "+++++++++>++++>[-]<[<->>+<-]>[<+>-]"
+solved_cells = [[0, 5], [1, 4]]
+shows_ending = "finished"
+shows_cells = [[0, 9], [1, 4]]
+hints = [
+  "The subtraction is the addition with x+ changed to x-.",
+  "temp is cell 2. From cell 1, x is one to the left and temp is one to the right.",
+  "Start by moving to cell 2 and clearing it: >[-]. Then come back to y.",
+]
+task = '''
+Cells 0 and 1 hold 9 and 4. Append the subtraction so cell 0 holds 5 and cell 1 still holds 4.'''
+body = '''
+Every algorithm in the last four lessons was written with names, and every one of them had to have the names replaced with moves before it could run. That replacing is the whole job, and it is the part that goes wrong.
+
+Here is the subtraction again:
+
+  temp[-]
+  y[x-temp+y-]
+  temp[y+temp-]
+
+The cells are yours to place: x is cell 0, y is cell 1, temp is cell 2. The starter puts 9 and 4 where they belong and leaves the pointer on cell 0. Write the rest.
+
+Two things to keep straight. The pointer is wherever the last instruction left it, not wherever the algorithm's next line begins — every name costs however many moves it takes from *here*. And a loop must leave the pointer where it entered, or the second time round it is somewhere else.'''
+
+[[lesson]]
+title = "Names for the cells"
+cells = 16
+starter = ">+++[>>>+<<<-]"
+answer = ">+++[>>>+<<<-]"
+shows_ending = "finished"
+shows_cells = [[4, 3]]
+hints = ["There is nothing to get right here. ctrl-n moves on."]
+task = '''
+Nothing to solve. This is the last thing worth knowing about the language.'''
+body = '''
+The algorithms in these lessons are written with names because they are unreadable without them. But the names are not part of BrainFuck. They are a convention people invented so the algorithms could be written down at all, and every time you use one you do the substitution by hand — as you just did.
+
+The example everyone starts with is:
+
+  a[b+a-]
+
+which, if a is cell 1 and b is cell 4, is the program below.
+
+There is no reason that substitution has to be done by a person. gyrus ships a language where the names are real, and expanding them is the machine's job:
+
+  @var a at 1
+  @var b at 4
+  @to a
+  +++
+  [
+  @to b
+  +
+  @to a
+  -
+  ]
+
+That is `.bfm`, and `gyrus prog.bfm` runs it. It expands to exactly the program below — the same eight instructions, the same tape, no new power at all. What it buys is that an error names the line you wrote instead of a column of an expansion nobody wrote.
+
+Each directive is on a line of its own because it has to be: a `@to` sharing a line with anything else is not a directive at all. Everything that is not an instruction is a comment in this language, and that rule does not stop applying just because the text begins with an `@`.
+
+That is the whole arc of this course. Lesson 6 said everything after it was ergonomics; this is what ergonomics looks like. See `docs/macro-language.md`, and `programs/macros/` for programs written in it — one of them prints the lyrics to 99 Bottles, and one factors a number too large to fit in a cell.'''
+
+[[lesson]]
 title = "The halting problem"
 cells = 16
 starter = "+[]"

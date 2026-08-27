@@ -28,7 +28,7 @@ the development compiler.
 - **gyrus-debug** (`crates/gyrus-debug/`): `gyrus-debug` binary — the terminal
   debugger; see `docs/debugger.md`
 - **gyrus-tutorial** (`crates/gyrus-tutorial/`): `gyrus-tutorial` binary —
-  thirteen lessons in BrainFuck; see `docs/tutorial.md`
+  nineteen lessons in BrainFuck; see `docs/tutorial.md`
 - **gyrus-macro** (`crates/gyrus-macro/`): the `.bfm` macro preprocessor —
   expands macro source to pure BrainFuck and carries an origin map, so runtime
   errors name the `.bfm` rather than the expansion. Written entirely against
@@ -194,7 +194,7 @@ re-exports and crate docs.
    - Same runtime flags as `gyrus`, plus `--break LINE[:COL]`, `--run`,
      `--input`, `--input-file`, `--display`
 
-**Tutorial** (`crates/gyrus-tutorial/`) — thirteen lessons, numbered 0 to 12
+**Tutorial** (`crates/gyrus-tutorial/`) — nineteen lessons, numbered 0 to 18
    - Records every step of a run and lets the learner scrub through it in both
      directions. Affordable because a lesson tape is 16 cells and runs are
      capped at 20,000 steps; the debugger cannot do this on a 30,000-cell tape

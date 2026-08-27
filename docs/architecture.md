@@ -26,7 +26,7 @@ Back to the [README](../README.md).
 | `gyrus-jit` | Cranelift JIT over the optimized IR, behind `gyrus --jit` |
 | `gyrus-tui` | Shared terminal widgets: source, memory, tape, output, status, help |
 | `gyrus-debug` | The `gyrus-debug` binary — step through a program with the tape in view |
-| `gyrus-tutorial` | The `gyrus-tutorial` binary — thirteen lessons in BrainFuck |
+| `gyrus-tutorial` | The `gyrus-tutorial` binary — nineteen lessons in BrainFuck |
 | `gyrus-macro` | The `.bfm` preprocessor: expansion, and the map back to macro source |
 | `gyrus-corpus` | Test support: the program manifest, parsed once for both corpus suites |
 
@@ -429,7 +429,7 @@ gyrus/
 │   │   │   └── error.rs     # Located errors, rendered like a parse error
 │   │   └── tests/           # Round trip, source locations, and the oracle
    ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
-│   │   ├── course.toml      # The thirteen lessons themselves, as prose
+│   │   ├── course.toml      # The nineteen lessons themselves, as prose
 │   │   └── src/
 │   │       ├── lesson.rs    # The course parser, criteria, and checking
 │   │       ├── trace.rs     # Recording every step of a run, for scrubbing

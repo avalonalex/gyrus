@@ -275,6 +275,23 @@ fn parse(source: &str) -> Result<Vec<Lesson>, String> {
                 body.push('\n');
             }
             Value::Text(body)
+        // A list may run over several lines; a hint long enough to want that
+        // is exactly the hint most worth writing. Brackets are counted only
+        // outside quotes, so a hint may contain one.
+        } else if rest.starts_with('[') && !balanced(rest) {
+            let mut list = rest.to_string();
+            loop {
+                let Some(next) = lines.get(index) else {
+                    return Err(format!("line {number}: the list `{key}` is never closed"));
+                };
+                index += 1;
+                list.push(' ');
+                list.push_str(next.trim());
+                if balanced(&list) {
+                    break;
+                }
+            }
+            value_of(&list, number)?
         } else {
             value_of(rest, number)?
         };
@@ -322,6 +339,22 @@ fn parse(source: &str) -> Result<Vec<Lesson>, String> {
     Ok(lessons)
 }
 
+/// Whether a list's brackets close, counting only the ones outside quotes.
+fn balanced(text: &str) -> bool {
+    let (mut depth, mut quoted, mut escaped) = (0i32, false, false);
+    for c in text.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            '[' if !quoted => depth += 1,
+            ']' if !quoted => depth -= 1,
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
 /// The delimiter a prose block opens and closes with.
 const TRIPLE: &str = "'''";
 
@@ -351,7 +384,7 @@ fn value_of(text: &str, line: usize) -> Result<Value, String> {
     }
     if inside.starts_with('[') {
         let mut pairs = Vec::new();
-        for item in inside.split("],") {
+        for item in inside.trim_end_matches(',').split("],") {
             let item = item.trim().trim_start_matches('[').trim_end_matches(']');
             let parts = item
                 .split_once(',')
@@ -377,6 +410,10 @@ fn value_of(text: &str, line: usize) -> Result<Value, String> {
         strings.push(unescape(&rest[1..end], line)?);
         rest = rest[end + 1..].trim_start();
         match rest.strip_prefix(',') {
+            // A comma with nothing after it is the trailing one a list is
+            // allowed to end with, and is how a list written over several
+            // lines usually ends.
+            Some(more) if more.trim().is_empty() => break,
             Some(more) => rest = more,
             None if rest.is_empty() => break,
             None => {
@@ -570,6 +607,21 @@ mod tests {
         }
     }
 
+    /// A list may be written over several lines, with the trailing comma that
+    /// makes adding to it a one-line diff.
+    #[test]
+    fn a_list_may_span_lines() {
+        let course = concat!(
+            "[[lesson]]\ntitle = \"t\"\ncells = 16\nstarter = \"\"\nanswer = \"+\"\n",
+            "hints = [\n  \"first, with a comma in it\",\n  \"second [with a bracket]\",\n]\n",
+            "task = '''\nt'''\nbody = '''\nb'''\n"
+        );
+        let lessons = parse(course).expect("this course is well formed");
+        assert_eq!(
+            lessons[0].hints,
+            ["first, with a comma in it", "second [with a bracket]"]
+        );
+    }
     /// A key the parser does not know is an error, not a shrug.
     ///
     /// This is the whole reason for hand-writing the parser rather than
