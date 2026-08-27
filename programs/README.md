@@ -117,8 +117,15 @@ file.
   cell and a size cell, because a cell counts upwards and has nowhere to put a
   minus. Sign-and-size rather than the wrapping arithmetic a machine uses,
   because multiplying two wrapped numbers means pulling the sign back out of
-  each first — a trade the library states plainly, including that the multiply
-  it is paying for is not written yet.
+  each first, where multiplying these is multiplying the sizes and comparing
+  the signs — a trade the library states plainly and now collects.
+
+- **`mandelbrot.bfm`** - the set, at a sixteenth. 167 lines of named cells and
+  signed fixed point, expanding to 30,637 instructions, checked against a model
+  of the same arithmetic written in the test rather than a recorded picture. Not the byte-for-byte equal of
+  `third-party/advanced/mandelbrot.bf` and not trying to be: that one is 128 by
+  48 at sixteen bits from a different representation. This one is what the
+  macro language can *say*.
 
 **Every one of them with a loop in it says what the loop is for**, as a block
 of pseudocode in its comments. Naming cells makes a *line* legible without
@@ -127,7 +134,7 @@ not why -- so each file carries what it would be in a language that has
 numbers and an `if`. `scripts/check-bfm-pseudocode.py` checks that a program
 with logic in it has some; only a reader can check that it is right.
 
-All eighteen are load-bearing rather than illustrative:
+All nineteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

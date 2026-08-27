@@ -11,9 +11,8 @@
 * back out of each of them first, which costs a comparison against 128 every
 * time, where multiplying these is multiplying the sizes and asking whether
 * the signs agree. Addition pays for that -- one case for signs that agree and
-* two for signs that face off. **That multiply is not here yet**, so what this
-* file has today is the cost of the choice and not the benefit; it is the next
-* piece, and this is written down so the trade is not mistaken for a saving.
+* two for signs that face off -- and addition is the cheaper thing to make
+* awkward.
 *
 * **A size is one cell, so it runs from 0 to 255, and nothing here says so at
 * run time.** `-200 + -56` is 256, which wraps to a size of zero and is then
@@ -27,20 +26,21 @@
 * second, two sizes that cancel leave the sign of whichever was written first,
 * so `-4 + 4` came out as a zero that compared unequal to zero.
 *
-* **This file owns cells 20 to 35**, the way `lib/fast.bfm` owns 0 to 19. The
+* **This file owns cells 20 to 45**, the way `lib/fast.bfm` owns 0 to 19. The
 * first draft passed the scratch in and `@signed_add` took fourteen
 * parameters, eleven of them cells nobody wanted to name. Two `at`s naming one
 * cell are allowed on purpose, so nothing will tell you if a program pins one
-* of these; pin nothing below 36 in a program that includes this file.
+* of these; pin nothing below 46 in a program that includes this file.
 
 @include "idioms.bfm"
+@include "wide.bfm"
 
 @var s_agree at 20
 @var s_smaller at 21
 @var s_keep at 22
 @var s_bsign at 23
 @var s_bsize at 24
-@var s_count at 25
+@var s_walk at 25
 @var s_step at 26
 @var s_passed at 27
 @var s_flag at 28
@@ -51,6 +51,16 @@
 @var s_size at 33
 @var s_guard at 34
 @var s_inner at 35
+@var s_hi at 36
+@var s_lo at 37
+@var s_count at 38
+@var s_bit at 39
+@var s_half at 40
+@var s_carry at 41
+@var s_held at 42
+@var s_t0 at 43
+@var s_zero at 44
+@var s_out at 45
 
 * A signed value from a sign and a size written down. A size of nothing is
 * positive whatever was asked for, because that is the only zero this file
@@ -111,7 +121,7 @@
     }
 
     @unless(s_agree, s_guard, s_scratch, s_spare) {
-        @less(a_size, s_bsize, s_smaller, s_count, s_step, s_passed, s_flag, s_other, s_scratch, s_spare)
+        @less(a_size, s_bsize, s_smaller, s_walk, s_step, s_passed, s_flag, s_other, s_scratch, s_spare)
 
         @when(s_smaller, s_inner, s_scratch, s_spare) {
             * b is the larger, so the answer faces b's way and is b - a.
@@ -158,4 +168,125 @@
     @copy(b_size, s_size, s_spare)
     @signed_negate(s_sign, s_size)
     @signed_add(a_sign, a_size, s_sign, s_size)
+}
+
+* Half of a cell, taken one pair at a time.
+*
+*     out = cell // 2          # and `cell` is emptied
+*
+* Take one, and look for a second: two taken together are one half. What is
+* taken alone is the remainder, which nothing here wants and everything here
+* has to account for.
+*
+* Asking `cell` whether anything is left copies it, which costs its value --
+* so this is quadratic, and the four halvings that scale a product are a large
+* share of a multiply. The obvious fix is a single bit flipped once a step,
+* since asking a bit costs nothing; I wrote it, and it came out *slower* --
+* 34,644 steps against 31,529 on a 40 by 40 product -- because four macro
+* calls a turn move the cursor further than the copy they replace. Left as it
+* is, with the measurement, rather than made worse for a good reason.
+@macro signed_halve(cell, out) {
+    @clear(out)
+    @clear(s_bit)
+    @while(cell) {
+        @to cell
+        -
+        @to s_bit
+        +
+        @when(cell, s_guard, s_scratch, s_spare) {
+            @to cell
+            -
+            @to s_bit
+            -
+            @to out
+            +
+        }
+    }
+    @clear(s_bit)
+}
+
+* One signed value onto another; the source keeps its value.
+*
+*     to_sign, to_size = from_sign, from_size
+@macro signed_copy(from_sign, from_size, to_sign, to_size) {
+    @clear(to_sign)
+    @copy(from_sign, to_sign, s_spare)
+    @clear(to_size)
+    @copy(from_size, to_size, s_spare)
+}
+
+* `a` becomes `a` times `b`, at the scale a fixed-point number is kept at;
+* `b` keeps its value.
+*
+*     size = (a_size * b_size) >> FRACTION_BITS
+*     sign = (a_sign != b_sign)
+*
+* This is the whole reason the sign is a cell of its own: the sizes multiply
+* and the signs are compared, where two wrapped numbers would each have to
+* have a sign pulled back out of them first.
+*
+* The product is two cells because 64 times 64 does not fit in one, and the
+* four shifts that bring it back down are four halvings of the low half plus
+* sixteen times the high one -- `(hi*256 + lo) >> 4` is `hi*16 + lo>>4`.
+*
+* **The answer has to fit a cell, so the product must stay under 4096**: two
+* sizes of 63 are the largest square that works, and 64 times 64 comes back as
+* 0 rather than as the 256 that does not fit. Nothing says so at run time,
+* because a cell wraps rather than complaining. A first draft of this comment
+* said "below about 90", which is wrong by half and was wrong in the same
+* paragraph that says 64 times 64 does not fit.
+@macro signed_multiply(a_sign, a_size, b_sign, b_size) {
+    * A product faces the way its parts disagree.
+    @clear(s_agree)
+    @copy(a_sign, s_agree, s_spare)
+    @equal(s_agree, b_sign, s_scratch, s_spare)
+    @clear(a_sign)
+    @unless(s_agree, s_guard, s_scratch, s_spare) {
+        @put(a_sign, 1)
+    }
+
+    * The product, in two cells: `b` added to nothing, `a` times over.
+    @clear(s_hi)
+    @clear(s_lo)
+    @clear(s_count)
+    @copy(a_size, s_count, s_spare)
+    @while(s_count) {
+        @clear(s_t0)
+        @copy(b_size, s_t0, s_spare)
+        @while(s_t0) {
+            @wide_inc(s_hi, s_lo, s_carry, s_held)
+            @to s_t0
+            -
+        }
+        @to s_count
+        -
+    }
+
+    * Down four bits: the low half halved four times, and the high half worth
+    * sixteen of what is left.
+    @signed_halve(s_lo, s_half)
+    @signed_halve(s_half, s_lo)
+    @signed_halve(s_lo, s_half)
+    @signed_halve(s_half, s_lo)
+
+    * The multiplicand is not wanted any more, and the answer goes in its
+    * place. Emptied here rather than earlier, because the product loop above
+    * counts it down.
+    @clear(a_size)
+    @copy(s_lo, a_size, s_spare)
+
+    * Sixteen of the high half, moved rather than multiplied: the general
+    * `@multiply` copies its multiplier once per unit, and this is a run the
+    * optimizer folds into one step.
+    @to s_hi
+    [
+        -
+        @to a_size
+        +{16}
+        @to s_hi
+    ]
+
+    @unless(a_size, s_guard, s_scratch, s_spare) {
+        @clear(a_sign)
+    }
 }
