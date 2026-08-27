@@ -12,6 +12,31 @@ not to pay. Nothing here is a promise about future work.
 Back to the [README](../README.md). For how the execution modes differ, see
 [execution models](execution-models.md).
 
+## Double-and-add multiplication in `.bfm` (August 2026) — did not pay
+
+`lib/signed.bfm` multiplies by adding `b` to nothing `a` times, which costs the
+*value* of `a`. Its own comment named the alternative: eight rounds of double
+and add, costing the number of digits instead. Built and measured, it is
+**2.5× worse** for the program that wanted it.
+
+| | naive | double-and-add |
+|---|---|---|
+| 40 × 20 | 27,000 | 17,041 |
+| 0 × 20 | ~600 | 9,527 |
+| `mandelbrot.bfm` | 91,513,283 | 227,244,885 |
+
+Eight rounds happen whatever the numbers are, and each round doubles a two-cell
+number — which in BrainFuck costs the value being doubled, because adding is
+counting. So the fixed cost is thousands of steps, and `mandelbrot.bfm` spends
+most of its multiplies on small operands and zeros, where counting `a` times is
+nearly free.
+
+The crossover is around 60, and `lib/signed.bfm` refuses operands whose product
+passes 4096 — so no legal input reaches it. A faster multiply for this library
+would have to make *doubling* cheap, which is the same wall
+`@signed_halve` hit: arithmetic on a cell costs its value unless the loop
+structure carries it.
+
 ## Where it stands
 
 | | mandelbrot | hanoi |
