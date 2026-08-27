@@ -84,7 +84,15 @@ file.
   that does enough work to care which engine runs it, at 0.05 seconds
   optimized against 40 on the tree-walker.
 
-All twelve are load-bearing rather than illustrative:
+- **`divide.bfm`** - division by a snippet from
+  [the esolangs catalogue](https://esolangs.org/wiki/Brainfuck_algorithms),
+  pasted in verbatim. **`lib/fast.bfm`** pins the cells beside each other and
+  tells the expander where the cursor lands, because that algorithm is a
+  pointer walking a fixed workspace and naming cells is exactly what it does
+  not do. About a third the cost of the same division built from named idioms
+  -- and it cannot yet be used inside a loop, which that file explains.
+
+All thirteen are load-bearing rather than illustrative:
 `crates/gyrus-macro/tests/round_trip.rs` reads them. To run one:
 
 ```bash

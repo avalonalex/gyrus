@@ -77,6 +77,104 @@
     ]
 }
 
+* `x` becomes `x` times `y`; `y` keeps its value. Both scratch cells are left
+* empty.
+*
+* Adding `y` to nothing, `x` times over. That is what multiplication is when
+* the only arithmetic there is is adding one -- and why it costs the product
+* rather than the number of digits, which is the thing to know before using it
+* on anything large.
+@macro multiply(x, y, temp0, temp1) {
+    @clear(temp0)
+    @clear(temp1)
+    @move(x, temp1)
+    @to temp1
+    [
+        @copy(y, x, temp0)
+        @to temp1
+        -
+    ]
+}
+
+* `x` becomes 1 if it equalled `y` and 0 if it did not; `y` keeps its value.
+*
+* Counting one down against the other and seeing whether anything is left,
+* which is the only way to compare two cells without a subtraction that can go
+* below zero.
+@macro equal(x, y, temp0, temp1) {
+    @clear(temp0)
+    @clear(temp1)
+    @move(x, temp1)
+    @to x
+    +
+    @to y
+    [
+        @to temp1
+        -
+        @to temp0
+        +
+        @to y
+        -
+    ]
+    @move(temp0, y)
+    @to temp1
+    [
+        @clear(x)
+        @clear(temp1)
+    ]
+}
+
+* `x` becomes 1 if it was less than `y`, and 0 if it was not. Both keep their
+* values only in the sense that `y` does; `x` is the answer.
+*
+* Counts them down together and sees which runs out first. `passed` remembers
+* that `y` ran out, which is the case that says `x` was not smaller.
+@macro less(x, y, result, count, step, passed, flag, other, scratch, spare) {
+    @clear(result)
+    @clear(count)
+    @copy(x, count, spare)
+    @clear(step)
+    @copy(y, step, spare)
+    @clear(passed)
+    @to count
+    [
+        @is_zero(step, flag, scratch, spare)
+        @to flag
+        [
+            @put(passed, 1)
+            @clear(flag)
+        ]
+        @is_not_zero(step, flag, scratch, spare)
+        @to flag
+        [
+            @to step
+            -
+            @clear(flag)
+        ]
+        @to count
+        -
+    ]
+    @is_zero(passed, flag, scratch, spare)
+    @to flag
+    [
+        @is_not_zero(step, other, scratch, spare)
+        @to other
+        [
+            @put(result, 1)
+            @clear(other)
+        ]
+        @clear(flag)
+    ]
+}
+
+* The two cells trade values.
+@macro swap(x, y, temp0) {
+    @clear(temp0)
+    @move(x, temp0)
+    @move(y, x)
+    @move(temp0, y)
+}
+
 * Print one character, through a cell set aside for it.
 @macro say(cell, letter) {
     @put(cell, letter)

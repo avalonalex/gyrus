@@ -1,0 +1,52 @@
+* Division, done by a snippet somebody else wrote.
+*
+* Everything else in `programs/macros/` is built out of `@to` and named cells,
+* which is what the macro language is for. This one is not: `lib/fast.bfm`
+* pastes in the divmod from the esolangs catalogue verbatim, pins the cells it
+* needs beside each other, and tells the expander where the cursor lands --
+* because the algorithm is a pointer walking a fixed workspace, and naming
+* cells is exactly what it does not do.
+*
+* It costs about a third of what the same division costs built out of named
+* idioms, and it comes with two holes the wiki does not mention: a divisor of
+* one walks it off the end of its workspace, and a divisor of zero has no
+* answer. Both are answered in the macro, which is the useful half of wrapping
+* a snippet rather than pasting it.
+*
+* `@divmod` cannot yet appear inside a loop -- see `lib/fast.bfm` for why --
+* so this program is a straight line, which is also why it can be read.
+
+@include "lib/fast.bfm"
+
+@var n
+@var d
+@var q
+@var r
+@var out
+
+* One division, printed as `n/d=q,r`. Single digits, so the printing is not
+* the point.
+@macro show(nn, dd) {
+    @put(n, nn)
+    @put(d, dd)
+    @divmod(n, d, q, r)
+    @show_digit(n)
+    @say(out, '/')
+    @show_digit(d)
+    @say(out, '=')
+    @show_digit(q)
+    @say(out, ',')
+    @show_digit(r)
+    @say(out, SPACE)
+}
+
+@show(9, 2)
+@show(7, 7)
+@show(5, 9)
+@show(6, 3)
+@show(0, 4)
+
+* The two the snippet cannot do.
+@show(8, 1)
+@show(4, 0)
+@newline(out)

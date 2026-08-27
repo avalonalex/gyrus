@@ -241,6 +241,29 @@ fn the_factors_of_13911_come_out_as_three_and_4637() {
     }
 }
 
+/// The catalogue's own division, pasted in whole.
+///
+/// `lib/fast.bfm` is the one place in the corpus where an idiom is *not*
+/// expressed in the macro language: the algorithm is a pointer walking a fixed
+/// workspace, so the cells are pinned and the snippet goes in verbatim. This
+/// pins its contract, including the two divisors it cannot do on its own --
+/// one, which walks it off the end of its workspace, and zero, which has no
+/// answer. Both were found by testing every divisor rather than a convenient
+/// one, and neither is mentioned on the wiki.
+#[test]
+fn the_pasted_in_division_divides() {
+    let path = gyrus_corpus::workspace_root().join("programs/macros/divide.bfm");
+    let source = read("programs/macros/divide.bfm");
+    let expansion = gyrus_macro::expand_at(&source, &path)
+        .unwrap_or_else(|failure| panic!("{}", failure.report()));
+
+    let (_, printed) = run_expansion(&expansion, 1_000_000);
+    assert_eq!(
+        printed,
+        "9/2=4,1 7/7=1,0 5/9=0,5 6/3=2,0 0/4=0,0 8/1=8,0 4/0=0,4 \n"
+    );
+}
+
 /// The one that is a program rather than a demonstration.
 ///
 /// 199 lines of `.bfm` against 11,354 bytes of output, checked byte for byte
