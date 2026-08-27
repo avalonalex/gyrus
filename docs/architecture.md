@@ -171,6 +171,14 @@ loop metadata, which no foreign crate can construct — nothing in the error pat
 reads it, but `gyrus-debug` does, which is why stepping through a `.bfm` is not
 yet possible.
 
+**Three readers, one set of lexical rules.** The expander walks the source; a
+macro body is walked again to find its closing brace; and the "defined below
+this line" hint walks ahead of the cursor. They must agree about where a `*`
+comment ends, how far a `'x'` literal reaches, and whether a `{` is a repeat
+count — and each time they did not, it cost a bug. `lex.rs` holds one copy of
+each rule, as free functions over `(chars, offset)`, because the three callers
+share the text but not a cursor.
+
 **A macro is expanded in place, from a span of the source.** A body is not
 copied — invoking one moves the cursor and scans to the closing brace — so
 every position inside a body is a real position in the file, and the cursor
@@ -348,11 +356,13 @@ gyrus/
 │   │       ├── hook.rs      # The ExecutionHook and the I/O adapters
 │   │       └── ui.rs        # Drawing and key handling
 │   ├── gyrus-macro/ # `.bfm` preprocessor — expansion and its source map
-   │   ├── src/
-   │   │   ├── expand.rs    # One pass: @define, repeat counts, comments, brackets
-   │   │   ├── source_map.rs # Origin per emitted byte, and the DebugInfo remap
-   │   │   └── error.rs     # Located errors, rendered like a parse error
-   │   └── tests/           # Round trip against a manifest program, and locations
+│   │   ├── src/
+│   │   │   ├── lex.rs       # The lexical rules, in one place: comments, literals, counts
+│   │   │   ├── directive.rs # The directive vocabulary, built and planned
+│   │   │   ├── expand.rs    # One pass: @define, repeat counts, brackets, macros
+│   │   │   ├── source_map.rs # Origin per emitted byte, and the DebugInfo remap
+│   │   │   └── error.rs     # Located errors, rendered like a parse error
+│   │   └── tests/           # Round trip, source locations, and the oracle
    ├── gyrus-tutorial/ # `gyrus-tutorial` binary — the course
 │   │   └── src/
 │   │       ├── lesson.rs    # The thirteen lessons and their criteria
