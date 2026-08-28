@@ -1,6 +1,6 @@
 # The Tutorial (`gyrus-tutorial`)
 
-Thirteen lessons, numbered 0 to 12, that teach BrainFuck by running it. Each
+Nineteen lessons, numbered 0 to 18, that teach BrainFuck by running it. Each
 one explains an idea, hands you a program that demonstrates it, and asks for a
 variation.
 
@@ -48,7 +48,24 @@ cargo build --release
 | 9 | Making a decision | an `if` is a loop that must not go round twice |
 | 10 | Copying | a spare cell and two passes; what passes for a subroutine |
 | 11 | Walking the tape | `[>]` and `[<]`, and building a string |
-| 12 | The halting problem | why every tool here has a cutoff instead of an answer |
+| 12 | Adding, and keeping the number | the spare cell, and why keeping a value costs one |
+| 13 | Multiplying two numbers | the same again, when neither number is in the program |
+| 14 | Division, and the remainder with it | divmod, and what happens when the divisor is 1 |
+| 15 | Printing a number | `.` prints a byte; digits have to be divided out |
+| 16 | Placing the cells yourself | the algorithms are written with names; you do the moves |
+| 17 | Names for the cells | what `.bfm` is, and what it is not |
+| 18 | The halting problem | why every tool here has a cutoff instead of an answer |
+
+Lessons 0 to 11 ask you to write BrainFuck. From 12 the shape changes: those are
+worked algorithms, run and stepped through rather than typed, because nobody
+derives divmod at a keyboard and pretending otherwise teaches only frustration.
+Lesson 16 is the exception, and asks for the part that *is* the skill — putting
+an algorithm's names onto real cells.
+
+The algorithms are from the [esolangs wiki's BrainFuck algorithms
+page](https://esolangs.org/wiki/Brainfuck_algorithms), which is CC0; the
+divmod and the number printing carry their authors' names in the lessons that
+use them.
 
 ## Keys
 
