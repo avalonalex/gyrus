@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "gyrus",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "gyrus",
@@ -868,14 +868,14 @@ dependencies = [
 
 [[package]]
 name = "gyrus-corpus"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "gyrus",
 ]
 
 [[package]]
 name = "gyrus-debug"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "gyrus",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-jit"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-macro"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "gyrus",
  "gyrus-corpus",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-tool"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "gyrus",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "gyrus",
  "ratatui",
@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "gyrus-tutorial"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "gyrus",
