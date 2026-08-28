@@ -225,7 +225,8 @@ rot silently. Each of these has been wrong at least once, which is why it is a
 script now rather than a good intention:
 
 ```bash
-scripts/check-msrv.sh              # the workspace builds on its declared MSRV
+scripts/check-msrv.sh              # the workspace builds on its declared MSRV,
+                                   #   and the README badge says the same number
 scripts/check-readme-commands.py   # every flag the docs use really exists
 scripts/check-doc-links.py         # every relative Markdown link resolves
 scripts/check-examples.sh          # every example runs, not just compiles
