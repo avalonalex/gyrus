@@ -169,6 +169,12 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("'@{directive}' at {location} is not first on its line, so it is not a directive")]
+    StrayAt {
+        directive: String,
+        location: SourceLocation,
+    },
+
     #[error("'{name}' is a {found}, not a {wanted}, at {location}")]
     WrongKind {
         name: String,
@@ -384,6 +390,7 @@ impl MacroError {
             | MacroError::BadRepeatCount { location, .. }
             | MacroError::RepeatNotRepeatable { location, .. }
             | MacroError::StrayBrace { location, .. }
+            | MacroError::StrayAt { location, .. }
             | MacroError::WrongKind { location, .. }
             | MacroError::PositionUnknown { location, .. }
             | MacroError::OnlyOffsetKnown { location, .. }
@@ -445,8 +452,9 @@ impl MacroError {
             }),
             MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => {
                 Some(format!(
-                    "{} A directive must start its line; an '@' anywhere else is \
-                     an ordinary comment character.",
+                    "{} A directive must start its line. Elsewhere an '@' is prose, \
+                     unless it spells a directive -- which is refused, because it would \
+                     have looked like one and done nothing.",
                     understood()
                 ))
             }
@@ -455,6 +463,13 @@ impl MacroError {
             )),
             MacroError::RepeatNotRepeatable { .. } => Some(
                 "Repeat counts apply to + - < > . and , -- repeating a bracket would not mean anything."
+                    .to_string(),
+            ),
+            MacroError::StrayAt { .. } => Some(
+                "A directive takes a line of its own, so put it on one. If this '@' is \
+                 prose rather than a directive, write '@@' -- a literal '@', which emits \
+                 nothing. (A '*' comment also holds one, but it runs to the end of the \
+                 line, so it will swallow a ']' that follows.)"
                     .to_string(),
             ),
             MacroError::StrayBrace { brace: '{', .. } => Some(

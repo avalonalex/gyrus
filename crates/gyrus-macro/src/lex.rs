@@ -82,10 +82,17 @@ fn line_start(chars: &[char], from: usize, boundary: usize) -> usize {
 /// directive's whole line instead is no good either -- `@macro inner { + }`
 /// carries braces that must still be counted.
 pub(crate) fn on_directive_line(chars: &[char], at: usize, boundary: usize) -> bool {
-    chars[line_start(chars, at, boundary)..]
-        .iter()
-        .find(|&&c| !is_blank(c))
-        .is_some_and(|&c| c == '@')
+    let start = line_start(chars, at, boundary);
+    let Some(offset) = chars[start..].iter().position(|&c| !is_blank(c)) else {
+        return false;
+    };
+    let first = start + offset;
+    // `@@` is a literal `@`, so a line that opens with one is prose and its
+    // quotes are apostrophes. Saying so here rather than in the expander is
+    // the whole point of this module: `skip_body` and `skip_branch` walk lines
+    // the expander has not reached, and a line the two disagree about is a
+    // body that ends in a different place for each of them.
+    chars[first] == '@' && chars.get(first + 1) != Some(&'@')
 }
 
 /// The directive name at `at`, and where it ends.

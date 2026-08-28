@@ -61,9 +61,13 @@
 //! # Two rules about what is reserved
 //!
 //! **A directive must start its line**, after optional blanks, and owns the
-//! rest of it. Elsewhere `@` is an ordinary comment character, because
-//! BrainFuck prose is free-form and three programs in `programs/` already
-//! contain one -- reserving `@` everywhere would hard-error on converting them.
+//! rest of it. Elsewhere `@` is prose, because BrainFuck comments are
+//! free-form and programs in `programs/` already contain one -- `calc.bf` uses
+//! it as a marker inside its instruction stream and `pi.bf` carries an email
+//! address -- so reserving `@` everywhere would hard-error on converting them.
+//! The one exception is an `@` that *spells* a directive and is delimited like
+//! one, which is refused rather than read as prose: it would have looked like
+//! a directive and silently done nothing. `@@` is a literal `@` anywhere.
 //! Owning the line is the other half: an instruction written after a `@define`
 //! is refused rather than dropped, because silently discarding code somebody
 //! wrote is the one thing a preprocessor must not do.
@@ -633,9 +637,18 @@ impl Scanner {
             let Some(c) = self.peek() else { break };
             match c {
                 '*' => self.skip_comment(),
+                // Before either `@` arm, so a literal one is literal wherever
+                // it is written. `lex::on_directive_line` knows this too, or
+                // the readers that skip unexpanded text would end a body in a
+                // different place than the expander does.
+                '@' if self.chars.get(self.at.offset + 1) == Some(&'@') => {
+                    self.bump();
+                    self.bump();
+                }
                 '@' if lex::at_line_start(&self.chars, self.at.offset, self.boundary()) => {
                     self.directive()?
                 }
+                '@' => self.stray_at()?,
                 '{' | '}' => {
                     return Err(MacroError::StrayBrace {
                         brace: c,
@@ -647,6 +660,46 @@ impl Scanner {
                 _ => self.bump(),
             }
         }
+        Ok(())
+    }
+
+    /// An `@` that is not first on its line, and so is not a directive.
+    ///
+    /// Nearly all of them are prose and stay prose: `@` is an ordinary
+    /// character in BrainFuck, `calc.bf` uses one as a marker inside its
+    /// instruction stream, and `pi.bf` carries its author's email address.
+    /// Reserving the character outright would hard-error on converting any of
+    /// them, which is the reason [`prose_may_contain_an_at_sign`] gives and
+    /// still gives.
+    ///
+    /// What is refused is the one shape that is never prose: an `@` that
+    /// spells a directive. `[ @to b + ]` used to expand to `[+]` -- an endless
+    /// loop where a move was written -- and say nothing, which was the only
+    /// place this language failed silently. Thirteen words are enough to tell
+    /// that apart from an email address.
+    ///
+    /// A macro's name is deliberately not in that set. The thirteen are fixed
+    /// and known before a file is read, so what counts as prose does not
+    /// depend on what happens to be defined above it.
+    ///
+    /// `@@` is a literal `@` written on purpose. It emits nothing, because a
+    /// literal `@` is a comment character like any other, and it is rarely
+    /// needed -- prose that is only prose already passes untouched.
+    fn stray_at(&mut self) -> Result<(), MacroError> {
+        let (word, end) = lex::spelling(&self.chars, self.at.offset);
+        // A directive is the whole word and then a space, a newline, or the
+        // end of the file. Without that last condition `bob@here.org` is an
+        // error, which is the sort of prose this rule exists to leave alone --
+        // and `pi.bf` keeps its author's email address only because his
+        // provider is not called `to`.
+        let delimited = matches!(self.chars.get(end), None | Some(' ' | '\t' | '\n' | '\r'));
+        if delimited && let Some(directive) = Directive::from_word(word) {
+            return Err(MacroError::StrayAt {
+                directive: directive.spelling().to_string(),
+                location: self.at,
+            });
+        }
+        self.bump();
         Ok(())
     }
 
@@ -2785,11 +2838,115 @@ mod tests {
 
     #[test]
     fn a_directive_must_start_its_line() {
-        // Not a directive here, so it is prose -- and the ']' that follows is
-        // a real bracket rather than part of a swallowed comment tail. This
-        // shape used to report an unmatched '[' that the source plainly
-        // matched.
-        assert_eq!(expanded("+[@define A 1 ]+"), "+[]+");
+        // Refused rather than read as prose. It expanded to "+[]+" once, which
+        // was the only place this language failed silently: what somebody
+        // wrote as a directive did nothing, and nothing said so.
+        //
+        // The ']' is still a real bracket and not part of a swallowed comment
+        // tail -- the error is about the '@', not an unmatched '[' that the
+        // source plainly matches.
+        let error = expand("+[@define A 1 ]+").unwrap_err();
+        let MacroError::StrayAt { directive, .. } = &error else {
+            panic!("expected a stray '@', got {error:?}");
+        };
+        assert_eq!(directive, "define");
+    }
+
+    #[test]
+    fn a_non_directive_at_does_not_swallow_the_rest_of_its_line() {
+        // The guard the shape above exists for, kept on a word that is not a
+        // directive: the ']' is a real bracket, not part of a comment tail.
+        // This used to report an unmatched '[' that the source plainly
+        // matched, and the refusal above must not be how that comes back.
+        assert_eq!(expanded("+[@foo A 1 ]+"), "+[]+");
+    }
+
+    #[test]
+    fn an_at_sign_in_an_email_address_is_prose() {
+        // The delimiter is what makes this safe. A directive is the whole word
+        // and then a blank, a newline, or the end of the file; `@here.org` is
+        // none of those, and `pi.bf` would otherwise be refused for the sake
+        // of its author's provider being spelled one way rather than another.
+        assert_eq!(expanded("+ mail bob@here.org\n"), "+.");
+        assert_eq!(expanded("+ write bob@to.com\n"), "+.");
+        assert_eq!(expanded("+ x@text.io\n+"), "+.+");
+    }
+
+    #[test]
+    fn a_doubled_at_does_not_change_where_a_body_ends() {
+        // `lex` decides whether a line's quotes are literals, and it decides
+        // it for the readers that walk text the expander has not reached. A
+        // line opening with '@@' is prose, so the apostrophe here is an
+        // apostrophe -- and `skip_body` finds the same '}' the expander would.
+        assert_eq!(expanded("@macro m {\n@@ it's fine }\n@m\n"), "");
+        assert_eq!(expanded("@macro n {\n@@ \" }\n+\n@n\n"), "+");
+    }
+
+    #[test]
+    fn a_macro_invoked_mid_line_is_still_prose() {
+        // Named so the hole is findable. Only the thirteen directive
+        // spellings are refused mid-line; a macro's name is not, because the
+        // thirteen are known before a file is read and a macro's name is not,
+        // so including them would make what counts as prose depend on what
+        // happens to be defined above it.
+        assert_eq!(expanded("@macro m {\n+\n}\n+ @m +\n"), "++");
+    }
+
+    #[test]
+    fn a_stray_at_says_how_to_write_it_either_way() {
+        let hint = expand("+ @to a\n")
+            .unwrap_err()
+            .hint()
+            .expect("a stray '@' has a hint");
+        assert!(hint.contains("takes a line of its own"), "{hint}");
+        assert!(hint.contains("'@@'"), "{hint}");
+    }
+
+    #[test]
+    fn a_doubled_at_is_a_literal_one_and_emits_nothing() {
+        assert_eq!(expanded("+ @@ +"), "++");
+        // Including where it would otherwise be refused: this is the way out
+        // for prose that really does want to say '@to'.
+        assert_eq!(expanded("+ @@to a\n+"), "++");
+        // And at the start of a line, where an '@' would otherwise open a
+        // directive. A bare '@' alone on a line is still refused -- `char.bf`
+        // has one, and needs the doubling like anything else.
+        assert_eq!(expanded("+\n@@\n+"), "++");
+        assert!(expand("+\n@\n+").is_err());
+        assert_eq!(expanded("+\n@@define A 1\n+"), "++");
+    }
+
+    #[test]
+    fn a_comment_may_hold_a_directive_that_is_only_prose() {
+        assert_eq!(expanded("* mention @to and @define here\n+"), "+");
+        assert_eq!(expanded("+ * @stride 9 is written like this\n+"), "++");
+    }
+
+    #[test]
+    fn a_quoted_operand_may_hold_an_at_sign() {
+        // '@text "a@b"' prints an email address as readily as anything else,
+        // and the '@' inside the quotes is never a directive.
+        assert!(expand("@text \"a@b\"").is_ok());
+    }
+
+    #[test]
+    fn a_branch_not_taken_may_hold_a_directive_mid_line() {
+        // A skipped branch is stepped over, not expanded, and is documented as
+        // holding whatever it likes.
+        assert_eq!(
+            expanded("@ifdef NOPE\nthis @to is never read\n@endif\n+"),
+            "+"
+        );
+    }
+
+    #[test]
+    fn the_at_signs_in_the_bf_corpus_are_still_prose() {
+        // The reason the rule is narrow. `calc.bf` uses '@' as a marker inside
+        // its instruction stream and `pi.bf` carries an email address; both
+        // would have to be edited before conversion if '@' were reserved
+        // outright, and neither spells a directive.
+        assert_eq!(expanded("+@<<<\n+"), "+<<<+");
+        assert_eq!(expanded("+ [ by Felix (felix@t-online.de) ]\n+"), "+[-.]+");
     }
 
     #[test]
