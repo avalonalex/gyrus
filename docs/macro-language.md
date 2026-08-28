@@ -115,29 +115,35 @@ on its line. Indentation is fine:
 An `@` anywhere else on a line is not a directive, and if it spells one it is
 refused:
 
-```text
+```bfm
 @var b at 4
 +++
 [ @to b + ]
 ```
 
-```text
+```error
 Error: '@to' at line 3, column 3 is not first on its line, so it is not a directive
 ```
 
 That one used to expand to `+++[+]` and say nothing. `@to b` was meant to move
 three cells right; it was read as four comment characters, and what was written
-as a move became an endless loop adding one to the cell it was already on. It
-was the only place this language failed silently. **One directive, one line.**
+as a move became an endless loop adding one to the cell it was already on.
+**One directive, one line.**
 
-Only the thirteen directive names are refused this way. Every other `@` is
-still ordinary text, because in BrainFuck it always was: `programs/third-party`
-has one program that uses `@` as a marker inside its instruction stream and
-another carrying its author's email address, and reserving the character
-outright would mean editing both before either could become a `.bfm`. A macro's
-name is deliberately not in the set either — the thirteen are fixed before a
-file is read, so what counts as prose never depends on what happens to be
-defined above it.
+Only the thirteen directive names are refused this way, and only where a
+directive could have stood: the whole word, then a blank, a newline, or the end
+of the file. Every other `@` is prose, because in BrainFuck it always was.
+`programs/third-party` has one program using `@` as a marker inside its
+instruction stream and another carrying its author's email address, and
+reserving the character outright would mean editing both before either could
+become a `.bfm` — `bob@here.org` is an address, not a `@here`.
+
+**Two gaps are left on purpose.** A *macro* invoked mid-line is still prose and
+still vanishes: `+ @m +` expands to `++`. The thirteen are fixed before a file
+is read and a macro's name is not, so refusing those would make what counts as
+prose depend on what happens to be defined above it. And a directive inside a
+macro body nobody invokes, or a branch no `@ifdef` takes, is never reached and
+so never refused. This catches the shape that bites, not every shape.
 
 For an `@` that really is prose and really does spell a directive, write `@@`.
 It is a literal `@`, which is to say a comment character, and emits nothing. It

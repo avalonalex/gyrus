@@ -452,8 +452,9 @@ impl MacroError {
             }),
             MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => {
                 Some(format!(
-                    "{} A directive must start its line; an '@' anywhere else is \
-                     an ordinary comment character.",
+                    "{} A directive must start its line. Elsewhere an '@' is prose, \
+                     unless it spells a directive -- which is refused, because it would \
+                     have looked like one and done nothing.",
                     understood()
                 ))
             }
@@ -465,10 +466,10 @@ impl MacroError {
                     .to_string(),
             ),
             MacroError::StrayAt { .. } => Some(
-                "A directive takes a line of its own. On this line it is not one, and \
-                 would have been read as prose and silently done nothing. Put it on a line \
-                 of its own, or start a comment with '*'. If the '@' really is prose, \
-                 write '@@'."
+                "A directive takes a line of its own, so put it on one. If this '@' is \
+                 prose rather than a directive, write '@@' -- a literal '@', which emits \
+                 nothing. (A '*' comment also holds one, but it runs to the end of the \
+                 line, so it will swallow a ']' that follows.)"
                     .to_string(),
             ),
             MacroError::StrayBrace { brace: '{', .. } => Some(

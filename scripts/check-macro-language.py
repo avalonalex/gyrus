@@ -5,8 +5,8 @@ A language reference is a page of claims about what a program does, and the
 `.bfm` language had no reference at all until one was written -- the rule for
 what a repeat count may contain lived in an error string. A page of untested
 claims would have been the same problem one layer up, so every example is a
-```bfm block followed by the ```text block holding its expansion, and this
-runs them.
+```bfm block followed by either the ```text block holding its expansion or the
+```error block holding the message it is refused with, and this runs them.
 
 A ```bfm block with no expansion beneath it is a failure rather than a
 skip: an unchecked example is the one that rots.
@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "docs" / "macro-language.md"
 TOOL = ROOT / "target" / "release" / "gyrus-tool"
-BLOCK = re.compile(r"^```(bfm|text)\n(.*?)^```\n", re.MULTILINE | re.DOTALL)
+BLOCK = re.compile(r"^```(bfm|text|error)\n(.*?)^```\n", re.MULTILINE | re.DOTALL)
 
 
 def examples(text):
@@ -35,8 +35,10 @@ def examples(text):
         if kind != "bfm":
             continue
         following = blocks[index + 1] if index + 1 < len(blocks) else None
-        expected = following[1] if following and following[0] == "text" else None
-        yield line, body, expected
+        if following and following[0] in ("text", "error"):
+            yield line, body, following[0], following[1]
+        else:
+            yield line, body, None, None
 
 
 def expand(source):
@@ -59,13 +61,21 @@ def main():
 
     failures = []
     checked = 0
-    for line, source, expected in examples(PAGE.read_text()):
-        if expected is None:
-            failures.append((line, "no expansion block follows this example", ""))
+    for line, source, kind, expected in examples(PAGE.read_text()):
+        if kind is None:
+            failures.append((line, "no expansion or error block follows this example", ""))
             continue
         checked += 1
         got, error = expand(source)
-        if error is not None:
+        if kind == "error":
+            # The page says this one is refused, so expanding it has to fail
+            # and say what the page says it says.
+            if error is None:
+                failures.append((line, "the page says this is refused", f"it expanded to {got!r}"))
+            elif error.splitlines()[0].strip() != expected.strip():
+                failures.append((line, f"expected {expected.strip()!r}",
+                                 f"got {error.splitlines()[0].strip()!r}"))
+        elif error is not None:
             failures.append((line, "the expander refused it", error))
         elif got != expected.strip():
             failures.append((line, f"expected {expected.strip()!r}", f"got {got!r}"))

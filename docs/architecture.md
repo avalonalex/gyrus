@@ -192,8 +192,9 @@ more turn to notice and stops calling nested loops recursive. A `@var` without
 a cell has one chosen, and anywhere a number may be written so may an ASCII
 character or a hexadecimal one — `'A'`, `'\n'` and `0x41` are all 65. A
 directive must start its line and
-owns the rest of it; `{` and `}` are reserved everywhere, `@` only at the start
-of a line, so BrainFuck's free-form prose comments survive.
+owns the rest of it; `{` and `}` are reserved everywhere, and `@` at the start
+of a line or anywhere it spells a directive, so BrainFuck's free-form prose
+comments survive except where they would have looked like code.
 
 Three things are worth knowing about the design, all documented in full in the
 crate's module documentation:
