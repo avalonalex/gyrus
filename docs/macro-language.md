@@ -130,20 +130,40 @@ three cells right; it was read as four comment characters, and what was written
 as a move became an endless loop adding one to the cell it was already on.
 **One directive, one line.**
 
-Only the thirteen directive names are refused this way, and only where a
-directive could have stood: the whole word, then a blank, a newline, or the end
-of the file. Every other `@` is prose, because in BrainFuck it always was.
+The same goes for a macro. `+ @move +` invoked nothing and said nothing, which
+is the identical silence and the shape a real `.bfm` writes far more often than
+it writes `@to`:
+
+```bfm
+@var b at 5
+@macro move {
+@to b
+}
+@move
+```
+
+```text
+>>>>>
+```
+
+Refused are the thirteen directive names and any macro or block bound at that
+point, and only where one could have stood: the whole word, then a blank, a
+newline, the end of the file, or — for an invocation — its opening paren.
+Every other `@` is prose, because in BrainFuck it always was.
 `programs/third-party` has one program using `@` as a marker inside its
 instruction stream and another carrying its author's email address, and
 reserving the character outright would mean editing both before either could
 become a `.bfm` — `bob@here.org` is an address, not a `@here`.
 
-**Two gaps are left on purpose.** A *macro* invoked mid-line is still prose and
-still vanishes: `+ @m +` expands to `++`. The thirteen are fixed before a file
-is read and a macro's name is not, so refusing those would make what counts as
-prose depend on what happens to be defined above it. And a directive inside a
-macro body nobody invokes, or a branch no `@ifdef` takes, is never reached and
-so never refused. This catches the shape that bites, not every shape.
+Requiring the name to be *bound* is what keeps `@foo` prose, and it has a
+price: a name becomes reserved by being defined above it, so a macro called
+`add` makes a bare `@add` in prose an error from that line on. A `*` comment
+holds one freely, and prose is what a `*` comment is for.
+
+**One gap is left on purpose.** A directive or invocation spelled mid-line
+inside a macro body nobody calls, or inside a branch no `@ifdef` takes, is
+never reached and so never refused. Expansion is lazy, and making it otherwise
+would mean expanding code to find out whether it is wrong.
 
 For an `@` that really is prose and really does spell a directive, write `@@`.
 It is a literal `@`, which is to say a comment character, and emits nothing. It

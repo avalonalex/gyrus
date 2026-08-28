@@ -169,9 +169,12 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
-    #[error("'@{directive}' at {location} is not first on its line, so it is not a directive")]
+    #[error("'@{name}' at {location} is not first on its line, so it is not {what}")]
     StrayAt {
-        directive: String,
+        name: String,
+        /// "a directive" or "an invocation", so the message names what was
+        /// meant rather than what it is not.
+        what: &'static str,
         location: SourceLocation,
     },
 
@@ -466,10 +469,10 @@ impl MacroError {
                     .to_string(),
             ),
             MacroError::StrayAt { .. } => Some(
-                "A directive takes a line of its own, so put it on one. If this '@' is \
-                 prose rather than a directive, write '@@' -- a literal '@', which emits \
-                 nothing. (A '*' comment also holds one, but it runs to the end of the \
-                 line, so it will swallow a ']' that follows.)"
+                "A directive and an invocation each take a line of their own, so put \
+                 this on one. If the '@' is prose rather than either, write '@@' -- a \
+                 literal '@', which emits nothing. (A '*' comment also holds one, but it \
+                 runs to the end of the line, so it will swallow a ']' that follows.)"
                     .to_string(),
             ),
             MacroError::StrayBrace { brace: '{', .. } => Some(

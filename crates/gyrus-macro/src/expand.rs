@@ -65,9 +65,10 @@
 //! free-form and programs in `programs/` already contain one -- `calc.bf` uses
 //! it as a marker inside its instruction stream and `pi.bf` carries an email
 //! address -- so reserving `@` everywhere would hard-error on converting them.
-//! The one exception is an `@` that *spells* a directive and is delimited like
-//! one, which is refused rather than read as prose: it would have looked like
-//! a directive and silently done nothing. `@@` is a literal `@` anywhere.
+//! The one exception is an `@` that *spells* a directive, or a macro bound at
+//! that point, and is delimited like one -- refused rather than read as prose,
+//! because it would have looked like code and silently done nothing. `@@` is a
+//! literal `@` anywhere.
 //! Owning the line is the other half: an instruction written after a `@define`
 //! is refused rather than dropped, because silently discarding code somebody
 //! wrote is the one thing a preprocessor must not do.
@@ -687,15 +688,41 @@ impl Scanner {
     /// needed -- prose that is only prose already passes untouched.
     fn stray_at(&mut self) -> Result<(), MacroError> {
         let (word, end) = lex::spelling(&self.chars, self.at.offset);
-        // A directive is the whole word and then a space, a newline, or the
+        // A directive is the whole word and then a blank, a newline, or the
         // end of the file. Without that last condition `bob@here.org` is an
         // error, which is the sort of prose this rule exists to leave alone --
         // and `pi.bf` keeps its author's email address only because his
         // provider is not called `to`.
-        let delimited = matches!(self.chars.get(end), None | Some(' ' | '\t' | '\n' | '\r'));
+        let ends_the_word = self.chars.get(end);
+        let delimited = matches!(ends_the_word, None | Some(' ' | '\t' | '\n' | '\r'));
         if delimited && let Some(directive) = Directive::from_word(word) {
             return Err(MacroError::StrayAt {
-                directive: directive.spelling().to_string(),
+                name: directive.spelling().to_string(),
+                what: "a directive",
+                location: self.at,
+            });
+        }
+        // And an invocation is the same, or the word and its opening paren.
+        // A macro dropped here is the same silence a directive would be --
+        // `+ @move +` moved nothing and said nothing -- and it is the shape a
+        // real `.bfm` writes far more often than it writes `@to`.
+        //
+        // Only a name that is bound *here* is refused, which is what keeps
+        // `@foo` prose: the cost is that a name becomes reserved by being
+        // defined above, so a macro called `add` makes `@add` in prose an
+        // error from that line on. A `*` comment is where prose belongs, and
+        // is exempt.
+        if (delimited || ends_the_word == Some(&'('))
+            && !word.is_empty()
+            && let name = word.iter().collect::<String>()
+            && matches!(
+                self.binding(&name).map(|(symbol, _)| symbol),
+                Some(Symbol::Macro(_) | Symbol::Block(_))
+            )
+        {
+            return Err(MacroError::StrayAt {
+                name,
+                what: "an invocation",
                 location: self.at,
             });
         }
@@ -2846,10 +2873,11 @@ mod tests {
         // tail -- the error is about the '@', not an unmatched '[' that the
         // source plainly matches.
         let error = expand("+[@define A 1 ]+").unwrap_err();
-        let MacroError::StrayAt { directive, .. } = &error else {
+        let MacroError::StrayAt { name, what, .. } = &error else {
             panic!("expected a stray '@', got {error:?}");
         };
-        assert_eq!(directive, "define");
+        assert_eq!(name, "define");
+        assert_eq!(*what, "a directive");
     }
 
     #[test]
@@ -2883,13 +2911,30 @@ mod tests {
     }
 
     #[test]
-    fn a_macro_invoked_mid_line_is_still_prose() {
-        // Named so the hole is findable. Only the thirteen directive
-        // spellings are refused mid-line; a macro's name is not, because the
-        // thirteen are known before a file is read and a macro's name is not,
-        // so including them would make what counts as prose depend on what
-        // happens to be defined above it.
-        assert_eq!(expanded("@macro m {\n+\n}\n+ @m +\n"), "++");
+    fn a_macro_invoked_mid_line_is_refused_too() {
+        // The same silence as a directive, and the shape a real `.bfm` writes
+        // far more often: `+ @move +` moved nothing and said nothing.
+        let error = expand("@macro m {\n+\n}\n+ @m +\n").unwrap_err();
+        let MacroError::StrayAt { name, what, .. } = &error else {
+            panic!("expected a stray '@', got {error:?}");
+        };
+        assert_eq!(name, "m");
+        assert_eq!(*what, "an invocation");
+        // With arguments too, where the word ends at the paren rather than a
+        // blank.
+        assert!(expand("@macro n(x) {\n+{x}\n}\n+ @n(3) +\n").is_err());
+    }
+
+    #[test]
+    fn only_a_name_that_is_bound_is_refused() {
+        // What keeps `@foo` prose, and the cost of it: a name becomes
+        // reserved by being defined above. A '*' comment is exempt, which is
+        // where prose belongs.
+        assert_eq!(expanded("+ see @foo for details\n+"), "++");
+        assert_eq!(
+            expanded("@macro add {\n+\n}\n* prose may say @add freely\n@add\n"),
+            "+"
+        );
     }
 
     #[test]
@@ -2898,7 +2943,7 @@ mod tests {
             .unwrap_err()
             .hint()
             .expect("a stray '@' has a hint");
-        assert!(hint.contains("takes a line of its own"), "{hint}");
+        assert!(hint.contains("a line of their own"), "{hint}");
         assert!(hint.contains("'@@'"), "{hint}");
     }
 
