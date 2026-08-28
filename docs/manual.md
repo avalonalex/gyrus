@@ -59,7 +59,7 @@ program.
 written in one, and [the macro preprocessor](architecture.md#the-macro-expander-cratesgyrus-macro)
 describes how it is built. `programs/macros/` has nineteen programs
 written in it, and five libraries in `lib/`. Two are worth reading: `99bottles.bfm` is
-199 lines that print 11,354 bytes, byte for byte what the hand-written
+184 lines that print 11,354 bytes, byte for byte what the hand-written
 `programs/third-party/advanced/99beer.bf` prints; and `factor.bfm` finds the
 prime factors of a number too big for a cell, using arithmetic that is a
 library rather than a language feature.
