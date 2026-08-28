@@ -112,36 +112,53 @@ on its line. Indentation is fine:
 >>>
 ```
 
-An `@` anywhere else on a line is **not a directive**. It is ordinary text, and
-by the rule in the section above ordinary text is a comment — so it is ignored,
-and nothing is reported:
+An `@` anywhere else on a line is not a directive, and if it spells one it is
+refused:
 
-```bfm
+```text
 @var b at 4
 +++
 [ @to b + ]
 ```
 
 ```text
-+++[+]
+Error: '@to' at line 3, column 3 is not first on its line, so it is not a directive
 ```
 
-That expansion is the whole hazard in one line. `@to b` was meant to move three
-cells right; it was read as four comment characters, the loop adds one to the
-cell it is already on, and the program is an endless loop rather than the move
-that was written. This is the one place the language fails silently, and it is
-worth knowing before it happens rather than after: **one directive, one line.**
+That one used to expand to `+++[+]` and say nothing. `@to b` was meant to move
+three cells right; it was read as four comment characters, and what was written
+as a move became an endless loop adding one to the cell it was already on. It
+was the only place this language failed silently. **One directive, one line.**
 
-The mistake in the other direction *is* caught, because there the `@` does
-begin a directive and the leftovers have nowhere to go:
+Only the thirteen directive names are refused this way. Every other `@` is
+still ordinary text, because in BrainFuck it always was: `programs/third-party`
+has one program that uses `@` as a marker inside its instruction stream and
+another carrying its author's email address, and reserving the character
+outright would mean editing both before either could become a `.bfm`. A macro's
+name is deliberately not in the set either — the thirteen are fixed before a
+file is read, so what counts as prose never depends on what happens to be
+defined above it.
+
+For an `@` that really is prose and really does spell a directive, write `@@`.
+It is a literal `@`, which is to say a comment character, and emits nothing. It
+works anywhere, the start of a line included — an escape that covered one
+position and not the other would be a rule to remember rather than a way out:
+
+```bfm
++ @@to a
++
+```
+
+```text
+++
+```
+
+The mistake in the other direction has always been caught, because there the
+`@` does begin a directive and the leftovers have nowhere to go:
 
 ```text
 Error: Malformed @to at line 2, column 7: '+' follows it. A @to takes the rest of its line: move this to a line of its own, or start a comment with '*'
 ```
-
-A `@define` swallowed this way is the version to watch for, because the error
-arrives somewhere else entirely: the definition disappears, and the failure is
-an undefined symbol reported at the line that *used* the name.
 
 There is one exception, and it is the one that makes macro bodies readable. A
 body's first line begins after its `{`, so a directive may share that line:

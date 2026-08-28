@@ -169,6 +169,12 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
+    #[error("'@{directive}' at {location} is not first on its line, so it is not a directive")]
+    StrayAt {
+        directive: String,
+        location: SourceLocation,
+    },
+
     #[error("'{name}' is a {found}, not a {wanted}, at {location}")]
     WrongKind {
         name: String,
@@ -384,6 +390,7 @@ impl MacroError {
             | MacroError::BadRepeatCount { location, .. }
             | MacroError::RepeatNotRepeatable { location, .. }
             | MacroError::StrayBrace { location, .. }
+            | MacroError::StrayAt { location, .. }
             | MacroError::WrongKind { location, .. }
             | MacroError::PositionUnknown { location, .. }
             | MacroError::OnlyOffsetKnown { location, .. }
@@ -455,6 +462,13 @@ impl MacroError {
             )),
             MacroError::RepeatNotRepeatable { .. } => Some(
                 "Repeat counts apply to + - < > . and , -- repeating a bracket would not mean anything."
+                    .to_string(),
+            ),
+            MacroError::StrayAt { .. } => Some(
+                "A directive takes a line of its own. On this line it is not one, and \
+                 would have been read as prose and silently done nothing. Put it on a line \
+                 of its own, or start a comment with '*'. If the '@' really is prose, \
+                 write '@@'."
                     .to_string(),
             ),
             MacroError::StrayBrace { brace: '{', .. } => Some(
