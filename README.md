@@ -1,6 +1,8 @@
 # gyrus
 
 [![CI](https://github.com/avalonalex/gyrus/actions/workflows/ci.yml/badge.svg)](https://github.com/avalonalex/gyrus/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](Cargo.toml)
 
 **Production-grade tooling for BrainFuck — interpreter, optimizer, and
 Cranelift JIT in Rust.**
@@ -187,7 +189,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 
-scripts/check-msrv.sh                 # builds on the MSRV declared in Cargo.toml
+scripts/check-msrv.sh                 # builds on the MSRV declared in Cargo.toml,
+                                      #   which is also what the badge above claims
 scripts/check-readme-commands.py      # every documented flag really exists
 scripts/benchmark.sh                  # time the interpreter, verify its output
 ```

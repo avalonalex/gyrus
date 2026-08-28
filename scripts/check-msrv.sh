@@ -9,7 +9,9 @@
 #
 # The version is read FROM the manifest rather than restated here, so this
 # script cannot drift from what it checks. Bumping the MSRV means editing
-# Cargo.toml and nothing else.
+# Cargo.toml and running this, which is also what tells you the README badge
+# needs the same number -- the badge is the one place the version is restated,
+# so it is the one place that can disagree.
 #
 # Usage: scripts/check-msrv.sh
 set -euo pipefail
@@ -22,6 +24,23 @@ if [ -z "$MSRV" ]; then
     exit 1
 fi
 echo "Declared MSRV: $MSRV"
+
+# Checked before the toolchain is installed, because a badge that disagrees is
+# worth knowing about in a second rather than after a download and a build.
+BADGE_URL="$(sed -n 's|.*img\.shields\.io/badge/rust-\([0-9.]*\)%2B.*|\1|p' README.md | head -1)"
+BADGE_ALT="$(sed -n 's|.*!\[Rust \([0-9.]*\)+\].*|\1|p' README.md | head -1)"
+if [ -z "$BADGE_URL" ] || [ -z "$BADGE_ALT" ]; then
+    echo "FAIL: README.md has no Rust version badge to check." >&2
+    echo "Expected a line like:" >&2
+    echo '  [![Rust '"$MSRV"'+](https://img.shields.io/badge/rust-'"$MSRV"'%2B-orange.svg)](Cargo.toml)' >&2
+    exit 1
+fi
+if [ "$BADGE_URL" != "$MSRV" ] || [ "$BADGE_ALT" != "$MSRV" ]; then
+    echo "FAIL: the README badge says $BADGE_ALT/$BADGE_URL, and Cargo.toml says $MSRV." >&2
+    echo "The badge is a promise to anyone who clones this; make it the same number." >&2
+    exit 1
+fi
+echo "OK: the README badge agrees with the manifest."
 
 if ! rustup toolchain list | grep -q "^$MSRV"; then
     echo "Installing Rust $MSRV (not present locally)..."

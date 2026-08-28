@@ -480,7 +480,8 @@ and they go stale silently. Both of these have already been wrong once, so both
 are now scripts rather than good intentions:
 
 ```bash
-scripts/check-msrv.sh                 # workspace really builds on its declared MSRV
+scripts/check-msrv.sh                 # workspace really builds on its declared MSRV,
+                                      #   and the README badge agrees with it
 scripts/check-readme-commands.py      # every flag README.md and docs/ use exists
 scripts/check-doc-links.py            # every relative Markdown link resolves
 scripts/check-examples.sh             # every example still runs, not just compiles
@@ -508,7 +509,9 @@ after confirming the new output is correct.
 `check-msrv.sh` reads `rust-version` out of `Cargo.toml` instead of restating
 it, and installs that toolchain if it is missing. Run it after touching
 dependencies or using a new language feature — the declared MSRV was already
-wrong once (1.85 by inference; 1.88 in fact, because of let-chains).
+wrong once (1.85 by inference; 1.88 in fact, because of let-chains). It also
+holds the README's Rust badge to that same number, since the badge is the one
+place the version is restated and so the one place it can disagree.
 
 `check-readme-commands.py` needs `cargo build --release --workspace` first. It
 exists because the README documented `gyrus --validate` and `gyrus --minify`
