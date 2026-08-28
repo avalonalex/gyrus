@@ -130,30 +130,46 @@ three cells right; it was read as four comment characters, and what was written
 as a move became an endless loop adding one to the cell it was already on.
 **One directive, one line.**
 
-The same goes for a macro. `+ @move +` invoked nothing and said nothing, which
-is the identical silence and the shape a real `.bfm` writes far more often than
-it writes `@to`:
+The same goes for an invocation. `+[@m]+` invoked nothing and said nothing —
+the identical silence, in the shape a real `.bfm` writes far more often than it
+writes `@to`, and with the identical result: an empty loop that never ends.
 
 ```bfm
-@var b at 5
-@macro move {
-@to b
+@macro m {
++
 }
-@move
++[@m]+
+```
+
+```error
+Error: '@m' at line 4, column 3 is not first on its line, so it is not an invocation
+```
+
+Refused are the thirteen directive names and any macro or block — the `{ ... }`
+handed to a macro, which [Macros](#macros) covers — bound at that point.
+
+**What decides it is the character before the `@`, not the one after the
+name.** An address has a name in front of it and a directive never does:
+
+```bfm
++ mail bob@here.org
 ```
 
 ```text
->>>>>
++.
 ```
 
-Refused are the thirteen directive names and any macro or block bound at that
-point, and only where one could have stood: the whole word, then a blank, a
-newline, the end of the file, or — for an invocation — its opening paren.
-Every other `@` is prose, because in BrainFuck it always was.
+That is `bob@here.org`, not a `@here`, and `+.` is the `.` in `.org` — still an
+ordinary BrainFuck instruction, as every character in a comment always was.
+Asking instead what may *follow* a name means answering what a name may be
+followed by, and the honest answer is anything: `@m]` is an invocation before a
+bracket and `bob@to.com` is an address before a dot. No set of trailing
+characters tells those apart.
+
 `programs/third-party` has one program using `@` as a marker inside its
 instruction stream and another carrying its author's email address, and
 reserving the character outright would mean editing both before either could
-become a `.bfm` — `bob@here.org` is an address, not a `@here`.
+become a `.bfm`.
 
 Requiring the name to be *bound* is what keeps `@foo` prose, and it has a
 price: a name becomes reserved by being defined above it, so a macro called

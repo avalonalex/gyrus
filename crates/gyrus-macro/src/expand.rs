@@ -65,10 +65,12 @@
 //! free-form and programs in `programs/` already contain one -- `calc.bf` uses
 //! it as a marker inside its instruction stream and `pi.bf` carries an email
 //! address -- so reserving `@` everywhere would hard-error on converting them.
-//! The one exception is an `@` that *spells* a directive, or a macro bound at
-//! that point, and is delimited like one -- refused rather than read as prose,
-//! because it would have looked like code and silently done nothing. `@@` is a
-//! literal `@` anywhere.
+//! The one exception is an `@` that *names* something -- one of the thirteen,
+//! or a macro or block bound at that point -- and is not attached to a word in
+//! front of it. That is refused rather than read as prose, because it would
+//! have looked like code and silently done nothing; the character before the
+//! `@` is what tells `@to` from the `@` in an email address. `@@` is a literal
+//! `@` anywhere.
 //! Owning the line is the other half: an instruction written after a `@define`
 //! is refused rather than dropped, because silently discarding code somebody
 //! wrote is the one thing a preprocessor must not do.
@@ -170,7 +172,7 @@ use std::rc::Rc;
 use gyrus::SourceLocation;
 
 use crate::directive::{Declaration, Directive};
-use crate::error::{Kind, MacroError, MacroFailure, Wanted};
+use crate::error::{Kind, MacroError, MacroFailure, StrayKind, Wanted};
 use crate::lex::{self, REPEATABLE, Step, ValueEnd, is_identifier_char};
 use crate::source_map::Expansion;
 
@@ -664,7 +666,7 @@ impl Scanner {
         Ok(())
     }
 
-    /// An `@` that is not first on its line, and so is not a directive.
+    /// An `@` that is not first on its line, and so cannot open a directive.
     ///
     /// Nearly all of them are prose and stay prose: `@` is an ordinary
     /// character in BrainFuck, `calc.bf` uses one as a marker inside its
@@ -673,56 +675,58 @@ impl Scanner {
     /// them, which is the reason [`prose_may_contain_an_at_sign`] gives and
     /// still gives.
     ///
-    /// What is refused is the one shape that is never prose: an `@` that
-    /// spells a directive. `[ @to b + ]` used to expand to `[+]` -- an endless
-    /// loop where a move was written -- and say nothing, which was the only
-    /// place this language failed silently. Thirteen words are enough to tell
-    /// that apart from an email address.
+    /// What is refused is an `@` that names something: one of the thirteen
+    /// directives, or a macro or block bound at this point. `[ @to b + ]`
+    /// expanded to `[+]` -- an endless loop where a move was written -- and
+    /// `+[@m]+` did the same for an invocation, which is the `@` a `.bfm`
+    /// writes far more often. Both were silent.
     ///
-    /// A macro's name is deliberately not in that set. The thirteen are fixed
-    /// and known before a file is read, so what counts as prose does not
-    /// depend on what happens to be defined above it.
+    /// **What decides it is the character before the `@`, not the one after
+    /// the name.** An address has a name in front of it -- `bob@here.org`,
+    /// `felix.nawothnig@t-online.de` -- and a directive or an invocation
+    /// never does. Asking instead what may *follow* a name means answering
+    /// what a name may be followed by, and the honest answer is anything:
+    /// `+[@m]+` is an invocation before a bracket, `bob@to.com` is an address
+    /// before a dot, and no set of trailing characters tells those apart.
+    ///
+    /// Requiring a macro's name to be bound is what keeps `@foo` prose, and
+    /// the price is that a name becomes reserved by being defined above it: a
+    /// macro called `add` makes a bare `@add` in later prose an error. A `*`
+    /// comment holds one freely, and prose is what a `*` comment is for.
     ///
     /// `@@` is a literal `@` written on purpose. It emits nothing, because a
     /// literal `@` is a comment character like any other, and it is rarely
     /// needed -- prose that is only prose already passes untouched.
     fn stray_at(&mut self) -> Result<(), MacroError> {
+        // Attached to the word before it, so it is part of that word.
+        if self
+            .at
+            .offset
+            .checked_sub(1)
+            .and_then(|before| self.chars.get(before))
+            .is_some_and(|c| lex::is_identifier_char(*c))
+        {
+            self.bump();
+            return Ok(());
+        }
+
         let (word, end) = lex::spelling(&self.chars, self.at.offset);
-        // A directive is the whole word and then a blank, a newline, or the
-        // end of the file. Without that last condition `bob@here.org` is an
-        // error, which is the sort of prose this rule exists to leave alone --
-        // and `pi.bf` keeps its author's email address only because his
-        // provider is not called `to`.
-        let ends_the_word = self.chars.get(end);
-        let delimited = matches!(ends_the_word, None | Some(' ' | '\t' | '\n' | '\r'));
-        if delimited && let Some(directive) = Directive::from_word(word) {
+        let _ = end;
+        if let Some(directive) = Directive::from_word(word) {
             return Err(MacroError::StrayAt {
                 name: directive.spelling().to_string(),
-                what: "a directive",
+                kind: StrayKind::Directive,
                 location: self.at,
             });
         }
-        // And an invocation is the same, or the word and its opening paren.
-        // A macro dropped here is the same silence a directive would be --
-        // `+ @move +` moved nothing and said nothing -- and it is the shape a
-        // real `.bfm` writes far more often than it writes `@to`.
-        //
-        // Only a name that is bound *here* is refused, which is what keeps
-        // `@foo` prose: the cost is that a name becomes reserved by being
-        // defined above, so a macro called `add` makes `@add` in prose an
-        // error from that line on. A `*` comment is where prose belongs, and
-        // is exempt.
-        if (delimited || ends_the_word == Some(&'('))
-            && !word.is_empty()
-            && let name = word.iter().collect::<String>()
-            && matches!(
-                self.binding(&name).map(|(symbol, _)| symbol),
-                Some(Symbol::Macro(_) | Symbol::Block(_))
-            )
-        {
+        let name = word.iter().collect::<String>();
+        if matches!(
+            self.binding(&name).map(|(symbol, _)| symbol),
+            Some(Symbol::Macro(_) | Symbol::Block(_))
+        ) {
             return Err(MacroError::StrayAt {
                 name,
-                what: "an invocation",
+                kind: StrayKind::Invocation,
                 location: self.at,
             });
         }
@@ -2873,11 +2877,11 @@ mod tests {
         // tail -- the error is about the '@', not an unmatched '[' that the
         // source plainly matches.
         let error = expand("+[@define A 1 ]+").unwrap_err();
-        let MacroError::StrayAt { name, what, .. } = &error else {
+        let MacroError::StrayAt { name, kind, .. } = &error else {
             panic!("expected a stray '@', got {error:?}");
         };
         assert_eq!(name, "define");
-        assert_eq!(*what, "a directive");
+        assert_eq!(*kind, StrayKind::Directive);
     }
 
     #[test]
@@ -2915,14 +2919,55 @@ mod tests {
         // The same silence as a directive, and the shape a real `.bfm` writes
         // far more often: `+ @move +` moved nothing and said nothing.
         let error = expand("@macro m {\n+\n}\n+ @m +\n").unwrap_err();
-        let MacroError::StrayAt { name, what, .. } = &error else {
+        let MacroError::StrayAt { name, kind, .. } = &error else {
             panic!("expected a stray '@', got {error:?}");
         };
         assert_eq!(name, "m");
-        assert_eq!(*what, "an invocation");
-        // With arguments too, where the word ends at the paren rather than a
-        // blank.
-        assert!(expand("@macro n(x) {\n+{x}\n}\n+ @n(3) +\n").is_err());
+        assert_eq!(*kind, StrayKind::Invocation);
+    }
+
+    #[test]
+    fn an_invocation_is_refused_next_to_a_bracket_as_well_as_a_blank() {
+        // What a name may be followed by is anything, so nothing is asked of
+        // it. `+[@m]+` is the shape that matters: a no-argument macro against
+        // a bracket used to expand to `+[]+`, an endless empty loop, which is
+        // the same failure `[ @to b + ]` opened this rule.
+        assert!(expand("@macro m {\n+\n}\n+[@m]+\n").is_err());
+        assert!(expand("@macro m {\n+\n}\n+ @m.\n").is_err());
+        assert!(expand("@macro m(x) {\n+{x}\n}\n+ @m(3) +\n").is_err());
+    }
+
+    #[test]
+    fn what_decides_it_is_the_character_before_the_at_sign() {
+        // An address has a name in front of it; a directive and an invocation
+        // never do. This is the whole of the rule, and the reason no set of
+        // trailing characters is asked about.
+        assert_eq!(expanded("+ mail bob@here.org\n"), "+.");
+        assert_eq!(expanded("+ write bob@to.com\n"), "+.");
+        // Even when the label after the '@' is a bound name: `add` is a
+        // macro here and `bob@add.com` is still an address.
+        assert_eq!(expanded("@macro add {\n+\n}\n+ write bob@add.com\n"), "+.");
+    }
+
+    #[test]
+    fn prose_before_a_definition_stays_prose() {
+        // The asymmetry the price buys, pinned: a name is reserved from the
+        // line it is defined on, not for the whole file. If the symbol table
+        // ever became two-pass this would start failing, which is the point.
+        assert_eq!(expanded("+ @add +\n@macro add {\n+\n}\n@add\n"), "+++");
+    }
+
+    #[test]
+    fn an_uninvoked_body_is_never_reached_and_so_never_refused() {
+        // The one gap left. A body is walked by `skip_body`, which does not
+        // expand it, so a mid-line `@` inside a macro nobody calls is not
+        // seen. Recorded because making body-skipping eager would close it
+        // silently -- and would hard-error on libraries full of macros this
+        // program does not use.
+        assert_eq!(
+            expanded("@macro m {\n+\n}\n@macro outer {\n+ @m +\n}\n+\n"),
+            "+"
+        );
     }
 
     #[test]

@@ -117,6 +117,24 @@ impl std::fmt::Display for MacroFailure {
 
 impl std::error::Error for MacroFailure {}
 
+/// What an `@` would have opened, had it been first on its line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrayKind {
+    /// One of the thirteen directives.
+    Directive,
+    /// A macro or a block bound where the `@` was written.
+    Invocation,
+}
+
+impl std::fmt::Display for StrayKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            StrayKind::Directive => "a directive",
+            StrayKind::Invocation => "an invocation",
+        })
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum MacroError {
@@ -169,12 +187,12 @@ pub enum MacroError {
         location: SourceLocation,
     },
 
-    #[error("'@{name}' at {location} is not first on its line, so it is not {what}")]
+    #[error("'@{name}' at {location} is not first on its line, so it is not {kind}")]
     StrayAt {
         name: String,
-        /// "a directive" or "an invocation", so the message names what was
-        /// meant rather than what it is not.
-        what: &'static str,
+        /// Which of the two `@` opens, so the message can say which one this
+        /// would have been.
+        kind: StrayKind,
         location: SourceLocation,
     },
 
@@ -455,9 +473,10 @@ impl MacroError {
             }),
             MacroError::UnknownDirective { .. } | MacroError::MalformedDirective { .. } => {
                 Some(format!(
-                    "{} A directive must start its line. Elsewhere an '@' is prose, \
-                     unless it spells a directive -- which is refused, because it would \
-                     have looked like one and done nothing.",
+                    "{} A directive must start its line, and so does an invocation. \
+                     Elsewhere an '@' is prose, unless it names one of these or a macro \
+                     -- which is refused, because it would have looked like code and \
+                     done nothing.",
                     understood()
                 ))
             }
