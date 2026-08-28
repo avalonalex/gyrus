@@ -209,7 +209,7 @@ impl ProgramError {
     }
 }
 
-pub use error::{Kind, MacroError, MacroFailure, Wanted};
+pub use error::{Kind, MacroError, MacroFailure, StrayKind, Wanted};
 pub use expand::{INCLUDE_DEPTH_LIMIT, REPEAT_LIMIT, expand, expand_at};
 pub use source_map::Expansion;
 
