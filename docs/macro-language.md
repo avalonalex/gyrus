@@ -98,6 +98,65 @@ character literals, so an apostrophe in it is an apostrophe. Characters that
 are not instructions and not directives are ignored wherever they appear, as in
 any BrainFuck.
 
+## Directives start their lines
+
+An `@` opens a directive only when nothing but spaces and tabs comes before it
+on its line. Indentation is fine:
+
+```bfm
+@var a at 3
+    @to a
+```
+
+```text
+>>>
+```
+
+An `@` anywhere else on a line is **not a directive**. It is ordinary text, and
+by the rule in the section above ordinary text is a comment — so it is ignored,
+and nothing is reported:
+
+```bfm
+@var b at 4
++++
+[ @to b + ]
+```
+
+```text
++++[+]
+```
+
+That expansion is the whole hazard in one line. `@to b` was meant to move three
+cells right; it was read as four comment characters, the loop adds one to the
+cell it is already on, and the program is an endless loop rather than the move
+that was written. This is the one place the language fails silently, and it is
+worth knowing before it happens rather than after: **one directive, one line.**
+
+The mistake in the other direction *is* caught, because there the `@` does
+begin a directive and the leftovers have nowhere to go:
+
+```text
+Error: Malformed @to at line 2, column 7: '+' follows it. A @to takes the rest of its line: move this to a line of its own, or start a comment with '*'
+```
+
+A `@define` swallowed this way is the version to watch for, because the error
+arrives somewhere else entirely: the definition disappears, and the failure is
+an undefined symbol reported at the line that *used* the name.
+
+There is one exception, and it is the one that makes macro bodies readable. A
+body's first line begins after its `{`, so a directive may share that line:
+
+```bfm
+@var a at 3
+@macro m() { @to a
+}
+@m()
+```
+
+```text
+>>>
+```
+
 ## Named cells
 
 `@var NAME` declares a name for a cell. With `at N` it names that cell; without
